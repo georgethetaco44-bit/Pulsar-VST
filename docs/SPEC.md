@@ -670,6 +670,11 @@ Each milestone has an exit test. Don't start the next until it passes.
    persistence. *Exit: a deliberately broken patch is rejected; switching
    presets mid-note doesn't click; reopening the REAPER project restores the
    sound.*
+   **Result: passed (commit 41a48da). CI green on all three OSes, including the
+   1024-iteration loop cap on every JIT backend; REAPER switch, reject and
+   restore checks passed. Validator wall time 57–245 ms per preset on the
+   Deck. Carried into M6: per-sample deadline, loop-nesting check,
+   compile-only built-in selection (§7.1, §9.4).**
 6. **Presets & CLI.** 15 built-in presets; `vibesynth_cli` `--selftest` and
    `--render`; selftest runs in CI. *Exit: all presets pass in CI.*
 7. **Voice features.** Mono/legato + glide, pitch bend, mod wheel, voice
