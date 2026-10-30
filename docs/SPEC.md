@@ -601,7 +601,7 @@ Loading a patch file runs the same compile + offline test as a generated patch.
 
 ### 10.2 GitHub Actions (`.github/workflows/build.yml`) **[MVP]**
 - Triggers: push, pull_request, workflow_dispatch. Releases only on `v*` tags.
-- Matrix: `ubuntu-22.04`, `windows-latest` (MSVC 2022 x64), `macos-14`.
+- Matrix: `ubuntu-22.04`, `windows-latest` (MSVC 2022 x64), `macos-15` (arm64; moved from macos-14, which GitHub retires on 2026-11-02).
 - Steps: configure + build (Release) → run `vibesynth_cli --selftest` → pluginval
   (strictness 5) on the VST3 → zip VST3 + Standalone → `actions/upload-artifact`.
   On tags, `softprops/action-gh-release` publishes the three zips.

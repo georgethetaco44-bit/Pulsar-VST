@@ -1,6 +1,6 @@
 # Pulsar CI — Milestone 2 (SPEC sections 10.2, 13).
 #
-# 3-OS matrix (ubuntu-22.04 / windows-latest / macos-14): Release + Ninja
+# 3-OS matrix (ubuntu-22.04 / windows-latest / macos-15): Release + Ninja
 # everywhere, vibesynth_cli --smoketest and (M6) --selftest gating the
 # build, pluginval at strictness 5 on the VST3, zipped artefacts, and a
 # GitHub release on v* tags. Linux also renders every built-in preset to
@@ -34,7 +34,7 @@ jobs:
           - os: windows-latest
             label: Windows
             pluginval_asset: pluginval_Windows.zip
-          - os: macos-14
+          - os: macos-15
             label: macOS
             pluginval_asset: pluginval_macOS.zip
 
@@ -98,7 +98,7 @@ jobs:
       # native arm64 run, plus the x86_64 slice under Rosetta. Rosetta may
       # not be preinstalled, hence the probe + sudo install step (passwordless
       # sudo is available on GitHub runners). If this install ever stops
-      # working, fall back to a macos-13 (Intel) job for the x86_64 slice.
+      # working, fall back to an Intel macOS runner for the x86_64 slice.
       - name: Prove Universal slices (macOS)
         if: runner.os == 'macOS'
         shell: bash
