@@ -3,6 +3,12 @@ cmake_minimum_required(VERSION 3.25)
 # Static MSVC runtime on Windows (SPEC 10.1). No-op on other platforms.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+# Universal binary + deployment target on macOS (SPEC 10.1). Must be set
+# before project() as cache variables so they apply to everything.
+# No-op on other platforms.
+set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "macOS architectures")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "macOS deployment target")
+
 project(VibeSynthVST VERSION 0.1.0)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -19,10 +25,10 @@ if (CCACHE_PROGRAM)
     set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
 endif()
 
-# Universal binary on macOS (SPEC 10.1). No-op elsewhere.
-if (APPLE)
-    set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64")
-endif()
+# Controls whether built plugins are copied into system plugin folders
+# (e.g. ~/.vst3). ON locally so REAPER picks up the build; CI passes
+# -DVIBESYNTH_COPY_PLUGIN=OFF so runners stay clean.
+option(VIBESYNTH_COPY_PLUGIN "Copy built plugins to system plugin folders" ON)
 
 include(cmake/CPM.cmake)
 
@@ -48,11 +54,12 @@ juce_add_plugin(VibeSynthVST
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
     IS_MIDI_EFFECT FALSE
-    COPY_PLUGIN_AFTER_BUILD TRUE
+    COPY_PLUGIN_AFTER_BUILD ${VIBESYNTH_COPY_PLUGIN}
     PLUGIN_MANUFACTURER_CODE Puls
     PLUGIN_CODE Vsyn
     FORMATS VST3 Standalone
-    PRODUCT_NAME "VibeSynthVST"
+    PRODUCT_NAME "Pulsar"
+    PLUGIN_NAME "Pulsar"
     ${VIBESYNTH_LINUX_OPTS})
 
 target_sources(VibeSynthVST PRIVATE

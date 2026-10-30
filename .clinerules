@@ -1,4 +1,4 @@
-# VibeSynthVST — Cline working rules (Milestone 1)
+# Pulsar — Cline working rules (Milestone 2)
 
 1. SPEC.md is the source of truth. docs/SPEC.md governs all design
    decisions; do not deviate from it without asking the user first.
@@ -21,3 +21,8 @@
 8. Do not invent JUCE APIs. If unsure about a JUCE signature or behaviour,
    check the JUCE source in the build's CPM cache (build/**/_deps/) before
    writing code.
+9. Naming (SPEC section 1): everything a user sees is **Pulsar** -- the plugin
+   name in the DAW, the `.vst3` bundle, the Standalone app, window titles,
+   release zips, the app-data folder and the README. "VibeSynth" is the
+   internal codename and may appear only in code: the CMake target, class
+   names, `vibesynth_cli` and the `VIBESYNTH_API_KEY` env var.
