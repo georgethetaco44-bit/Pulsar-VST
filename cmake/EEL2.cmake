@@ -42,6 +42,15 @@ target_include_directories(eel2 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/
 
 target_link_libraries(eel2 PRIVATE Threads::Threads)
 
+# M5 runaway guard (SPEC §7.1): one loop()/while() runs at most 1024
+# iterations (WDL default 1,048,576). ns-eel.h guards the macro with
+# #ifndef. PUBLIC so every TU that includes ns-eel.h agrees on the value.
+# The cap is emitted by the C glue headers compiled into nseel-compiler.c
+# (glue_x86_64_sse.h, glue_aarch64.h, glue_port.h); the prebuilt Windows
+# x64 asm object holds only math helpers, so it applies there too.
+# vibesynth_cli --smoketest verifies it on every backend.
+target_compile_definitions(eel2 PUBLIC NSEEL_LOOPFUNC_SUPPORT_MAXLEN=1024)
+
 if (VIBESYNTH_EEL_PORTABLE)
     # EEL2 bytecode interpreter: no executable pages, ~1/8 JIT speed.
     target_compile_definitions(eel2 PUBLIC EEL_TARGET_PORTABLE)

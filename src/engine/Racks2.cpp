@@ -4,8 +4,28 @@
 #include "engine/MasterRack.h"
 
 #include <cmath>
+#include <cstring>
 
 namespace vibesynth {
+
+namespace {
+
+// DaisySP's ChorusEngine::Init calls SetLfoFreq, which reads the not yet
+// initialised lfo_freq_ to pick the LFO direction, so the chorus depended
+// on heap contents (M5: the validator's trim changed between runs). Zero
+// the object first; it holds only floats and a fixed delay line, nothing
+// to allocate. Also used by reset(), so the runtime guard (SPEC 7.2)
+// clears the delay lines too.
+void initChorus (daisysp::ChorusEngine& c, float sr, float lfoHz) noexcept
+{
+    std::memset (static_cast<void*> (&c), 0, sizeof (c));
+    c.Init (sr);
+    c.SetLfoFreq (lfoHz);
+    c.SetFeedback (0.2f);
+    c.SetDelayMs (14.0f);
+}
+
+} // namespace
 
 void MasterRack::recordMeter (ModuleId module, int slot, float out) noexcept
 {
@@ -37,13 +57,8 @@ void FdnReverbState::reset() noexcept
 void MasterRack::init (double newSampleRate)
 {
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 48000.0;
-    const float sr = static_cast<float> (sampleRate);
 
-    chorusL.Init (sr);
-    chorusR.Init (sr);
-    chorusL.SetLfoFreq (0.7f); chorusR.SetLfoFreq (0.9f);
-    chorusL.SetFeedback (0.2f); chorusR.SetFeedback (0.2f);
-    chorusL.SetDelayMs (14.0f); chorusR.SetDelayMs (14.0f);
+    // The chorus engines are (re)initialised in reset(), called below.
     chorusMix = 0.5f;
 
     monoXoverL.init (sampleRate);
@@ -72,6 +87,9 @@ void MasterRack::init (double newSampleRate)
 
 void MasterRack::reset() noexcept
 {
+    const float sr = static_cast<float> (sampleRate);
+    initChorus (chorusL, sr, 0.7f);
+    initChorus (chorusR, sr, 0.9f);
     monoXoverL.reset();
     monoXoverR.reset();
     monoRightHi = 0.0f;

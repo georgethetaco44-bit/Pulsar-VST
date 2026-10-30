@@ -75,9 +75,11 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
 
-      # M3 exit test (SPEC §13 M3): JIT-compile the hardcoded voice program
-      # and render 1 s. --smoketest exits 1 on any failure, failing the job.
+      # vibesynth_cli --smoketest exits 1 on any failure, failing the job.
       # It passes only in a real JIT mode (portable is an explicit opt-in).
+      # Since M5 it also proves the 1024 loop()/while() cap on this JIT
+      # backend, runs every built-in preset through the offline test matrix
+      # and checks that every tests/patches/broken_*.pulsar is rejected.
       - name: vibesynth_cli smoketest (Linux)
         if: runner.os == 'Linux'
         shell: bash

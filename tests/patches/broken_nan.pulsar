@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "Broken: nan",
+  "prompt": "test patch for the M5 validator (must be rejected)",
+  "macros": [
+    {
+      "label": "A",
+      "default": 0.5
+    }
+  ],
+  "voiceMode": "poly",
+  "code": {
+    "init": "",
+    "voice": "// EEL2 zeroes NaN/Inf/denormals on most assignments (its denormal\n// filter), so 1/0 or x/(x-x) come out as 0. A plain multiply by a\n// constant > 1 uses the unfiltered store: acc restarts from 0 each time\n// it overflows, but out = acc * 2 reaches +Inf (~0.04 s in).\nacc = acc * 1.5 + 1;\nout = acc * 2;",
+    "master": ""
+  }
+}

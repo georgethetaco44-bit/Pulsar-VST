@@ -1,6 +1,6 @@
-// M4 implementation. EEL2 plumbing (host stubs, JIT probe, once-init)
-// is unchanged from M3; the native function is now the full lexicon
-// (engine/LexiconReg.cpp). This file owns EelVoice + EelMaster.
+// EEL2 plumbing (host stubs, JIT probe, once-init) is unchanged from M3;
+// the native functions are the full lexicon (engine/LexiconReg.cpp). This
+// file owns EelVoice + EelMaster.
 
 #include "patch/PatchEngine.h"
 
@@ -154,6 +154,82 @@ const char* kMacroNames[8] = {
     "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"
 };
 
+// True when `code` has no statements: empty, whitespace, or comments only
+// (EEL2 // and /* */ comments). Such init/master sections are skipped.
+bool isBlankCode (const char* code) noexcept
+{
+    if (code == nullptr)
+        return true;
+    const char* p = code;
+    while (*p != '\0')
+    {
+        if (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' || *p == ';')
+        {
+            ++p;
+        }
+        else if (p[0] == '/' && p[1] == '/')
+        {
+            while (*p != '\0' && *p != '\n')
+                ++p;
+        }
+        else if (p[0] == '/' && p[1] == '*')
+        {
+            p += 2;
+            while (*p != '\0' && ! (p[0] == '*' && p[1] == '/'))
+                ++p;
+            if (*p != '\0')
+                p += 2;
+        }
+        else
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string codeError (NSEEL_VMCTX vm)
+{
+    const char* err = NSEEL_code_getcodeerror (vm);
+    return (err != nullptr && *err != '\0') ? std::string (err) : std::string ("compile failed");
+}
+
+// Every variable the compiled code can touch (SPEC §7.2 reset list).
+// Called once after compiling, off the audio thread.
+void collectVars (NSEEL_VMCTX vm, std::vector<EEL_F_PTR>& out)
+{
+    out.clear();
+    NSEEL_VM_enumallvars (vm, [] (const char*, EEL_F* val, void* ctx) -> int
+                          {
+                              if (val != nullptr)
+                                  static_cast<std::vector<EEL_F_PTR>*> (ctx)->push_back (val);
+                              return 1;
+                          }, &out);
+}
+
+// Zeroes mem[] through the no-alloc accessor. Every block is preallocated
+// (setupVm), so this never allocates; an absent block is skipped.
+void zeroVmRam (NSEEL_VMCTX vm) noexcept
+{
+    unsigned int offs = 0;
+    const unsigned int slots = static_cast<unsigned int> (kVmRamSlots);
+    while (offs < slots)
+    {
+        int valid = 0;
+        EEL_F* p = NSEEL_VM_getramptr_noalloc (vm, offs, &valid);
+        if (p == nullptr || valid <= 0)
+        {
+            offs = (offs / NSEEL_RAM_ITEMSPERBLOCK + 1) * NSEEL_RAM_ITEMSPERBLOCK;
+            continue;
+        }
+        unsigned int n = static_cast<unsigned int> (valid);
+        if (n > slots - offs)
+            n = slots - offs;
+        std::memset (p, 0, n * sizeof (EEL_F));
+        offs += n;
+    }
+}
+
 } // namespace
 } // namespace vibesynth
 
@@ -168,7 +244,7 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
 
     if (! ensureEelInitialised() || ! isJitUsable())
     {
-        compileError_ = "EEL2 JIT unavailable; voice silent";
+        compileError_ = "EEL2 JIT unavailable";
         return;
     }
 
@@ -179,7 +255,7 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
         return;
     }
 
-    setupVm (vm_, &gram_, &rackCtx_, 65536);
+    setupVm (vm_, &gram_, &rackCtx_, kVmRamSlots);
 
     bool ok = true;
     freq_ = mustRegVar (vm_, "freq", ok);
@@ -205,12 +281,39 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
     for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
         *macro_[i] = 0.5;
 
-    initCode_ = NSEEL_code_compile (vm_, patch.init != nullptr ? patch.init : "", 0);
-    voiceCode_ = NSEEL_code_compile (vm_, patch.voice != nullptr ? patch.voice : "", 0);
-    if (initCode_ == nullptr || voiceCode_ == nullptr)
+    // Init is optional (blank = no init code); voice must have statements.
+    bool failed = false;
+    if (! isBlankCode (patch.init))
     {
-        const char* err = NSEEL_code_getcodeerror (vm_);
-        compileError_ = (err != nullptr && *err != '\0') ? err : "compile failed";
+        initCode_ = NSEEL_code_compile (vm_, patch.init, 0);
+        if (initCode_ == nullptr)
+        {
+            compileSection_ = "init";
+            compileError_ = codeError (vm_);
+            failed = true;
+        }
+    }
+    if (! failed)
+    {
+        if (isBlankCode (patch.voice))
+        {
+            compileSection_ = "voice";
+            compileError_ = "voice code is empty";
+            failed = true;
+        }
+        else
+        {
+            voiceCode_ = NSEEL_code_compile (vm_, patch.voice, 0);
+            if (voiceCode_ == nullptr)
+            {
+                compileSection_ = "voice";
+                compileError_ = codeError (vm_);
+                failed = true;
+            }
+        }
+    }
+    if (failed)
+    {
         if (initCode_ != nullptr) { NSEEL_code_free (initCode_); initCode_ = nullptr; }
         if (voiceCode_ != nullptr) { NSEEL_code_free (voiceCode_); voiceCode_ = nullptr; }
         NSEEL_VM_free (vm_);
@@ -218,7 +321,9 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
         freq_ = note_ = vel_ = gate_ = trig_ = srate_ = out_ = nullptr;
         for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
             macro_[i] = nullptr;
+        return;
     }
+    collectVars (vm_, vars_);
 }
 
 EelVoice::~EelVoice()
@@ -234,17 +339,29 @@ EelVoice::~EelVoice()
 // clears it after executing the voice code.
 void EelVoice::noteOn (double freq, double note, double vel) noexcept
 {
-    lifetime.noteOn();
-    if (vm_ == nullptr || initCode_ == nullptr || freq_ == nullptr)
+    if (vm_ == nullptr || freq_ == nullptr)
         return;
     *freq_ = freq;
     if (note_ != nullptr) *note_ = note;
     if (vel_ != nullptr) *vel_ = vel;
     if (gate_ != nullptr) *gate_ = 1.0;
     if (trig_ != nullptr) *trig_ = 1.0;
-    NSEEL_code_execute (initCode_);
+    if (initCode_ != nullptr)
+        NSEEL_code_execute (initCode_);
     if (trig_ != nullptr) *trig_ = 1.0; // even if init wrote it
     if (gate_ != nullptr) *gate_ = 1.0;
+}
+
+void EelVoice::resetState() noexcept
+{
+    rackStorage_.reset();
+    if (vm_ == nullptr)
+        return;
+    for (EEL_F_PTR v : vars_)
+        *v = 0.0;
+    zeroVmRam (vm_);
+    if (srate_ != nullptr)
+        *srate_ = rackStorage_.sampleRate;
 }
 
 float EelVoice::renderSample (double freq, double gate, double note, double vel,
@@ -262,7 +379,7 @@ float EelVoice::renderSample (double freq, double gate, double note, double vel,
             *macro_[i] = macros[i];
     NSEEL_code_execute (voiceCode_);
     if (trig_ != nullptr) *trig_ = 0.0;
-    return sanitizeAndClamp (*out_);
+    return rawOutput (*out_);
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +403,7 @@ EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
 
     if (! ensureEelInitialised() || ! isJitUsable())
     {
-        compileError_ = "EEL2 JIT unavailable; master silent";
+        compileError_ = "EEL2 JIT unavailable";
         return;
     }
 
@@ -297,7 +414,7 @@ EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
         return;
     }
 
-    setupVm (vm_, &gram_, &rackCtx_, 65536);
+    setupVm (vm_, &gram_, &rackCtx_, kVmRamSlots);
 
     bool ok = true;
     inl_ = mustRegVar (vm_, "inl", ok);
@@ -318,17 +435,25 @@ EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
     for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
         *macro_[i] = 0.5;
 
-    masterCode_ = NSEEL_code_compile (vm_, patch.master != nullptr ? patch.master : "", 0);
+    // Blank master = passthrough (SPEC §4.3 default); the VM stays
+    // allocated but nothing is compiled or executed.
+    if (isBlankCode (patch.master))
+    {
+        passthrough_ = true;
+        return;
+    }
+    masterCode_ = NSEEL_code_compile (vm_, patch.master, 0);
     if (masterCode_ == nullptr)
     {
-        const char* err = NSEEL_code_getcodeerror (vm_);
-        compileError_ = (err != nullptr && *err != '\0') ? err : "compile failed";
+        compileError_ = codeError (vm_);
         NSEEL_VM_free (vm_);
         vm_ = nullptr;
         inl_ = inr_ = outl_ = outr_ = srate_ = nullptr;
         for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
             macro_[i] = nullptr;
+        return;
     }
+    collectVars (vm_, vars_);
 }
 
 EelMaster::~EelMaster()
@@ -345,8 +470,8 @@ void EelMaster::renderSample (float inL, float inR, float& outL, float& outR,
 {
     if (masterCode_ == nullptr || inl_ == nullptr || outl_ == nullptr)
     {
-        outL = sanitizeAndClamp (inL);
-        outR = sanitizeAndClamp (inR);
+        outL = inL;
+        outR = inR;
         return;
     }
     *inl_ = inL;
@@ -358,8 +483,20 @@ void EelMaster::renderSample (float inL, float inR, float& outL, float& outR,
     if (outl_ != nullptr) *outl_ = inL;
     if (outr_ != nullptr) *outr_ = inR;
     NSEEL_code_execute (masterCode_);
-    outL = sanitizeAndClamp (*outl_);
-    outR = (outr_ != nullptr) ? sanitizeAndClamp (*outr_) : outL;
+    outL = rawOutput (*outl_);
+    outR = (outr_ != nullptr) ? rawOutput (*outr_) : outL;
+}
+
+void EelMaster::resetState() noexcept
+{
+    rackStorage_.reset();
+    if (vm_ == nullptr)
+        return;
+    for (EEL_F_PTR v : vars_)
+        *v = 0.0;
+    zeroVmRam (vm_);
+    if (srate_ != nullptr)
+        *srate_ = rackStorage_.sampleRate;
 }
 
 const char* eelExecutionMode()

@@ -1,15 +1,19 @@
 #pragma once
 
-// M4: the EEL2 voice/master engine (SPEC §4.2, §4.3, §13 M4).
+// The EEL2 voice/master engine (SPEC §4.2, §4.3, §7.2).
 //
-// One `EelVoice` owns one EEL2 VM compiled from the hardcoded patch's
-// `init` + `voice` sections (two code handles on the same VM, sharing
-// variables). One `EelMaster` owns one VM compiled from `master` with a
-// `MasterRack` context. The audio thread only writes bound variables and
-// calls renderSample() — all VM creation and compilation happens off the
-// audio thread (constructor). Linkage: `vibesynth_engine` static lib,
-// shared by the plugin and `vibesynth_cli` so the CLI tests exactly the
-// code the plugin runs.
+// One `EelVoice` owns one EEL2 VM compiled from a patch's `init` + `voice`
+// sections (two code handles on the same VM, sharing variables). One
+// `EelMaster` owns one VM compiled from `master` with a `MasterRack`
+// context. The audio thread only writes bound variables and calls
+// renderSample() / noteOn() / resetState(); all VM creation and
+// compilation happens off the audio thread (constructor). Linkage:
+// `vibesynth_engine` static lib, shared by the plugin and `vibesynth_cli`
+// so the CLI tests exactly the code the plugin runs.
+//
+// M5: outputs are raw (no clamp), so the validator (§7.1) can measure NaN
+// and peaks above 0 dBFS; the processor's runtime guard (§7.2) does the
+// clamping. A non-finite result comes back as a float NaN.
 //
 // Real-time rules (SPEC §11): renderSample() performs no allocation,
 // locks, logging, I/O, exceptions, or std::function. NaN/Inf checks use
@@ -22,14 +26,26 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "engine/Lexicon.h"
 #include "engine/MasterRack.h"
-#include "engine/TestPreset.h"
 
 namespace vibesynth {
+
+// The three code sections of one patch (SPEC §4.2), as the VMs compile
+// them. The strings only need to live until the constructor returns.
+// Empty (or whitespace/comment-only) init and master are allowed: no init
+// code runs, and the master passes inl/inr straight to outl/outr.
+struct PatchStrings
+{
+    const char* init;
+    const char* voice;
+    const char* master;
+};
 
 // Bit-pattern float checks (SPEC §11: survive -ffast-math).
 inline bool isFiniteBits (double v) noexcept
@@ -40,17 +56,30 @@ inline bool isFiniteBits (double v) noexcept
     return ((bits >> 52) & 0x7FFu) != 0x7FFu;
 }
 
-// NaN/Inf -> 0, then hard-clamp to [-1, 1]. Usable on the audio thread.
-inline float sanitizeAndClamp (double v) noexcept
+inline bool isFiniteBits (float v) noexcept
+{
+    uint32_t bits = 0;
+    static_assert (sizeof (bits) == sizeof (v), "float must be 32-bit");
+    std::memcpy (&bits, &v, sizeof (v));
+    return ((bits >> 23) & 0xFFu) != 0xFFu;
+}
+
+// A VM output as float, unclamped: non-finite -> NaN (so callers can test
+// it), finite values limited to +/-1e6 only so the float cast never turns
+// a huge finite double into Inf.
+inline float rawOutput (double v) noexcept
 {
     if (! isFiniteBits (v))
-        return 0.0f;
-    if (v > 1.0)
-        return 1.0f;
-    if (v < -1.0)
-        return -1.0f;
+        return std::numeric_limits<float>::quiet_NaN();
+    if (v > 1.0e6)
+        return 1.0e6f;
+    if (v < -1.0e6)
+        return -1.0e6f;
     return static_cast<float> (v);
 }
+
+// mem[] slots per VM (SPEC §4.2), preallocated at construction.
+constexpr int kVmRamSlots = 65536;
 
 bool isJitUsable();
 bool ensureEelInitialised();
@@ -100,7 +129,9 @@ struct MacroSmoother
 };
 
 // Voice release tracker (SPEC §4.2 lifetime; the patch owns its envelope
-// via env_adsr — C++ only decides when the voice may be freed).
+// via env_adsr — C++ only decides when the voice may be freed). M5: owned
+// by the processor's voice slot, not the EelVoice, so it survives a patch
+// swap (SPEC §7.3).
 // A stolen voice gets a 2 ms linear fade (fadeGain() per sample); track()
 // returns true once that fade has run out, so the owner frees (or
 // retriggers) it.
@@ -179,7 +210,8 @@ struct VoiceLifetime
 
 // One voice: one EEL2 VM, init + voice code handles, all §4.3 voice vars.
 // All creation/compilation in the constructor (off audio thread).
-// renderSample()/noteOn() are the only audio-thread entry points.
+// renderSample()/noteOn()/resetState() are the only audio-thread entry
+// points.
 class EelVoice
 {
 public:
@@ -191,6 +223,9 @@ public:
     EelVoice& operator= (const EelVoice&) = delete;
 
     bool isValid() const noexcept { return voiceCode_ != nullptr; }
+    // On failure: the section that failed ("init", "voice", or empty for a
+    // VM setup error) and EEL2's own error text.
+    const std::string& compileSection() const noexcept { return compileSection_; }
     const std::string& compileError() const noexcept { return compileError_; }
 
     VoiceRack& rack() noexcept { return rackStorage_; }
@@ -199,7 +234,9 @@ public:
     float renderSample (double freq, double gate, double note, double vel,
                         const double macros[MacroSmoother::kNumMacros]) noexcept;
 
-    VoiceLifetime lifetime;
+    // Runtime guard (SPEC §7.2): reset the rack, zero every VM variable
+    // (pointer list collected at compile time) and mem[]. No allocation.
+    void resetState() noexcept;
 
 private:
     NSEEL_VMCTX vm_ = nullptr;
@@ -216,6 +253,8 @@ private:
     EEL_F* srate_ = nullptr;
     EEL_F* macro_[MacroSmoother::kNumMacros] = {};
     EEL_F* out_ = nullptr;
+    std::vector<EEL_F_PTR> vars_;
+    std::string compileSection_;
     std::string compileError_;
 };
 
@@ -229,13 +268,17 @@ public:
     EelMaster (const EelMaster&) = delete;
     EelMaster& operator= (const EelMaster&) = delete;
 
-    bool isValid() const noexcept { return masterCode_ != nullptr; }
+    // Valid with compiled master code, or as a passthrough (empty master).
+    bool isValid() const noexcept { return masterCode_ != nullptr || passthrough_; }
     const std::string& compileError() const noexcept { return compileError_; }
 
     MasterRack& rack() noexcept { return rackStorage_; }
 
     void renderSample (float inL, float inR, float& outL, float& outR,
                        const double macros[MacroSmoother::kNumMacros]) noexcept;
+
+    // Same as EelVoice::resetState, for the master VM and MasterRack.
+    void resetState() noexcept;
 
 private:
     NSEEL_VMCTX vm_ = nullptr;
@@ -251,6 +294,8 @@ private:
     EEL_F* outr_ = nullptr;
     EEL_F* srate_ = nullptr;
     EEL_F* macro_[MacroSmoother::kNumMacros] = {};
+    std::vector<EEL_F_PTR> vars_;
+    bool passthrough_ = false;
     std::string compileError_;
 };
 

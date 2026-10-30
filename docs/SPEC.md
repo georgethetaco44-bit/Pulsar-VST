@@ -59,8 +59,8 @@ audition-and-keep mutation.
  Prompt / Mutate ──request──▶  1. Build prompt (full API + recipes)
                                2. HTTPS → Meta API (juce::URL)
                                3. Parse response (JSON header + code)
-                               4. Compile EEL2 into 9 fresh VMs
-                                  (8 voices + 1 master)
+                               4. Compile EEL2 into 11 fresh VMs
+                                  (10 voice objects + 1 master)
                                5. Offline test matrix (§7.1)
                                   fail → feed error back, retry ≤2
                                6. Push PatchProgram* ──SPSC queue──▶   fade out old (5 ms)
@@ -346,8 +346,32 @@ Reject (and retry via §6.4) if any configuration shows:
 - DC offset above 0.1 averaged over the last 0.5 s
 - all 9 configurations silent (peak below −80 dBFS): "patch makes no sound"
 - CPU over budget: average voice render time above 10 % of real time per voice
+  (a runaway guard, deliberately much looser than the §4.2.1 design budget,
+  so patches still load on slower machines than the Deck)
 
 Target: the whole matrix finishes in under 300 ms.
+
+**Runaway code (M5).** JIT code can't be interrupted mid-sample, so:
+- EEL2 is built with `NSEEL_LOOPFUNC_SUPPORT_MAXLEN=1024` (the default is
+  1,048,576), so one `loop`/`while` runs at most 1024 iterations. Verify this
+  on every JIT backend, because Windows x64 links prebuilt asm objects.
+- The validator checks a wall-clock deadline (and its cancel flag) after every
+  sample and rejects the patch ("too slow") as soon as one configuration has
+  used more than 100 ms (10 % of its 1 s of audio, matching the CPU rule), so
+  it never waits out a slow patch. The per-sample clock read costs ~10 ms over
+  the whole matrix; it runs only in the validator, never on the audio thread.
+- Before compiling, a text check rejects `loop`/`while` nested more than 2
+  deep (a loop inside a user function counts as one level wherever that
+  function is called). With the 1024 cap, one sample is then at most ~1M
+  iterations (a few ms), so the deadline always fires promptly and the worker
+  can always be stopped.
+- EEL2 already zeroes NaN/Inf/denormals on most variable stores, so many bad
+  patches never produce NaN; the guard still catches the store paths that
+  don't. `OPTFLAG_FULL_DENORMAL_CHECKS` stays off.
+- Size limits: each code section ≤ 32 KB, the whole file ≤ 256 KB.
+
+Compile errors (any section) are rejected before the matrix runs, with the
+EEL2 error text and section name kept for self-heal (§6.4) and the UI.
 
 **Trim:** compute one gain so the worst-case peak lands at −3 dBFS. The trim may
 only attenuate (gain ≤ 1.0), never boost.
@@ -357,15 +381,29 @@ only attenuate (gain ≤ 1.0), never boost.
   denormals).
 - After each voice's block: if any sample is non-finite, zero that voice's
   output, reset its rack and VM variables, and mute it for 20 ms.
-- Master chain always ends with DC block → peak limiter → hard clip ±1.0.
+- Master chain always ends with trim → DC block → peak limiter → hard clip ±1.0.
+  The limiter has no lookahead (so no latency): instant attack, ~80 ms release,
+  ceiling −0.3 dBFS. It replaces M4's fixed −12 dB output gain.
 - Final output is checked for non-finite values and zeroed if found.
+- "Reset its VM variables" means: zero every variable found via
+  `NSEEL_VM_enumallvars` (a pointer list collected off the audio thread at
+  compile time; the bound inputs get rewritten anyway) and zero `mem[]`
+  through `NSEEL_VM_getramptr_noalloc`. No allocation.
 
 ### 7.3 Hot-swap protocol
+A `PatchProgram` owns everything compiled from one patch: 10 `EelVoice`s
+(VM + rack each), one `EelMaster`, the trim, and the parsed patch (macros,
+voice mode, graph, source). Voice *slot* state (note, age, gate, fade) stays
+in the processor, so it survives a swap. The program is built for one sample
+rate; a sample-rate change in `prepareToPlay` rebuilds it synchronously.
+
 1. Worker pushes the new `PatchProgram*` on the swap queue.
 2. Audio thread fades the output out over 5 ms.
 3. At silence it swaps programs, resets all racks (no allocation; reset only),
    and pushes the old program on the retire queue.
-4. Fades in over 5 ms. Held notes keep sounding with the new patch.
+4. Fades in over 5 ms. Held notes keep sounding with the new patch: each
+   held slot gets a note-on on its new voice (so `trig` = 1 and `init` runs);
+   released voices are dropped.
 5. Worker frees retired programs.
 
 ---
@@ -428,7 +466,11 @@ In `master`: `outl = bus_mono_low(inl, inr); outr = bus_mono_low_r();` then
 ### 9.1 Voices **[MVP]**
 - 8-voice polyphony, plus **mono/legato mode** with glide time (bass patches are
   mostly mono). Patch JSON may set a default mode; the user can override.
-- Voice stealing: oldest voice, 3 ms fast release before reuse.
+- Voice stealing (M4 amendment): 10 voice objects, at most 8 sounding. On a
+  9th note the victim (the oldest released voice, else the oldest held one)
+  fades out linearly over 2 ms while the new note starts at once on a spare.
+  Only when no spare is free (10 note-ons within 2 ms) does a voice
+  hard-steal in place: a 2 ms fade, then retrigger. No note-on is dropped.
 - Pitch bend ±2 semitones; mod wheel is readable as variable `mw` (0–1).
 
 ### 9.2 Macros **[MVP]**
@@ -442,14 +484,18 @@ In `master`: `outl = bus_mono_low(inl, inr); outr = bus_mono_low_r();` then
 ### 9.3 State persistence **[MVP]**
 `getStateInformation` saves the full patch (all code sections, JSON header,
 original prompt, trim) plus macro values and voice mode. Reopening a project
-recompiles the saved code locally. **It never calls the LLM.**
+recompiles the saved code locally. **It never calls the LLM.** A restored patch
+skips the offline matrix (it passed when it was first loaded) but must still
+compile; if it doesn't, Pulsar loads the default preset and shows the error.
+The state is the APVTS tree with the patch JSON as a child property, so older
+or newer state versions fail soft.
 
 ### 9.4 Built-in presets **[MVP]**
-15+ hand-tuned patches in `resources/presets/*.vibepatch`, covering reese,
+15+ hand-tuned patches in `resources/presets/*.pulsar`, covering reese,
 neuro, UKG organ/stab, sub, physical-model plucks, chaos textures. They are:
 the out-of-the-box demo, few-shot examples (§6.1) and regression tests.
 
-`.vibepatch` format:
+`.pulsar` format:
 ```json
 {
   "version": 1,
@@ -458,9 +504,17 @@ the out-of-the-box demo, few-shot examples (§6.1) and regression tests.
   "macros": [{"label": "Detune", "default": 0.4}],
   "voiceMode": "mono",
   "graph": {"edges": [["osc_supersaw:0", "flt_lp:0"]]},
-  "code": {"init": "", "voice": "...", "master": "..."}
+  "code": {"init": "", "voice": "...", "master": "..."},
+  "trim": 0.62
 }
 ```
+`trim` (M5) is the gain the offline test computed, saved so that restoring a
+project or picking a built-in needs no matrix. On load it is clamped to
+(0, 1]; any patch loaded from a file or generated is re-tested, and the
+computed trim replaces the stored one. Built-ins are compile-only on
+selection, because CI's selftest checks that each stored trim matches the
+computed one within 0.1 dB. Macro defaults and trim are rounded to 1e-6 so
+the file round-trips exactly.
 Loading a patch file runs the same compile + offline test as a generated patch.
 
 ### 9.5 Editor **[MVP]**
@@ -525,7 +579,7 @@ Loading a patch file runs the same compile + offline test as a generated patch.
 ### 10.3 Headless test tool `vibesynth_cli` **[MVP]**
 A console target sharing the engine code, with no DAW or UI:
 - `--selftest`: compile and offline-test every built-in preset (used in CI).
-- `--render patch.vibepatch out.wav`: render a test phrase to WAV.
+- `--render patch.pulsar out.wav`: render a test phrase to WAV.
 - `--batch prompts.txt`: run each prompt through generate → compile → test,
   saving patches + WAVs, and print pass rates (parse / compile / test / retries).
   This is how prompt and recipe changes are evaluated and how API credits are
@@ -564,7 +618,7 @@ Pulsar/                         (repo root; product name Pulsar, codename VibeSy
 ├── docs/  SPEC.md  ROADMAP.md
 ├── third_party/WDL/            vendored EEL2 subset
 ├── resources/
-│   ├── presets/*.vibepatch
+│   ├── presets/*.pulsar
 │   └── prompts/  system_prompt.md  api_reference.md  recipes/*.md
 ├── src/
 │   ├── PluginProcessor.h/.cpp  voices, MIDI, macros, state, swap protocol
@@ -573,10 +627,11 @@ Pulsar/                         (repo root; product name Pulsar, codename VibeSy
 │   │   ├── VoiceRack.h  MasterRack.h      pre-allocated module slots + meters
 │   │   ├── Lexicon.h/.cpp                 native function registration (§5)
 │   │   ├── ChaosMath.h                    Lorenz, Duffing, bytebeat
-│   │   ├── Utilities.h                    safe_fb, crossover, limiter, DC block, smoother
+│   │   ├── Utilities.h                    safe_fb, crossover, smoother
+│   │   ├── OutputStage.h                  trim → DC block → limiter → clip (§7.2)
 │   │   └── Oversampler.h
 │   ├── patch/
-│   │   ├── Patch.h/.cpp                   .vibepatch model + parse/serialize
+│   │   ├── Patch.h/.cpp                   .pulsar model + parse/serialize
 │   │   ├── PatchEngine.h/.cpp             EEL2 VM creation + compile
 │   │   └── PatchValidator.h/.cpp          offline test matrix (§7.1)
 │   ├── ai/
@@ -606,7 +661,11 @@ Each milestone has an exit test. Don't start the next until it passes.
    Utilities, auto-metering, normalized clamped API. *Exit: a hand-written
    preset using 6+ functions sounds right in REAPER, and its benchmark on the
    Steam Deck is within the §4.2.1 budget.*
-5. **Patch system & safety.** `.vibepatch` load/save, offline test matrix, trim,
+   **Result: passed. Test preset (with `flt_lp`) 283 ns per voice-sample on
+   the Deck, against a 300 ns budget; it passed REAPER listening; CI green on all three OSes
+   (smoketest + pluginval). The ladder is too heavy for the default preset
+   (≈144 ns per call), and it gets replaced in M7.**
+5. **Patch system & safety.** `.pulsar` load/save, offline test matrix, trim,
    runtime guard, master limiter, fade-swap protocol with retire queue, state
    persistence. *Exit: a deliberately broken patch is rejected; switching
    presets mid-note doesn't click; reopening the REAPER project restores the

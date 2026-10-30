@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "name": "Reese",
+  "prompt": "detuned reese bass with a filter that opens on the envelope",
+  "macros": [
+    {
+      "label": "Detune",
+      "default": 0.4
+    },
+    {
+      "label": "Cutoff",
+      "default": 0.5
+    },
+    {
+      "label": "Res / FB",
+      "default": 0.45
+    },
+    {
+      "label": "Drive",
+      "default": 0.35
+    }
+  ],
+  "voiceMode": "poly",
+  "graph": {
+    "edges": [
+      [
+        "osc_supersaw:0",
+        "flt_lp:0"
+      ],
+      [
+        "osc_saw:0",
+        "flt_lp:0"
+      ],
+      [
+        "env_adsr:0",
+        "flt_lp:0"
+      ],
+      [
+        "flt_lp:0",
+        "fx_sat"
+      ],
+      [
+        "osc_sine:1",
+        "fx_sat"
+      ],
+      [
+        "fx_sat",
+        "fx_fold"
+      ],
+      [
+        "fx_fold",
+        "util_safe_fb:0"
+      ],
+      [
+        "util_safe_fb:0",
+        "osc_supersaw:0"
+      ],
+      [
+        "fx_fold",
+        "out"
+      ]
+    ]
+  },
+  "code": {
+    "init": "fb1 = 0; prev = 0;",
+    "voice": "det = 1 + (m1 - 0.5) * 0.02;\na = osc_supersaw(0, freq * det * (1 + fb1 * m3 * 0.02), m1, 0.65);\nb = osc_saw(0, freq * (2 - det));\nsub = osc_sine(1, freq * 0.5);\nenv = env_adsr(0, gate, 0.08, 0.35, 0.55, 0.5);\ncut = min(0.97, 0.12 + m2 * 0.55 + env * 0.30);\nx = a * 0.7 + b * 0.3;\ny = flt_lp(0, x, cut, m3);\ny = fx_sat(y + sub * 0.5, m4);\ny = fx_fold(y, m4 * 0.35);\nfb1 = util_safe_fb(0, y);\n// DC trap (~3 Hz): the fold on a saw + octave + sub mix makes DC.\ndc += (y - dc) * 20 / srate;\ny -= dc;\nout = y * env * (0.5 + 0.5 * vel);",
+    "master": "outl = bus_mono_low(inl, inr);\noutr = bus_mono_low_r();\noutl = bus_sat(outl, 0.35);\noutr = bus_sat(outr, 0.35);"
+  },
+  "trim": 1.0
+}

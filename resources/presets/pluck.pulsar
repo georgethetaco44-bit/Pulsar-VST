@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "name": "Pluck",
+  "prompt": "short bright pluck with a decaying filter and a little chorus",
+  "macros": [
+    {
+      "label": "Cutoff",
+      "default": 0.45
+    },
+    {
+      "label": "Decay",
+      "default": 0.4
+    },
+    {
+      "label": "Resonance",
+      "default": 0.3
+    },
+    {
+      "label": "Chorus",
+      "default": 0.5
+    }
+  ],
+  "voiceMode": "poly",
+  "graph": {
+    "edges": [
+      [
+        "osc_saw:0",
+        "flt_lp:0"
+      ],
+      [
+        "osc_square:0",
+        "flt_lp:0"
+      ],
+      [
+        "env_adsr:1",
+        "flt_lp:0"
+      ],
+      [
+        "flt_lp:0",
+        "out"
+      ],
+      [
+        "env_adsr:0",
+        "out"
+      ],
+      [
+        "out",
+        "bus_chorus"
+      ]
+    ]
+  },
+  "code": {
+    "init": "",
+    "voice": "env = env_adsr(0, gate, 0, 0.55 + m2 * 0.15, 0, 0.45);\nfenv = env_adsr(1, gate, 0, 0.45 + m2 * 0.15, 0, 0.4);\nx = osc_saw(0, freq) * 0.6 + osc_square(0, freq * 1.005, 0.5) * 0.4;\ny = flt_lp(0, x, 0.15 + m1 * 0.35 + fenv * 0.45, m3 * 0.8);\nout = y * env * vel;",
+    "master": "outl = bus_chorus(inl, inr, 0.3, m4 * 0.5);\noutr = bus_chorus_r();"
+  },
+  "trim": 0.620685
+}

@@ -1,8 +1,9 @@
 // M4: vibesynth_cli --bench (SPEC §4.2.1, §10.3). Report-only, never
-// gating: prints ns per voice-sample for every lexicon function and for the
-// full test preset, each the MEDIAN of 7 runs of 1 s at 48 kHz (single runs
-// vary up to 2x on the Deck) and marked PASS/FAIL against the 300 ns voice
-// budget (bus_* against the 2 µs master budget).
+// gating: prints ns per voice-sample for every lexicon function and for
+// every built-in preset (M5: resources/presets/*.pulsar), each the MEDIAN
+// of 7 runs of 1 s at 48 kHz (single runs vary up to 2x on the Deck) and
+// marked PASS/FAIL against the 300 ns voice budget (bus_* and preset
+// masters against the 2 µs master budget).
 
 #include "Bench.h"
 
@@ -14,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "patch/Patch.h"
 #include "patch/PatchEngine.h"
 
 namespace vibesynth_cli {
@@ -228,43 +230,58 @@ int runBench()
         }
     }
 
-    // Full test preset plus its other-filter variant (flt_lp <-> flt_ladder).
-    double presetMacros[MacroSmoother::kNumMacros] = {
-        0.4, 0.5, 0.45, 0.35, 0.5, 0.5, 0.5, 0.5
-    };
-    const bool presetUsesLadder = std::string (kTestPreset.voice).find ("flt_ladder") != std::string::npos;
-    const std::string altVoice = presetUsesLadder
-        ? swapCall (kTestPreset.voice, "flt_ladder", "flt_lp")
-        : swapCall (kTestPreset.voice, "flt_lp", "flt_ladder");
-    const PatchStrings altPatch = { kTestPreset.init, altVoice.c_str(), kTestPreset.master };
-
-    std::printf ("\n-- full test preset (55 Hz, gate held) --\n");
+    // Every built-in preset (55 Hz, gate held, macros at the patch
+    // defaults). Reese also gets its other-filter variant
+    // (flt_lp <-> flt_ladder) for the M7 ladder decision.
+    std::printf ("\n-- built-in presets (55 Hz, gate held, macro defaults) --\n");
     std::printf ("%-24s %11s  %8s  %6s\n", "part", "ns", "vs base", "budget");
 
-    const auto pvPtr = std::make_unique<EelVoice> (kTestPreset, kSampleRate, 9u);
-    const auto pmPtr = std::make_unique<EelMaster> (kTestPreset, kSampleRate);
-    const auto avPtr = std::make_unique<EelVoice> (altPatch, kSampleRate, 9u);
-    EelVoice& pv = *pvPtr;
-    EelMaster& pm = *pmPtr;
-    EelVoice& av = *avPtr;
-    if (! pv.isValid() || ! pm.isValid() || ! av.isValid())
+    double voiceNs = 0.0;  // the default preset (index 0), for the projection
+    double masterNs = 0.0;
+    for (int pi = 0; pi < numBuiltinPresets(); ++pi)
     {
-        std::printf ("preset COMPILE FAIL: %s %s %s\n", pv.compileError().c_str(),
-                     pm.compileError().c_str(), av.compileError().c_str());
-        std::printf ("BENCH DONE (report-only; exit 0)\n");
-        return 0;
+        const ParseResult pr = parsePatch (builtinPresetText (pi));
+        if (! pr.ok())
+        {
+            std::printf ("%s PARSE FAIL: %s\n", builtinPresetFile (pi), pr.error.c_str());
+            continue;
+        }
+        const Patch& patch = pr.patch;
+        const PatchStrings ps = { patch.init.c_str(), patch.voice.c_str(), patch.master.c_str() };
+        double presetMacros[MacroSmoother::kNumMacros] = {};
+        for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
+            presetMacros[m] = patch.macroDefault (m);
+
+        const auto pvPtr = std::make_unique<EelVoice> (ps, kSampleRate, 9u);
+        const auto pmPtr = std::make_unique<EelMaster> (ps, kSampleRate);
+        if (! pvPtr->isValid() || ! pmPtr->isValid())
+        {
+            std::printf ("%s COMPILE FAIL: %s %s\n", builtinPresetFile (pi),
+                         pvPtr->compileError().c_str(), pmPtr->compileError().c_str());
+            continue;
+        }
+        const double vNs = timeVoice (*pvPtr, 55.0, 33.0, presetMacros);
+        const std::vector<float> in = renderInput (*pvPtr, 55.0, presetMacros);
+        const double mNs = timeMaster (*pmPtr, in, presetMacros);
+        const std::string vName = patch.name + " voice";
+        const std::string mName = patch.name + " master";
+        printRow (vName.c_str(), vNs, voiceBase, kVoiceBudgetNs);
+        printRow (mName.c_str(), mNs, masterBase, kMasterBudgetNs);
+        if (pi == 0)
+        {
+            voiceNs = vNs;
+            masterNs = mNs;
+            const bool usesLadder = patch.voice.find ("flt_ladder") != std::string::npos;
+            const std::string altVoice = usesLadder
+                ? swapCall (patch.voice.c_str(), "flt_ladder", "flt_lp")
+                : swapCall (patch.voice.c_str(), "flt_lp", "flt_ladder");
+            const PatchStrings alt = { patch.init.c_str(), altVoice.c_str(), patch.master.c_str() };
+            const auto avPtr = std::make_unique<EelVoice> (alt, kSampleRate, 9u);
+            if (avPtr->isValid())
+                printRow (usesLadder ? "  variant with flt_lp" : "  variant with ladder",
+                          timeVoice (*avPtr, 55.0, 33.0, presetMacros), voiceBase, kVoiceBudgetNs);
+        }
     }
-
-    const double voiceNs = timeVoice (pv, 55.0, 33.0, presetMacros);
-    const double altNs = timeVoice (av, 55.0, 33.0, presetMacros);
-    const std::vector<float> in = renderInput (pv, 55.0, presetMacros);
-    const double masterNs = timeMaster (pm, in, presetMacros);
-
-    printRow (presetUsesLadder ? "preset voice (ladder)" : "preset voice (flt_lp)",
-              voiceNs, voiceBase, kVoiceBudgetNs);
-    printRow (presetUsesLadder ? "  variant with flt_lp" : "  variant with ladder",
-              altNs, voiceBase, kVoiceBudgetNs);
-    printRow ("preset master", masterNs, masterBase, kMasterBudgetNs);
 
     // Ladder's own cost (for the M7 decision on an own 1x ladder): Daisy
     // runs it 4x oversampled internally, so at a 2x voice rate it is paid
@@ -279,9 +296,10 @@ int runBench()
     const double voice1x = voiceNs * 8.0 * kSampleRate / 1e7;
     const double voice2x = voice1x * 2.0;
     const double masterPct = masterNs * kSampleRate / 1e7;
-    std::printf ("projected 8 voices @48 kHz: %.1f%% of a core at 1x, %.1f%% at 2x "
-                 "(budget 25%%)\n", voice1x, voice2x);
-    std::printf ("projected master @48 kHz: %.2f%% of a core (budget 10%%)\n", masterPct);
+    std::printf ("default preset, projected 8 voices @48 kHz: %.1f%% of a core at 1x, "
+                 "%.1f%% at 2x (budget 25%%)\n", voice1x, voice2x);
+    std::printf ("default preset, projected master @48 kHz: %.2f%% of a core (budget 10%%)\n",
+                 masterPct);
     std::printf ("BENCH DONE (report-only; exit 0)\n");
     return 0;
 }

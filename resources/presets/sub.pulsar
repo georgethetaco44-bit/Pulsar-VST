@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "name": "Clean Sub",
+  "prompt": "clean, round sub bass with a touch of warmth",
+  "macros": [
+    {
+      "label": "Warmth",
+      "default": 0.2
+    },
+    {
+      "label": "Octave Up",
+      "default": 0.0
+    },
+    {
+      "label": "Attack",
+      "default": 0.1
+    },
+    {
+      "label": "Release",
+      "default": 0.4
+    }
+  ],
+  "voiceMode": "mono",
+  "graph": {
+    "edges": [
+      [
+        "osc_sine:0",
+        "fx_sat"
+      ],
+      [
+        "osc_tri:0",
+        "fx_sat"
+      ],
+      [
+        "env_adsr:0",
+        "out"
+      ],
+      [
+        "fx_sat",
+        "out"
+      ]
+    ]
+  },
+  "code": {
+    "init": "",
+    "voice": "env = env_adsr(0, gate, 0.05 + m3 * 0.35, 0.4, 1, 0.45 + m4 * 0.2);\ns = osc_sine(0, freq);\nh = osc_tri(0, freq * 2) * m2 * 0.25;\ny = fx_sat(s * 0.8 + h, m1 * 0.6);\nout = y * env * (0.6 + 0.4 * vel);",
+    "master": ""
+  },
+  "trim": 0.949945
+}

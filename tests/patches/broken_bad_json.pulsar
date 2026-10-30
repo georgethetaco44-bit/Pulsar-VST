@@ -1,0 +1,4 @@
+{
+  "version": 1,
+  "name": "Broken: bad json",
+  "code": {"voice": "out = osc_sine(0, freq) * 0.3;"

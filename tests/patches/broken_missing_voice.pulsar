@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "name": "Broken: missing voice",
+  "prompt": "test patch for the M5 validator (must be rejected)",
+  "macros": [],
+  "code": {
+    "init": "",
+    "master": "outl = inl; outr = inr;"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "Broken: dc",
+  "prompt": "test patch for the M5 validator (must be rejected)",
+  "macros": [
+    {
+      "label": "A",
+      "default": 0.5
+    }
+  ],
+  "voiceMode": "poly",
+  "code": {
+    "init": "",
+    "voice": "out = osc_sine(0, freq) * 0.2 + 0.5;",
+    "master": ""
+  }
+}

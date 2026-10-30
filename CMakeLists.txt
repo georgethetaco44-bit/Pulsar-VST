@@ -161,8 +161,30 @@ juce_add_plugin(VibeSynthVST
     PLUGIN_NAME "Pulsar"
     ${VIBESYNTH_LINUX_OPTS})
 
+# M5: the .pulsar model (parse/serialize, built-in preset list). It uses
+# juce::JSON, so it can't go into vibesynth_engine: JUCE modules are
+# INTERFACE targets that compile their sources into every consumer, and
+# linking juce_core into the engine as well as the plugin would duplicate
+# every JUCE symbol. The plugin and vibesynth_cli each compile this list.
+set(VIBESYNTH_PATCH_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/patch/Patch.cpp")
+
+# M5: built-in presets (SPEC §9.4), embedded for the plugin and the CLI.
+# juce_add_binary_data makes a plain static library (generated .cpp, no
+# JUCE module sources), so linking it into both is safe. Order here is not
+# the program order; that lives in Patch.cpp (kBuiltins).
+juce_add_binary_data(PulsarPresetData
+    HEADER_NAME PulsarPresetData.h
+    NAMESPACE PulsarPresetData
+    SOURCES
+        resources/presets/reese.pulsar
+        resources/presets/sub.pulsar
+        resources/presets/pluck.pulsar)
+
 target_sources(VibeSynthVST PRIVATE
-    src/PluginProcessor.cpp)
+    src/PluginProcessor.cpp
+    src/PluginEditor.cpp
+    ${VIBESYNTH_PATCH_SOURCES})
 
 target_include_directories(VibeSynthVST PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -174,15 +196,18 @@ target_compile_definitions(VibeSynthVST PUBLIC
 # see the vibesynth_engine target below. No engine .cpp here directly.
 target_link_libraries(VibeSynthVST PRIVATE
     vibesynth_engine
+    PulsarPresetData
     juce::juce_audio_utils
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
 
 # M4: the shared DSP engine, linked into the plugin and the CLI alike
 # (SPEC §10.3) so both run exactly the same code. Lexicon + PatchEngine,
-# backed by eel2 and DaisySP (MIT pin above).
+# backed by eel2 and DaisySP (MIT pin above). M5 adds PatchProgram and the
+# offline validator (JUCE-free; Patch.h is header-only from here).
 add_library(vibesynth_engine STATIC
     src/patch/PatchEngine.cpp
+    src/patch/PatchValidator.cpp
     src/engine/LexiconRacks.cpp
     src/engine/Racks.cpp
     src/engine/Racks2.cpp
@@ -215,8 +240,42 @@ target_compile_options(vibesynth_engine PRIVATE
 # Headless test tool (SPEC §10.3). Console target sharing the engine code;
 # CI runs --smoketest (gating); --bench is report-only. Engine headers come
 # through vibesynth_engine's public include dirs (no repo-root include path,
-# repo rule 10).
-add_executable(vibesynth_cli
+# repo rule 10). M5: a JUCE console app (juce_core only) so it compiles the
+# same Patch.cpp as the plugin; no curl, no web browser.
+juce_add_console_app(vibesynth_cli
+    NEEDS_CURL FALSE
+    NEEDS_WEB_BROWSER FALSE)
+target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/main.cpp
-    tools/vibesynth_cli/Bench.cpp)
-target_link_libraries(vibesynth_cli PRIVATE vibesynth_engine)
+    tools/vibesynth_cli/Bench.cpp
+    ${VIBESYNTH_PATCH_SOURCES})
+target_compile_definitions(vibesynth_cli PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0)
+
+# Deliberately broken patches (tests/patches, not shipped): embedded in the
+# CLI only, so --smoketest does not depend on the working directory.
+juce_add_binary_data(PulsarTestPatches
+    HEADER_NAME PulsarTestPatches.h
+    NAMESPACE PulsarTestPatches
+    SOURCES
+        tests/patches/broken_nan.pulsar
+        tests/patches/broken_loud.pulsar
+        tests/patches/broken_dc.pulsar
+        tests/patches/broken_silent.pulsar
+        tests/patches/broken_compile_error.pulsar
+        tests/patches/broken_slow.pulsar
+        tests/patches/broken_bad_json.pulsar
+        tests/patches/broken_missing_voice.pulsar
+        tests/patches/broken_oversize.pulsar)
+
+target_link_libraries(vibesynth_cli PRIVATE
+    vibesynth_engine
+    PulsarPresetData
+    PulsarTestPatches
+    juce::juce_core
+    juce::juce_recommended_config_flags)
+# Keep the binary at build/vibesynth_cli (CI and docs call it there), not
+# in JUCE's vibesynth_cli_artefacts/<config> folder.
+set_target_properties(vibesynth_cli PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
