@@ -4,11 +4,11 @@
 # Pulsar externally / VibeSynth in code.)
 
 # Builds the vendored EEL2 subset in third_party/WDL as a static library.
-# See third_party/WDL/VERSION for the WDL pin and exactly which files are
-# vendored. Mirrors ysfx's approach: one static lib, portable-mode switch,
-# Windows-x64 prebuilt asm object, GAS .S for gcc/clang (including the
-# macOS Universal slices — the arch selection is all preprocessor macros,
-# so a single Universal compile works).
+# See third_party/WDL/VENDORED.md for the WDL pin and exactly which files
+# are vendored. Mirrors ysfx's approach: one static lib, portable-mode
+# switch, Windows-x64 prebuilt asm object, GAS .S for gcc/clang (including
+# the macOS Universal slices — the arch selection is all preprocessor
+# macros, so a single Universal compile works).
 option(VIBESYNTH_EEL_PORTABLE "Use EEL2 portable (non-JIT) bytecode mode" OFF)
 
 set(VIBESYNTH_WDL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/WDL/WDL")
@@ -31,11 +31,14 @@ target_sources(eel2 PRIVATE ${VIBESYNTH_EEL2_SOURCES})
 # globally for the same reason).
 set_target_properties(eel2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# Include layout mirrors upstream (WDL/eel2/*.c #include "../wdltypes.h"
-# etc.), so the include root is third_party/WDL/WDL's parent is wrong: the
-# EEL2 headers want "WDL/eel2/ns-eel.h" or "../wdltypes.h" relative paths.
-# We expose third_party/WDL so consumers write "WDL/eel2/ns-eel.h".
-target_include_directories(eel2 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/WDL")
+# Notes and licence files must NEVER live in a directory that is on an
+# include path, and no vendored filename may match a standard header
+# (version, limits, string, ...): macOS and Windows filesystems are
+# case-insensitive, so e.g. a "VERSION" notes file shadows libc++'s
+# <version>. The include root here is therefore third_party/WDL/WDL (headers
+# only); third_party/WDL itself holds VENDORED.md and is not on any path.
+# Consumers write #include "eel2/ns-eel.h".
+target_include_directories(eel2 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/WDL/WDL")
 
 target_link_libraries(eel2 PRIVATE Threads::Threads)
 

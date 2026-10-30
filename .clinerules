@@ -26,3 +26,6 @@
    release zips, the app-data folder and the README. "VibeSynth" is the
    internal codename and may appear only in code: the CMake target, class
    names, `vibesynth_cli` and the `VIBESYNTH_API_KEY` env var.
+10. Never put a directory on an include path if it contains non-header files.
+    Never name a file with a name that matches a standard header (version,
+    limits, string, etc.) on any OS: macOS and Windows are case-insensitive.

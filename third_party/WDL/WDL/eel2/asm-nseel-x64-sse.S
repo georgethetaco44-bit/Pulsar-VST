@@ -27,7 +27,7 @@
 ## This is ysfx's rewrite of WDL's `asm-nseel-x64-sse.asm` in preprocessed
 ## GAS format (ysfx commit 8077347ccf4115567aed81400281dca57acbb0cc),
 ## ported onto WDL commit 61c5553aad0d257775a4dd7bf36b8be617ec8281.
-## Port deltas vs ysfx upstream (see third_party/WDL/VERSION):
+## Port deltas vs ysfx upstream (see third_party/WDL/VENDORED.md):
 ##   - NSEEL_RAM_BLOCKS_LOG2 9 -> 11
 ##   - MXCSR mask `or ah, 136` -> `or ax, CSR_MASK` (FTZ + all exception
 ##     masks) at 3 sites: eel_callcode64, eel_enterfp (AMD64ABI), eel_enterfp

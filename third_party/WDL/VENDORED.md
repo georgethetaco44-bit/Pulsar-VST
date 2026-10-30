@@ -23,8 +23,7 @@ gcc/clang builds (incl. macOS Universal, see cmake/EEL2.cmake):
 Ported onto the pinned WDL for two upstream changes: NSEEL_RAM_BLOCKS_LOG2
 9 -> 11 and the MXCSR mask `or ah, 136` -> `or ax, CSR_MASK` (FTZ +
 all exception masks) at 3 sites (eel_callcode64, eel_enterfp x2). If WDL's
-asm changes again, re-port the delta here; the GAS/original drift check is
-`cmake/EEL2.cmake`'s ref-hash comment.
+asm changes again, re-port the delta here.
 
 MSVC Win64 uses WDL's shipped prebuilt `asm-nseel-x64.obj` (produced
 upstream by WDL/eel2/regenerate-x64-objects.sh via `nasm -f win64`), so no

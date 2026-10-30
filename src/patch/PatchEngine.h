@@ -17,11 +17,11 @@
 #include <mutex>
 #include <string>
 
-// EEL2 public API (vendored in third_party/WDL; see VERSION for the pin).
+// EEL2 public API (vendored in third_party/WDL; see VENDORED.md for the pin).
 // ns-eel-addfuncs.h declares the pproc helpers (e.g. NSEEL_PProc_THIS)
 // used when registering native functions.
-#include "WDL/eel2/ns-eel.h"
-#include "WDL/eel2/ns-eel-addfuncs.h"
+#include "eel2/ns-eel.h"
+#include "eel2/ns-eel-addfuncs.h"
 
 namespace vibesynth {
 

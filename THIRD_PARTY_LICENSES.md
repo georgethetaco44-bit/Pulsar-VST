@@ -8,8 +8,8 @@ The plugin/Standalone link it; all Pulsar binaries are therefore AGPLv3,
 matching the repo LICENSE.
 
 ## WDL / EEL2 — zlib-style licence (Cockos / Nullsoft)
-Vendored subset in `third_party/WDL` (see `third_party/WDL/VERSION` for the
-exact pin and file list). EEL2 files carry this header text:
+Vendored subset in `third_party/WDL` (see `third_party/WDL/VENDORED.md` for
+the exact pin and file list). EEL2 files carry this header text:
 
 > Copyright (C) 1999-2003 Nullsoft, Inc. / Copyright (C) 2004-2013 Cockos
 > Incorporated (per file; aarch64 glue and later asm changes are
@@ -34,7 +34,7 @@ exact pin and file list). EEL2 files carry this header text:
 ## ysfx x86-64 GAS conversion — zlib (file header notes Apache-2.0 project)
 `third_party/WDL/WDL/eel2/asm-nseel-x64-sse.S` is ysfx's GAS rewrite of
 WDL's `asm-nseel-x64-sse.asm`, ported onto the pinned WDL (port deltas are
-documented in `third_party/WDL/VERSION`). Its in-file header states:
+documented in `third_party/WDL/VENDORED.md`). Its in-file header states:
 Copyright (C) 2005 and later Cockos Incorporated, Copyright (C) 2021 and
 later Jean Pierre Cimalando, under the same zlib-style terms as above
 (SPDX-License-Identifier: Zlib). The ysfx project as a whole is Apache-2.0,

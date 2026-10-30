@@ -89,7 +89,7 @@ add_library(vibesynth_engine STATIC
     src/patch/PatchEngine.cpp)
 target_include_directories(vibesynth_engine PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/WDL")
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/WDL/WDL")
 target_link_libraries(vibesynth_engine PUBLIC eel2)
 
 # M3 spike: headless test tool (SPEC §10.3). Console target sharing the
