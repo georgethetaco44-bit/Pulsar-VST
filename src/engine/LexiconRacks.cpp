@@ -120,4 +120,175 @@ float XoverState::processLo (float in) noexcept
     return sanitizeFloat (lo);
 }
 
+// ---------------------------------------------------------------------------
+// Utilities5 OttState method bodies.
+
+namespace {
+
+// Butterworth (Q = 1/√2) biquads; two low-passes (or high-passes) in series
+// make an LR4 side. The allpass is the LR4 pair's own phase (what LP4 + HP4
+// sums to), used to keep the low band in phase with the upper two.
+enum class BiquadKind { Lp, Hp, Ap };
+
+void setButter (XoverBand& b, BiquadKind kind, double hz, double sampleRate) noexcept
+{
+    constexpr double kPi = 3.14159265358979323846;
+    const double w0 = 2.0 * kPi * hz / sampleRate;
+    const double cw = std::cos (w0);
+    const double alpha = std::sin (w0) / (2.0 * 0.7071067811865476);
+    const double a0 = 1.0 + alpha;
+    if (kind == BiquadKind::Lp)
+    {
+        b.b0 = (1.0 - cw) * 0.5 / a0; b.b1 = (1.0 - cw) / a0; b.b2 = b.b0;
+    }
+    else if (kind == BiquadKind::Hp)
+    {
+        b.b0 = (1.0 + cw) * 0.5 / a0; b.b1 = -(1.0 + cw) / a0; b.b2 = b.b0;
+    }
+    else
+    {
+        b.b0 = (1.0 - alpha) / a0; b.b1 = -2.0 * cw / a0; b.b2 = 1.0;
+    }
+    b.a1 = -2.0 * cw / a0;
+    b.a2 = (1.0 - alpha) / a0;
+}
+
+// Band gain in dB for an envelope level in dB at depth 1 (curve above).
+// Highest fast-peak level boost may lift a band to: where the makeup
+// leaves a band sitting at the downward threshold (−18 + 4.5 dB).
+constexpr double kBoostCeilDb = -13.5;
+constexpr double kBoostCeil = 0.21134890398366465; // 10^(−13.5 / 20)
+
+double ottGainDb (double levelDb) noexcept
+{
+    constexpr double kDownThresh = -18.0, kDownRatio = 4.0;
+    constexpr double kUpThresh = -36.0, kUpRatio = 3.0, kMaxUp = 18.0;
+    constexpr double kFloor = -60.0, kFloorFade = 18.0, kMakeup = 4.5;
+    double g = kMakeup;
+    if (levelDb > kDownThresh)
+        g -= (levelDb - kDownThresh) * (1.0 - 1.0 / kDownRatio);
+    else if (levelDb < kUpThresh)
+    {
+        double up = (kUpThresh - levelDb) * (1.0 - 1.0 / kUpRatio);
+        if (up > kMaxUp) up = kMaxUp;
+        if (levelDb < kFloor)
+        {
+            double f = 1.0 - (kFloor - levelDb) / kFloorFade;
+            if (f < 0.0) f = 0.0;
+            up *= f;
+            g *= f; // no makeup on silence either
+        }
+        g += up;
+    }
+    return g;
+}
+
+} // namespace
+
+void OttState::init (double sampleRate) noexcept
+{
+    setButter (loA, BiquadKind::Lp, 120.0, sampleRate);
+    setButter (loB, BiquadKind::Lp, 120.0, sampleRate);
+    setButter (restA, BiquadKind::Hp, 120.0, sampleRate);
+    setButter (restB, BiquadKind::Hp, 120.0, sampleRate);
+    setButter (loAp, BiquadKind::Ap, 2500.0, sampleRate);
+    setButter (midA, BiquadKind::Lp, 2500.0, sampleRate);
+    setButter (midB, BiquadKind::Lp, 2500.0, sampleRate);
+    setButter (hiA, BiquadKind::Hp, 2500.0, sampleRate);
+    setButter (hiB, BiquadKind::Hp, 2500.0, sampleRate);
+    atk = 1.0 - std::exp (-1.0 / (0.010 * sampleRate));
+    rel = 1.0 - std::exp (-1.0 / (0.100 * sampleRate));
+    wetStep = 1.0 / (0.010 * sampleRate);
+    reset();
+}
+
+void OttState::reset() noexcept
+{
+    loA.reset(); loB.reset(); restA.reset(); restB.reset(); loAp.reset();
+    midA.reset(); midB.reset(); hiA.reset(); hiB.reset();
+    for (int b = 0; b < kNumBands; ++b)
+    {
+        env[b] = 0.0;
+        fast[b] = 0.0;
+        gain[b] = 1.0;
+        target[b] = 1.0;
+        step[b] = 0.0;
+    }
+    wet = 0.0;
+    countdown = 0;
+}
+
+float OttState::process (float in, double depth) noexcept
+{
+    const float lo = loAp.process (loB.process (loA.process (in)));
+    const float rest = restB.process (restA.process (in));
+    const float mid = midB.process (midA.process (rest));
+    const float hi = hiB.process (hiA.process (rest));
+    const float band[kNumBands] = { lo, mid, hi };
+
+    for (int b = 0; b < kNumBands; ++b)
+    {
+        const double a = band[b] < 0.0f ? -static_cast<double> (band[b])
+                                        : static_cast<double> (band[b]);
+        env[b] += (a > env[b] ? atk : rel) * (a - env[b]);
+        fast[b] = a > fast[b] ? a : fast[b] + rel * (a - fast[b]);
+    }
+
+    if (--countdown <= 0)
+    {
+        countdown = kInterval;
+        for (int b = 0; b < kNumBands; ++b)
+        {
+            gain[b] = target[b];
+            double t = 1.0;
+            if (depth > 0.0)
+            {
+                double g = depth * ottGainDb (20.0 * std::log10 (env[b] + 1e-9));
+                // boost (upward + makeup) may lift a band's fast peak only up
+                // to kBoostCeilDb: quiet material keeps its full lift, a loud
+                // onset the slow follower hasn't caught yet passes at unity
+                if (g > 0.0)
+                {
+                    double cap = kBoostCeilDb - 20.0 * std::log10 (fast[b] + 1e-9);
+                    cap = cap < 0.0 ? 0.0 : cap;
+                    g = g < cap ? g : cap;
+                }
+                t = std::pow (10.0, g / 20.0);
+            }
+            target[b] = t;
+            step[b] = (t - gain[b]) / kInterval;
+        }
+    }
+
+    // Per sample: a boosted band sample may not pass the ceiling either. In
+    // steady state the cap above already holds; this catches an onset that
+    // arrives before the next tick, while the gain still carries the boost
+    // from the quiet tail before it (it drops at once, never below unity).
+    double sum = 0.0;
+    for (int b = 0; b < kNumBands; ++b)
+    {
+        const double x = static_cast<double> (band[b]);
+        const double a = x < 0.0 ? -x : x;
+        if (gain[b] > 1.0 && a * gain[b] > kBoostCeil)
+        {
+            gain[b] = a > kBoostCeil ? 1.0 : kBoostCeil / a;
+            target[b] = gain[b];
+            step[b] = 0.0;
+        }
+        sum += gain[b] * x;
+        gain[b] += step[b];
+    }
+
+    // Depth 0 is the dry input itself; leaving or reaching it crossfades
+    // over 10 ms (dry and the allpassed bands differ in phase).
+    if (depth > 0.0)
+        wet = wet + wetStep < 1.0 ? wet + wetStep : 1.0;
+    else
+        wet = wet - wetStep > 0.0 ? wet - wetStep : 0.0;
+    if (wet <= 0.0)
+        return in;
+    const double dry = static_cast<double> (in);
+    return static_cast<float> (dry + wet * (sum - dry));
+}
+
 } // namespace vibesynth

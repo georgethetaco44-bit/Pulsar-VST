@@ -9,13 +9,17 @@
 // "reese" or its name such as "Clean Sub", any case) compiles with its
 // stored trim.
 //
-// The phrase (48 kHz default, 6.5 s + tail, velocity 100, macros at the
-// patch defaults unless --macro overrides them, --bpm 140 by default with
-// beat 0 at the start, free-running like a stopped host):
-//   0.0-2.0 s  one bar of bass: notes 28, 31, 35, 40, 0.45 s each
-//   2.5-4.0 s  a held chord: 48, 52, 55
-//   4.5-6.5 s  note 40 held while macro 1 sweeps 0 -> 1 (then stays at 1)
-//   then --seconds-tail (default 1.5 s) of release tail.
+// Phrases (48 kHz default, velocity 100, macros at the patch defaults
+// unless --macro overrides them, --bpm 140 by default with beat 0 at the
+// start, free-running like a stopped host), then --seconds-tail (default
+// 1.5 s) of release tail:
+//   --phrase default (6.5 s, independent of --bpm):
+//     0.0-2.0 s  one bar of bass: notes 28, 31, 35, 40, 0.45 s each
+//     2.5-4.0 s  a held chord: 48, 52, 55
+//     4.5-6.5 s  note 40 held while macro 1 sweeps 0 -> 1 (then stays at 1)
+//   --phrase riff (M6, 2 bars at --bpm): a syncopated 16th-note bass riff
+//     in E with octave jumps, rests and a held note; bar 1 at the macro
+//     defaults, bar 2 with macro 1 ramping 0 -> 1.
 
 #include "Render.h"
 
@@ -56,9 +60,54 @@ constexpr PhraseNote kPhrase[] = {
     { 2.5, 4.0, 48 },  { 2.5, 4.0, 52 },  { 2.5, 4.0, 55 },
     { 4.5, 6.5, 40 },
 };
-constexpr double kSweepStart = 4.5;
-constexpr double kSweepEnd = 6.5;
-constexpr double kPhraseEnd = 6.5;
+
+// The riff in 16th steps: { first step, length in steps, note }. Each note
+// is gated for its length minus a quarter step, so repeats re-trigger.
+struct RiffNote
+{
+    int step;
+    int steps;
+    int note;
+};
+
+constexpr RiffNote kRiff[] = {
+    // bar 1
+    { 0, 3, 28 }, { 3, 1, 40 }, { 5, 1, 28 }, { 6, 2, 31 },              // 8-9 rest
+    { 10, 1, 40 }, { 11, 1, 28 }, { 12, 2, 33 }, { 14, 1, 35 },          // 15 rest
+    // bar 2 (macro 1 ramps)
+    { 16, 6, 28 }, { 22, 1, 40 }, { 23, 1, 28 }, { 25, 1, 38 },          // 24 rest
+    { 26, 2, 40 }, { 29, 1, 43 }, { 30, 2, 31 },                         // 28 rest
+};
+constexpr int kRiffSteps = 32;
+
+// The phrase actually rendered: notes in seconds plus the macro 1 sweep.
+struct Phrase
+{
+    std::vector<PhraseNote> notes;
+    double sweepStart = 0.0;
+    double sweepEnd = 0.0;
+    double end = 0.0;
+};
+
+Phrase makePhrase (bool riff, double bpm)
+{
+    Phrase p;
+    if (! riff)
+    {
+        p.notes.assign (std::begin (kPhrase), std::end (kPhrase));
+        p.sweepStart = 4.5;
+        p.sweepEnd = 6.5;
+        p.end = 6.5;
+        return p;
+    }
+    const double step = 60.0 / bpm / 4.0;
+    for (const RiffNote& n : kRiff)
+        p.notes.push_back ({ n.step * step, (n.step + n.steps - 0.25) * step, n.note });
+    p.sweepStart = 16 * step;
+    p.sweepEnd = kRiffSteps * step;
+    p.end = kRiffSteps * step;
+    return p;
+}
 
 // One MIDI event, shaped like juce::MidiMessageMetadata for
 // PatchPlayer::renderChunk (samplePosition, data, numBytes).
@@ -69,7 +118,7 @@ struct Event
     int numBytes;
 };
 
-// "neuro_growl", "Neuro Growl" or "neuro_growl.pulsar" -> built-in index.
+// "tape_stop", "Tape Stop Bass" or "tape_stop.pulsar" -> built-in index.
 int findBuiltin (const juce::String& arg)
 {
     const juce::String want = arg.endsWithIgnoreCase (".pulsar") ? arg.dropLastCharacters (7) : arg;
@@ -98,6 +147,7 @@ int runRender (int argc, char** argv, double cpuScale)
     double sr = 48000.0;
     double tail = 1.5;
     double bpm = 140.0;
+    bool riff = false;
     std::vector<std::pair<int, double>> macroOverrides;
     for (int i = 2; i < argc; ++i)
     {
@@ -109,6 +159,16 @@ int runRender (int argc, char** argv, double cpuScale)
             tail = std::atof (argv[++i]);
         else if (opt == "--bpm" && hasValue)
             bpm = std::atof (argv[++i]);
+        else if (opt == "--phrase" && hasValue)
+        {
+            const std::string name = argv[++i];
+            if (name != "default" && name != "riff")
+            {
+                std::printf ("bad --phrase %s (want default or riff)\n", name.c_str());
+                return 2;
+            }
+            riff = name == "riff";
+        }
         else if (opt == "--macro" && hasValue)
         {
             const juce::String kv (argv[++i]);
@@ -185,9 +245,10 @@ int runRender (int argc, char** argv, double cpuScale)
         targets[o.first] = static_cast<float> (o.second);
 
     // The phrase as raw MIDI, sorted by time (note-offs first on a tie).
+    const Phrase phrase = makePhrase (riff, bpm);
     std::vector<std::array<uint8_t, 3>> bytes;
     std::vector<std::pair<int, size_t>> order;
-    for (const PhraseNote& n : kPhrase)
+    for (const PhraseNote& n : phrase.notes)
     {
         order.emplace_back ((int) std::lround (n.off * sr), bytes.size());
         bytes.push_back ({ 0x80, (uint8_t) n.note, 0 });
@@ -206,7 +267,7 @@ int runRender (int argc, char** argv, double cpuScale)
     player.prepare (sr, kBlock, targets);
     player.setHostTransport (bpm, false, false, 0.0); // beat runs on from 0
 
-    const int total = (int) std::lround ((kPhraseEnd + tail) * sr);
+    const int total = (int) std::lround ((phrase.end + tail) * sr);
     juce::AudioBuffer<float> out (2, total);
     auto it = events.cbegin();
     const auto end = events.cend();
@@ -215,11 +276,12 @@ int runRender (int argc, char** argv, double cpuScale)
         for (int start = 0; start < total; start += kBlock)
         {
             const int n = std::min (kBlock, total - start);
-            // Host automation: macro 1 ramps 0 -> 1 across the held note,
-            // one value per block.
+            // Host automation: macro 1 ramps 0 -> 1 across the sweep, one
+            // value per block.
             const double t = start / sr;
-            if (t >= kSweepStart)
-                targets[0] = static_cast<float> (std::min (1.0, (t - kSweepStart) / (kSweepEnd - kSweepStart)));
+            if (t >= phrase.sweepStart)
+                targets[0] = static_cast<float> (std::min (1.0, (t - phrase.sweepStart)
+                                                                     / (phrase.sweepEnd - phrase.sweepStart)));
             player.renderChunk (n, targets, it, end, start);
             out.copyFrom (0, start, player.outL(), n);
             out.copyFrom (1, start, player.outR(), n);
@@ -251,10 +313,10 @@ int runRender (int argc, char** argv, double cpuScale)
     writer.reset(); // flushes and closes the file
 
     std::printf ("rendered %s (%s, trim %+.1f dB) -> %s: %.2f s at %.0f Hz, %.0f bpm, "
-                 "24-bit stereo, peak %+.1f dBFS, RMS %+.1f dBFS\n",
+                 "%s phrase, 24-bit stereo, peak %+.1f dBFS, RMS %+.1f dBFS\n",
                  patch.name.c_str(), builtin ? "built-in, stored trim" : "file, computed trim",
                  dbfs (patch.trim), outFile.getFullPathName().toRawUTF8(), total / sr, sr, bpm,
-                 dbfs (peak), dbfs (rms));
+                 riff ? "riff" : "default", dbfs (peak), dbfs (rms));
     return 0;
 }
 

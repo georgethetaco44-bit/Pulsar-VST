@@ -5,7 +5,7 @@
 namespace vibesynth_cli {
 
 // args: <patch.pulsar | built-in name> <out.wav> [--sr HZ]
-// [--seconds-tail S] [--bpm BPM] [--macro N=V]... `cpuScale` is the validator's CPU
+// [--seconds-tail S] [--bpm BPM] [--phrase default|riff] [--macro N=V]... `cpuScale` is the validator's CPU
 // allowance (10 under Rosetta). Returns 0 on success, 1 if the patch is
 // rejected or the WAV can't be written, 2 on bad arguments.
 int runRender (int argc, char** argv, double cpuScale);

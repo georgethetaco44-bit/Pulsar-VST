@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "Tape Stop Bass",
-  "prompt": "driven saw and square bass on a tape loop: the master records it and plays it back through a head that slows to a stop, with beat-synced stutter repeats",
+  "prompt": "driven saw and square bass on a tape loop: the master records it and plays it back through a head that slows to a stop; the mid/high band gets crisp beat-synced stutter repeats and a multiband squash over a dry mono sub",
   "macros": [
     {
       "label": "Tape Stop",
@@ -21,11 +21,15 @@
     },
     {
       "label": "Sub",
-      "default": 0.6
+      "default": 0.7
     },
     {
       "label": "Spread",
       "default": 0.5
+    },
+    {
+      "label": "Squash",
+      "default": 0.6
     }
   ],
   "voiceMode": "mono",
@@ -65,18 +69,50 @@
       ],
       [
         "tape",
+        "xover"
+      ],
+      [
+        "xover",
+        "sub"
+      ],
+      [
+        "xover",
         "stutter"
       ],
       [
         "stutter",
         "bus_sat"
+      ],
+      [
+        "bus_sat",
+        "fx_ott:0"
+      ],
+      [
+        "bus_sat",
+        "fx_ott:1"
+      ],
+      [
+        "fx_ott:0",
+        "outl"
+      ],
+      [
+        "fx_ott:1",
+        "outr"
+      ],
+      [
+        "sub",
+        "outl"
+      ],
+      [
+        "sub",
+        "outr"
       ]
     ]
   },
   "code": {
     "init": "",
-    "voice": "// saw + square a hair apart, a filter blip on each note, then drive\nenv = env_adsr(0, gate, 0.002, 0.3, 0.9, 0.08);\nfenv = env_adsr(1, gate, 0.001, 0.16, 0.2, 0.1);\nx = osc_saw(0, freq * 1.004) * 0.5 + osc_square(0, freq * 0.996, 0.5) * 0.45;\nx = flt_lp(0, x, min(0.95, 0.22 + m3 * 0.45 + fenv * 0.3), 0.35);\nx = fx_sat(x * 1.6, 0.4 + m4 * 0.5);\nout = (x * 0.75 + osc_sine(0, freq) * m5 * 0.7) * env;",
-    "master": "// tape: a 1.35 s loop in mem[0..64999], written live, read by a head that can slow down\n!ready ? (ready = 1; n = 65000; spd = 1; gg = 1; lg = 1; last = -1);\ntape = 0;\ntape[w] = inl;\n// Tape Stop: head speed (1 - m1)^1.5 with a 15 ms glide; level follows speed like a deck\ntgt = 1 - m1; tgt *= sqrt(tgt);\nspd += (tgt - spd) * 0.0015;\nlag = w - r; lag < 0 ? lag += n;\n// back at speed but behind, or about to lap the tape: dip 5 ms, jump to live, come back\n((tgt > 0.999 && lag > 64) || lag > n - 256) ? sync = 1;\nsync ? (gg -= 0.004; gg <= 0 ? (gg = 0; r = w; sync = 0)) : gg = min(1, gg + 0.004);\nri = floor(r); fr = r - ri; i2 = ri + 1; i2 >= n ? i2 = 0;\ny = (tape[ri] + (tape[i2] - tape[ri]) * fr) * gg * spd ^ 0.6;\n// stutter: a 2-bar grid of 1/16 steps; each step's priority against Stutter decides\n// whether it loops the slice the head just played (1/32 or 1/64 long)\nstep = floor(beat * 4);\nstep != last ? (\n  last = step; k = 0; s = step - floor(step / 32) * 32;\n  p = (s == 15 || s == 31) ? 0.1 : (s % 8) == 6 ? 0.25 : s >= 28 ? 0.45 : (s % 4) == 3 ? 0.7 : (s % 2) ? 0.9 : 2;\n  rep = p < m2;\n  len = floor(srate * 60 / bpm * ((s >= 29 || p == 0.1 || p == 0.9) ? 0.0625 : 0.125));\n  sp = spd; anchor = r - len * sp; anchor < 0 ? anchor += n;\n);\nrep ? (\n  // replay the slice at the speed the head had when it was cut\n  kk = k % len; j = anchor + kk * sp; j >= n ? j -= n;\n  ji = floor(j); j2 = ji + 1; j2 >= n ? j2 = 0;\n  sy = tape[ji] + (tape[j2] - tape[ji]) * (j - ji);\n  // 1 ms fades at each repeat's ends; repeats alternate left/right\n  sy *= min(1, min(kk, len - kk) / 48) * sp ^ 0.6;\n  pan = ((floor(k / len) % 2) ? 1 : -1) * m6 * 0.6;\n  lg = max(0, lg - 1 / 48);\n) : (\n  // live again after a stutter: fade back in over 1 ms\n  sy = 0;\n  lg = min(1, lg + 1 / 48);\n);\nk += 1;\nw += 1; w >= n ? w = 0;\nr += spd; r >= n ? r -= n;\noutl = bus_sat(y * lg + sy * (1 - pan), 0.3 + m4 * 0.3);\noutr = bus_sat(y * lg + sy * (1 + pan), 0.3 + m4 * 0.3);"
+    "voice": "// saw + square a hair apart, a filter blip on each note, then drive\nenv = env_adsr(0, gate, 0.002, 0.3, 0.9, 0.08);\nfenv = env_adsr(1, gate, 0.001, 0.16, 0.2, 0.1);\nx = osc_saw(0, freq * 1.004) * 0.5 + osc_square(0, freq * 0.996, 0.5) * 0.45;\nx = flt_lp(0, x, min(0.95, 0.22 + m3 * 0.45 + fenv * 0.3), 0.35);\nx = fx_sat(x * 1.6, 0.4 + m4 * 0.5);\n// split-brain: the driven layer stays above ~110 Hz, so the only sub is the clean sine\nx = flt_hp(0, x, 0.247, 0);\nout = (x * 0.75 + osc_sine(0, freq) * m5 * 0.95) * env;",
+    "master": "// tape: a 1.19 s loop in mem[0..56999], written live, read by a head that can slow down\n!ready ? (\n  ready = 1; n = 57000; sb = 57344; spd = 1; gg = 1; lv = 1; last = -1;\n  // LR4 crossover at 150 Hz (two Butterworth biquads per side), so even an\n  // 98 Hz sub sine sits ~18 dB down in the band that gets cut up\n  w0 = 2 * $pi * 150 / srate; cw = cos(w0); al = sin(w0) / 1.41421356; a0 = 1 + al;\n  lb0 = (1 - cw) / 2 / a0; lb1 = (1 - cw) / a0;\n  hb0 = (1 + cw) / 2 / a0; hb1 = -(1 + cw) / a0;\n  c1 = -2 * cw / a0; c2 = (1 - al) / a0;\n);\ntape = 0;\ntape[w] = inl;\n// Tape Stop: head speed (1 - m1)^1.5 with a 15 ms glide; level follows speed like a deck\ntgt = 1 - m1; tgt *= sqrt(tgt);\nspd += (tgt - spd) * 0.0015;\nlag = w - r; lag < 0 ? lag += n;\n// back at speed but behind, or about to lap the tape: dip 5 ms, jump to live, come back\n((tgt > 0.999 && lag > 64) || lag > n - 256) ? sync = 1;\nsync ? (gg -= 0.004; gg <= 0 ? (gg = 0; r = w; sync = 0)) : gg = min(1, gg + 0.004);\nri = floor(r); fr = r - ri; i2 = ri + 1; i2 >= n ? i2 = 0;\ny = (tape[ri] + (tape[i2] - tape[ri]) * fr) * gg * spd ^ 0.6;\n// split-brain: the sub under 150 Hz stays dry and mono; only the mid/high band is cut up\nl1 = lb0 * y + z1; z1 = lb1 * y - c1 * l1 + z2; z2 = lb0 * y - c2 * l1;\nlo = lb0 * l1 + z3; z3 = lb1 * l1 - c1 * lo + z4; z4 = lb0 * l1 - c2 * lo;\nh1 = hb0 * y + z5; z5 = hb1 * y - c1 * h1 + z6; z6 = hb0 * y - c2 * h1;\nhi = hb0 * h1 + z7; z7 = hb1 * h1 - c1 * hi + z8; z8 = hb0 * h1 - c2 * hi;\n// the mid/high band is recorded at live speed into an 8192-sample ring at mem[57344]\nsb[ws] = hi;\n// stutter: a 2-bar grid of 1/16 steps; each step's priority against Stutter decides\n// whether it loops the slice just heard (1/32 or 1/64 long)\nstep = floor(beat * 4);\nstep != last ? (\n  last = step; k = 0; s = step - floor(step / 32) * 32;\n  p = (s == 15 || s == 31) ? 0.1 : (s % 8) == 6 ? 0.25 : s >= 28 ? 0.45 : (s % 4) == 3 ? 0.7 : (s % 2) ? 0.9 : 2;\n  rep = p < m2;\n  len = min(8000, floor(srate * 60 / bpm * ((s >= 29 || p == 0.1 || p == 0.9) ? 0.0625 : 0.125)));\n  anchor = ws - len; anchor < 0 ? anchor += 8192;\n  // edges 0.3 ms, then a 0.5 ms gate gap before the next repeat\n  ed = srate * 0.0003; gap = srate * 0.0005;\n);\nrep ? (\n  // the repeat replaces the live band (no layering)\n  kk = k % len; j = anchor + kk; j >= 8192 ? j -= 8192;\n  sy = sb[j] * max(0, min(1, min(kk, len - gap - kk) / ed));\n  pan = ((floor(k / len) % 2) ? 1 : -1) * m6 * 0.6;\n  lv = max(0, lv - 1 / ed);\n) : (\n  sy = 0;\n  lv = min(1, lv + 1 / ed);\n);\nk += 1;\nws += 1; ws >= 8192 ? ws = 0;\nw += 1; w >= n ? w = 0;\nr += spd; r >= n ? r -= n;\n// drive and squash the mid/high band only, then the mono sub goes back underneath\nh = hi * lv + sy;\ndr = 0.3 + m4 * 0.3;\nhl = fx_ott(0, bus_sat(h * (1 - pan), dr), m7);\nhr = fx_ott(1, bus_sat(h * (1 + pan), dr), m7);\n// clip the band into the headroom the sub leaves at this sample (the sub is never touched)\nhm = max(0.15, 1 - abs(lo));\nyl = hm * bus_sat(hl * 1.6 / hm, 0); yr = hm * bus_sat(hr * 1.6 / hm, 0);\n// ~10 Hz DC trap: clipping an asymmetric wave leaves an offset\ndl += (yl - dl) * 60 / srate; dr2 += (yr - dr2) * 60 / srate;\noutl = yl - dl + lo;\noutr = yr - dr2 + lo;"
   },
-  "trim": 1.0
+  "trim": 0.689967
 }

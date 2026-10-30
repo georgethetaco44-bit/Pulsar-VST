@@ -1,4 +1,4 @@
-// M4 — LexiconFn3.cpp: fx_fold/sat/crush/comb + phys_* voice functions.
+// M4 — LexiconFn3.cpp: fx_fold/sat/crush/comb/ott + phys_* voice functions.
 
 #include "engine/LexiconArgs.h"
 
@@ -78,6 +78,19 @@ EEL_F NSEEL_CGEN_CALL fnFxComb (void* ctx, INT_PTR np, EEL_F** p)
         argD (p, np, 2, 440.0), clamp01 (argD (p, np, 3, 0.0)),
         rack->sampleRate));
     rack->recordMeter (ModuleId::FxComb, slot, out);
+    return static_cast<EEL_F> (out);
+}
+
+// fx_ott(slot, in, depth): 3-band upward + downward compressor (M6).
+EEL_F NSEEL_CGEN_CALL fnFxOtt (void* ctx, INT_PTR np, EEL_F** p)
+{
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr || np < 3) return 0.0;
+    const int slot = clampSlot (argD (p, np, 0, 0.0), kNumOttSlots);
+    const float out = sanitizeFloat (rack->ott[slot].process (
+        sanitizeFloat (static_cast<float> (argD (p, np, 1, 0.0))),
+        clamp01 (argD (p, np, 2, 0.0))));
+    rack->recordMeter (ModuleId::FxOtt, slot, out);
     return static_cast<EEL_F> (out);
 }
 

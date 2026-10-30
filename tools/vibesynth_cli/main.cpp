@@ -388,6 +388,54 @@ bool smokeChaosAndCrush()
 }
 
 // ---------------------------------------------------------------------------
+// M6 fx_ott (SPEC §5.2): depth 0 is bit-exact passthrough, a quiet input
+// comes out louder, a loud one doesn't grow, +24 dB stays finite.
+
+bool smokeOtt()
+{
+    bool ok = true;
+    {
+        // osc_saw returns a float, so x * 0.5 is exact in the float the
+        // wrapper sees: any difference is the compressor's.
+        auto v = makeVoice ("x = osc_saw(0, freq) * 0.5; out = (fx_ott(0, x, 0) - x) * 1000000;", 7u);
+        if (! compiled (*v, "fx_ott passthrough"))
+            return false;
+        const std::vector<float> x = renderHeld (*v, 110.0, kOneSecond);
+        ok = check (peakOf (x, 0, x.size()) == 0.0, "fx_ott depth=0 is an exact passthrough") && ok;
+    }
+    struct Level { double gain; const char* what; };
+    const Level levels[] = { { 0.01, "-40 dB" }, { 1.0, "0 dB" }, { 15.85, "+24 dB" } };
+    for (const Level& lv : levels)
+    {
+        char dry[96], wet[128];
+        std::snprintf (dry, sizeof (dry), "out = osc_saw(0, freq) * %.4f;", lv.gain);
+        std::snprintf (wet, sizeof (wet), "out = fx_ott(0, osc_saw(0, freq) * %.4f, 1);", lv.gain);
+        auto d = makeVoice (dry, 7u);
+        auto w = makeVoice (wet, 7u);
+        if (! compiled (*d, "fx_ott dry") || ! compiled (*w, "fx_ott wet"))
+            return false;
+        const std::vector<float> a = renderHeld (*d, 110.0, kOneSecond);
+        const std::vector<float> b = renderHeld (*w, 110.0, kOneSecond);
+        const size_t half = a.size() / 2; // after the 100 ms release settles
+        const double dbIn = 20.0 * std::log10 (rmsOf (a, half, a.size()));
+        const double dbOut = 20.0 * std::log10 (rmsOf (b, half, b.size()) + 1e-12);
+        if (lv.gain < 0.1)
+            ok = check (allFinite (b) && dbOut > dbIn + 6.0,
+                        "fx_ott depth=1 lifts a quiet %s saw: %.1f -> %.1f dB RMS (want > +6 dB)",
+                        lv.what, dbIn, dbOut) && ok;
+        else if (lv.gain < 2.0)
+            ok = check (allFinite (b) && dbOut <= dbIn,
+                        "fx_ott depth=1 doesn't grow a loud %s saw: %.1f -> %.1f dB RMS",
+                        lv.what, dbIn, dbOut) && ok;
+        else
+            ok = check (allFinite (b) && dbOut < dbIn,
+                        "fx_ott depth=1 at %s input: finite, %.1f -> %.1f dB RMS, peak %.2f",
+                        lv.what, dbIn, dbOut, peakOf (b, 0, b.size())) && ok;
+    }
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
 // Every bench case compiles and renders 0.25 s of finite output.
 
 bool smokeAllFunctions()
@@ -1103,6 +1151,7 @@ int runSmoketest()
     ok = smokeStealFade() && ok;
     ok = smokeApproximations() && ok;
     ok = smokeChaosAndCrush() && ok;
+    ok = smokeOtt() && ok;
     ok = smokeAllFunctions() && ok;
     ok = smokePreset() && ok;
     ok = smokeLoopCap() && ok;
@@ -1181,7 +1230,8 @@ int main (int argc, char** argv)
     {
         std::printf ("usage: vibesynth_cli (--smoketest | --selftest [--strict-cpu] | --bench | --validate file.pulsar\n"
                      "                     | --render <patch.pulsar | built-in> out.wav\n"
-                     "                       [--sr HZ] [--seconds-tail S] [--bpm BPM] [--macro N=V]...)\n");
+                     "                       [--sr HZ] [--seconds-tail S] [--bpm BPM] [--phrase default|riff]\n"
+                     "                       [--macro N=V]...)\n");
         return 2;
     }
 

@@ -112,7 +112,12 @@ Universal Binaries, libtcc1 runtime helpers) is fragile.
   splitting, and `trig` is exactly 1 on the note-on sample.
 - **[MVP, Milestone 7]** Voice section runs at 2× the host sample rate with
   half-band decimation (anti-aliasing for folding, feedback FM and chaos).
-  Master runs at 1×.
+  Master runs at 1×. Voices generate at 2× directly (no upsampler), and the
+  voice sum is mono, so **one** decimator runs on the summed 2× signal, not
+  one per voice: an own polyphase-IIR half-band (allpass pair; ≥ 90 dB
+  rejection above 0.55 × host rate, passband flat to 20 kHz at 48 kHz). The
+  validator, `--render` and `--bench` use the same 2× path; `vibesynth_cli`
+  keeps a `--os 1` switch for A/B aliasing measurements.
 - Any user-created variable persists between samples (that's how state works).
   A newly loaded patch starts with all variables at 0.
 - VM memory (`mem[]`, for user delay lines or tables) is capped per VM
@@ -193,6 +198,7 @@ Universal Binaries, libtcc1 runtime helpers) is fragile.
 | `srate` | the voice's running sample rate (2× host when oversampling) |
 | `m1`…`m8` | macro values 0–1, smoothed per sample in C++ (~10 ms one-pole) |
 | `out` | **write**: the voice's output sample |
+| `mw` | mod wheel 0–1, smoothed like the macros (M7) |
 | `fb1`, `fb2`, `prev` | conventions for one-sample feedback and zero-crossing detection (plain variables) |
 | `bpm` | host tempo (M6 amendment; 120 when the host gives none) |
 | `beat` | position in quarter notes, advanced per sample (host PPQ while playing; free-running from the last position when stopped), for tempo-synced LFOs, wobbles and stutters, e.g. `lfo = sin(beat * 2 * $pi * 2)` for 1/8 notes |
@@ -505,6 +511,15 @@ In `master`: `outl = bus_mono_low(inl, inr); outr = bus_mono_low_r();` then
   Only when no spare is free (10 note-ons within 2 ms) does a voice
   hard-steal in place: a 2 ms fade, then retrigger. No note-on is dropped.
 - Pitch bend ±2 semitones; mod wheel is readable as variable `mw` (0–1).
+- **M7 details.** Two non-macro host parameters, added at startup and never
+  removed: "Voice Mode" (Patch / Poly / Mono; Patch follows the patch's
+  `voiceMode`) and "Glide" (0–1 → 0–1 s, exponential in pitch; used in mono
+  only). Mono is last-note priority with a held-note stack: releasing the top
+  note returns to the previous held one. Legato: a note-on while another is
+  held glides `freq` without retriggering (`gate` stays 1, `trig` stays 0,
+  `init` doesn't run). A note after all keys are up retriggers the same voice
+  in place (`trig` = 1, `init` runs, no steal fade). Pitch bend is smoothed
+  (~5 ms) and applied to `freq` after glide.
 
 ### 9.2 Macros **[MVP]**
 - 8 host parameters registered at startup as "Macro 1"…"Macro 8". Never added
@@ -719,6 +734,14 @@ Each milestone has an exit test. Don't start the next until it passes.
    compile-only built-in selection (§7.1, §9.4).**
 6. **Presets & CLI.** 15 built-in presets; `vibesynth_cli` `--selftest` and
    `--render`; selftest runs in CI. *Exit: all presets pass in CI.*
+   **Result: passed (infrastructure). 15 presets pass selftest on all four
+   targets; `fx_ott`, master VoiceRack, `bpm`/`beat`, mono budget, `--render
+   --phrase riff` added. The user judged the sound unfinished (riffs messy), so
+   the presets are provisional and are redone in the Sound pass (9b). Keepers
+   so far: Reese, Coupled Scream. Suspected causes to check then: 1× aliasing
+   (M7 fixes), 16-sample filter stepping (M7 fixes), mid-band clipping driven
+   by sub headroom (intermod smear), OTT lifting tails and noise, no
+   legato/glide.**
 7. **Voice features.** Mono/legato + glide, pitch bend, mod wheel, voice
    stealing, 2× oversampling. *Exit: reese/sub presets play legato cleanly;
    folding presets audibly alias less.*
@@ -727,6 +750,11 @@ Each milestone has an exit test. Don't start the next until it passes.
    passing patch within 2 retries.*
 9. **Editor UI.** Prompt panel, labelled macros, preset browser, code viewer,
    read-only node visualizer with live meters.
+9b. **Sound pass.** With M7's DSP (2×, own ladder/SVF, glide) and the M9 UI in
+   place, redo the 15 presets against the user's references (modern DnB,
+   dubstep, halftime, glitch), adding any core DSP they need first. Work
+   in small batches with the user listening to `--phrase riff` renders.
+   *Exit: the user keeps ≥ 10 of 15.*
 10. **Release polish.** README with Gatekeeper instructions, tagged GitHub
     release, demo video script.
 11. **[Stretch] Mutate & Breed** with 4-variant audition.

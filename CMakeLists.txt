@@ -178,24 +178,20 @@ juce_add_binary_data(PulsarPresetData
     NAMESPACE PulsarPresetData
     SOURCES
         resources/presets/reese.pulsar
-        resources/presets/sub.pulsar
-        resources/presets/talking_bass.pulsar
+        resources/presets/scalpel.pulsar
+        resources/presets/wonk_dive.pulsar
         resources/presets/tape_stop.pulsar
-        resources/presets/neuro_growl.pulsar
-        resources/presets/neuro_comb.pulsar
-        resources/presets/fm_snarl.pulsar
-        resources/presets/wobble.pulsar
-        resources/presets/splice_bass.pulsar
+        resources/presets/coupled_scream.pulsar
+        resources/presets/corroder.pulsar
+        resources/presets/boing.pulsar
+        resources/presets/micro_edit.pulsar
+        resources/presets/sub.pulsar
         resources/presets/garage_organ.pulsar
         resources/presets/twostep_stab.pulsar
         resources/presets/pluck.pulsar
         resources/presets/glass_mallet.pulsar
         resources/presets/mono_lead.pulsar
-        resources/presets/coupled_scream.pulsar
-        resources/presets/feedback_guitar.pulsar
-        resources/presets/velvet_pad.pulsar
-        resources/presets/lorenz_drift.pulsar
-        resources/presets/duffing_static.pulsar)
+        resources/presets/velvet_pad.pulsar)
 
 target_sources(VibeSynthVST PRIVATE
     src/PluginProcessor.cpp

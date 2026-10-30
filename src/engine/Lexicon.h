@@ -33,6 +33,7 @@
 #include "engine/Utilities2.h"
 #include "engine/Utilities3.h"
 #include "engine/Utilities4.h"
+#include "engine/Utilities5.h"
 
 namespace vibesynth {
 
@@ -55,6 +56,7 @@ enum class ModuleId : int
     EnvFollow,
     FxCrush,
     FxComb,
+    FxOtt,
     PhysResonator,
     PhysString,
     ChaosLorenz,
@@ -80,6 +82,7 @@ constexpr int kNumAdsrSlots = 3;
 constexpr int kNumEnvFollowSlots = 2;
 constexpr int kNumCrushSlots = 2;
 constexpr int kNumCombSlots = 2;
+constexpr int kNumOttSlots = 2;
 constexpr int kNumResonatorSlots = 1;
 constexpr int kNumStringSlots = 1;
 constexpr int kNumLorenzSlots = 2;    // count unstated in SPEC; chosen
@@ -165,6 +168,8 @@ struct VoiceRack
 
     CombState comb[kNumCombSlots];
     float combBuf[kNumCombSlots][9600]; // sr/10 @96 kHz + margin; see init()
+
+    OttState ott[kNumOttSlots];
 
     daisysp::Resonator resonator[kNumResonatorSlots];
     ResonCache resonCache[kNumResonatorSlots];

@@ -28,6 +28,7 @@ EEL_F NSEEL_CGEN_CALL fnFxFold (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxSat (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxCrush (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxComb (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnFxOtt (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnPhysResonator (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnPhysString (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnChaosLorenz (void*, INT_PTR, EEL_F**);
@@ -64,6 +65,7 @@ void registerLexiconFunctions()
     NSEEL_addfunc_varparm ("fx_sat", 2, NSEEL_PProc_THIS, &fnFxSat);
     NSEEL_addfunc_varparm ("fx_crush", 4, NSEEL_PProc_THIS, &fnFxCrush);
     NSEEL_addfunc_varparm ("fx_comb", 4, NSEEL_PProc_THIS, &fnFxComb);
+    NSEEL_addfunc_varparm ("fx_ott", 3, NSEEL_PProc_THIS, &fnFxOtt);
     NSEEL_addfunc_varparm ("phys_resonator", 6, NSEEL_PProc_THIS, &fnPhysResonator);
     NSEEL_addfunc_varparm ("phys_string", 5, NSEEL_PProc_THIS, &fnPhysString);
     NSEEL_addfunc_varparm ("chaos_lorenz", 3, NSEEL_PProc_THIS, &fnChaosLorenz);

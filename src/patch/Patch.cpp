@@ -231,30 +231,23 @@ struct BuiltinEntry
 };
 
 constexpr BuiltinEntry kBuiltins[] = {
-    // basses
+    // showcase basses (index 0 is the default preset)
     { "reese.pulsar",          "reese_pulsar" },
-    { "sub.pulsar",            "sub_pulsar" },
-    { "talking_bass.pulsar",   "talking_bass_pulsar" },
+    { "scalpel.pulsar",        "scalpel_pulsar" },
+    { "wonk_dive.pulsar",      "wonk_dive_pulsar" },
     { "tape_stop.pulsar",      "tape_stop_pulsar" },
-    { "neuro_growl.pulsar",    "neuro_growl_pulsar" },
-    { "neuro_comb.pulsar",     "neuro_comb_pulsar" },
-    { "fm_snarl.pulsar",       "fm_snarl_pulsar" },
-    { "wobble.pulsar",         "wobble_pulsar" },
-    { "splice_bass.pulsar",    "splice_bass_pulsar" },
-    // keys / stabs
+    { "coupled_scream.pulsar", "coupled_scream_pulsar" },
+    { "corroder.pulsar",       "corroder_pulsar" },
+    { "boing.pulsar",          "boing_pulsar" },
+    { "micro_edit.pulsar",     "micro_edit_pulsar" },
+    // bread and butter
+    { "sub.pulsar",            "sub_pulsar" },
     { "garage_organ.pulsar",   "garage_organ_pulsar" },
     { "twostep_stab.pulsar",   "twostep_stab_pulsar" },
-    // plucks
     { "pluck.pulsar",          "pluck_pulsar" },
     { "glass_mallet.pulsar",   "glass_mallet_pulsar" },
-    // leads / pads
     { "mono_lead.pulsar",      "mono_lead_pulsar" },
-    { "coupled_scream.pulsar", "coupled_scream_pulsar" },
-    { "feedback_guitar.pulsar", "feedback_guitar_pulsar" },
     { "velvet_pad.pulsar",     "velvet_pad_pulsar" },
-    // textures
-    { "lorenz_drift.pulsar",   "lorenz_drift_pulsar" },
-    { "duffing_static.pulsar", "duffing_static_pulsar" },
 };
 
 constexpr int kNumBuiltins = static_cast<int> (sizeof (kBuiltins) / sizeof (kBuiltins[0]));

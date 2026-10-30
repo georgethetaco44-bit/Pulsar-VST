@@ -22,6 +22,10 @@
     {
       "label": "Room",
       "default": 0.3
+    },
+    {
+      "label": "Squash",
+      "default": 0.0
     }
   ],
   "voiceMode": "poly",
@@ -44,7 +48,7 @@
   "code": {
     "init": "// the mallet's decay: a 5-16 ms time constant by Hardness, set once per note\nhit = 1;\ndk = exp(-1 / (srate * 0.00525 * pow(3.02, m1)));",
     "voice": "// the mallet: a short burst of a synth signal, not a click\nhit *= dk;\nex = osc_saw(0, freq * 1.5) * hit * hit * 0.5;\n// modal resonator: Material = inharmonicity, key-up damps the ring\ny = phys_resonator(0, ex, freq, 0.3 + m2 * 0.5, 0.35 + m3 * 0.55, gate ? 0.35 + m4 * 0.5 : 0.2);\nout = y * (0.6 + 0.4 * vel);",
-    "master": "// small room\noutl = bus_reverb(inl, inr, 0.45, m5 * 0.5);\noutr = bus_reverb_r();"
+    "master": "// small room; Squash (off by default) adds a multiband squash that lifts the\n// ring, at the cost of a softer strike\ncl = fx_ott(0, inl, m6);\ncr = fx_ott(1, inr, m6);\noutl = bus_reverb(cl, cr, 0.45, m5 * 0.5);\noutr = bus_reverb_r();"
   },
   "trim": 0.82804
 }

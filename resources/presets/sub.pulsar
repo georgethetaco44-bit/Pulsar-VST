@@ -5,7 +5,7 @@
   "macros": [
     {
       "label": "Warmth",
-      "default": 0.2
+      "default": 0.3
     },
     {
       "label": "Octave Up",
@@ -46,5 +46,5 @@
     "voice": "// amp envelope: attack and release on macros\nenv = env_adsr(0, gate, 0.05 + m3 * 0.35, 0.4, 1, 0.45 + m4 * 0.2);\n// sine fundamental plus an optional triangle an octave up\ns = osc_sine(0, freq);\nh = osc_tri(0, freq * 2) * m2 * 0.25;\n// gentle tanh warmth\ny = fx_sat(s * 0.8 + h, m1 * 0.6);\nout = y * env * (0.6 + 0.4 * vel);",
     "master": ""
   },
-  "trim": 0.949945
+  "trim": 0.970868
 }

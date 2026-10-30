@@ -75,6 +75,9 @@ void VoiceRack::init (double newSampleRate, uint32_t voiceSeed)
     for (int i = 0; i < kNumXoverSlots; ++i)
         xover[i].init (sampleRate);
 
+    for (int i = 0; i < kNumOttSlots; ++i)
+        ott[i].init (sampleRate);
+
     noise.seed (voiceSeed);
 
     reset();
@@ -133,6 +136,9 @@ void VoiceRack::reset() noexcept
 
     for (int i = 0; i < kNumCombSlots; ++i)
         comb[i].reset();
+
+    for (int i = 0; i < kNumOttSlots; ++i)
+        ott[i].reset();
 
     for (int i = 0; i < kNumResonatorSlots; ++i)
     {
