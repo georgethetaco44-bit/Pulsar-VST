@@ -15,7 +15,9 @@
 namespace vibesynth {
 
 // Everything compiled from one patch for one sample rate: 10 EelVoices
-// (VM + rack each), one EelMaster, the trim and the parsed patch. Built on
+// (VM + rack each), one EelMaster, the trim and the parsed patch. M7: the
+// voices run at `oversampling` x the host rate (SPEC §4.2: 2 in the plugin;
+// vibesynth_cli --os 1 for A/B), the master at the host rate. Built on
 // a worker (or in prepareToPlay); its ownership moves to the audio thread
 // through the swap queue and back through the retire queue. The audio
 // thread never builds or frees one.
@@ -23,18 +25,24 @@ class PatchProgram
 {
 public:
     static constexpr int kNumVoices = 10;
+    static constexpr int kDefaultOversampling = 2;  // SPEC §4.2
+    static constexpr int kMaxOversampling = 2;
 
     // Runs the loop-nesting check, then compiles all 11 VMs. On failure
     // returns null and sets `error` ("loops nested too deep ..." or
     // "compile error in <section>: <EEL2 text>"). Trim comes from
-    // patch.trim (set it from the validator first).
+    // patch.trim (set it from the validator first). `sampleRate` is the
+    // host rate; `oversampling` is clamped to 1..kMaxOversampling.
     static std::unique_ptr<PatchProgram> build (const Patch& patch, double sampleRate,
-                                                std::string& error);
+                                                std::string& error,
+                                                int oversampling = kDefaultOversampling);
 
     EelVoice& voice (int index) noexcept { return *voices_[index]; }
     EelMaster& master() noexcept { return *master_; }
     const Patch& patch() const noexcept { return patch_; }
-    double sampleRate() const noexcept { return sampleRate_; }
+    double sampleRate() const noexcept { return sampleRate_; }  // host rate (master)
+    int oversampling() const noexcept { return oversampling_; }
+    double voiceRate() const noexcept { return sampleRate_ * oversampling_; }
     float trim() const noexcept { return trim_; }
 
     // Per-voice rack seed (chaos initial state etc.), same for every build.
@@ -50,6 +58,7 @@ private:
     std::unique_ptr<EelMaster> master_;
     Patch patch_;
     double sampleRate_ = 48000.0;
+    int oversampling_ = kDefaultOversampling;
     float trim_ = 1.0f;
 };
 
@@ -74,7 +83,9 @@ struct ValidationResult
 // Runs the SPEC §7.1 matrix at `sampleRate` on fresh test VMs (never on a
 // PatchProgram's voices): notes {28, 40, 55} x macros {all 0, defaults,
 // all 1}, note-on at 0, note-off at 0.7 s, 1 s each, measured on the
-// master output before trim/limiter. The loop-nesting check and compile
+// master output before trim/limiter. M7: through the plugin's voice path,
+// i.e. the voice at `oversampling` x `sampleRate`, the same half-band
+// decimator, then the master at `sampleRate`. The loop-nesting check and compile
 // errors are reported first. `cancel` (optional) is polled with the
 // deadline after every voice sample. A configuration whose voice + master
 // rendering takes more than 50 % of real time (500 ms for its 1 s) is
@@ -85,7 +96,8 @@ struct ValidationResult
 // real time anyway.
 ValidationResult validatePatch (const Patch& patch, double sampleRate,
                                 const std::atomic<bool>* cancel = nullptr,
-                                double cpuScale = 1.0);
+                                double cpuScale = 1.0,
+                                int oversampling = PatchProgram::kDefaultOversampling);
 
 // "compile error in voice: <text>" (section omitted when empty).
 std::string formatCompileError (const std::string& section, const std::string& text);

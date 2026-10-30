@@ -21,19 +21,24 @@ extern const BenchCase kBenchCases[];
 extern const int kNumBenchCases;
 
 // Prints ns per voice-sample for every case and the full test preset,
-// each marked PASS/FAIL against its budget. Always returns 0.
-int runBench();
+// each marked PASS/FAIL against its budget. M7: voice VMs run at
+// `oversampling` x 48 kHz (the plugin's 2x voice path; --os 1 for A/B),
+// masters at 48 kHz. Always returns 0.
+int runBench (int oversampling);
 
-// One patch's cost at 48 kHz (55 Hz, gate held, macro defaults): the median
-// of `runs` x `samples` for the voice and for the master, each after one
-// untimed pass (SPEC §4.2.1). ok = false if it doesn't compile.
+// One patch's cost (55 Hz, gate held, macro defaults): the median of
+// `runs` x `samples` for the voice (per voice-sample, at `oversampling` x
+// 48 kHz) and for the master (per host sample, fed through the half-band
+// decimator), each after one untimed pass (SPEC §4.2.1). ok = false if it
+// doesn't compile.
 struct PresetCost
 {
     bool ok = false;
     double voiceNs = 0.0;
     double masterNs = 0.0;
 };
-PresetCost measurePresetCost (const vibesynth::Patch& patch, int runs, int samples);
+PresetCost measurePresetCost (const vibesynth::Patch& patch, int runs, int samples,
+                              int oversampling);
 
 // Spins the CPU up to its sustained clock for 0.5 s (call once before a
 // series of timed measurements).

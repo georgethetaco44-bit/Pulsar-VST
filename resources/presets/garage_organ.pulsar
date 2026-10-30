@@ -74,5 +74,5 @@
     "voice": "// percussive organ envelope: quick decay into a low sustain\nenv = env_adsr(0, gate, 0.05, 0.45 + m1 * 0.2, m2 * 0.7, 0.4);\n// drawbars: hollow square fundamental, sine octave and twelfth\nx = osc_square(0, freq, 0.5) * 0.5 + osc_sine(0, freq * 2) * m3 * 0.6 + osc_sine(1, freq * 3) * m4 * 0.4;\n// key click: the filter is brightest at the attack\ny = flt_lp(0, x, 0.42 + m5 * 0.3 + env * 0.2, 0.2);\n// a little bite\ny = fx_sat(y, m6);\nout = y * env * (0.6 + 0.8 * vel);",
     "master": "// light chorus for width, a gentle multiband squash, then glue\ncl = bus_chorus(inl, inr, 0.3, m7 * 0.5);\ncr = bus_chorus_r();\noutl = bus_sat(fx_ott(0, cl, m8), 0.2) * 1.3;\noutr = bus_sat(fx_ott(1, cr, m8), 0.2) * 1.3;"
   },
-  "trim": 0.737495
+  "trim": 0.737488
 }

@@ -268,6 +268,7 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
     beat_ = mustRegVar (vm_, "beat", ok);
     for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
         macro_[i] = mustRegVar (vm_, kMacroNames[i], ok);
+    mw_ = mustRegVar (vm_, "mw", ok);
     out_ = mustRegVar (vm_, "out", ok);
     (void) mustRegVar (vm_, "fb1", ok);
     (void) mustRegVar (vm_, "fb2", ok);
@@ -321,7 +322,7 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
         if (voiceCode_ != nullptr) { NSEEL_code_free (voiceCode_); voiceCode_ = nullptr; }
         NSEEL_VM_free (vm_);
         vm_ = nullptr;
-        freq_ = note_ = vel_ = gate_ = trig_ = srate_ = bpm_ = beat_ = out_ = nullptr;
+        freq_ = note_ = vel_ = gate_ = trig_ = srate_ = bpm_ = beat_ = mw_ = out_ = nullptr;
         for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
             macro_[i] = nullptr;
         return;
@@ -341,11 +342,12 @@ EelVoice::~EelVoice()
 // and stays 1 into the next renderSample() (the note-on sample), which
 // clears it after executing the voice code.
 void EelVoice::noteOn (double freq, double note, double vel,
-                       const Transport& transport) noexcept
+                       const Transport& transport, double mw) noexcept
 {
     if (vm_ == nullptr || freq_ == nullptr)
         return;
     *freq_ = freq;
+    if (mw_ != nullptr) *mw_ = mw;
     if (bpm_ != nullptr) *bpm_ = transport.bpm;
     if (beat_ != nullptr) *beat_ = transport.beat;
     if (note_ != nullptr) *note_ = note;
@@ -372,13 +374,19 @@ void EelVoice::resetState() noexcept
         *bpm_ = Transport::kDefaultBpm;
 }
 
+const EEL_F* EelVoice::variable (const char* name) noexcept
+{
+    return vm_ != nullptr ? NSEEL_VM_regvar (vm_, name) : nullptr;
+}
+
 float EelVoice::renderSample (double freq, double gate, double note, double vel,
                               const double macros[MacroSmoother::kNumMacros],
-                              const Transport& transport) noexcept
+                              const Transport& transport, double mw) noexcept
 {
     if (voiceCode_ == nullptr || freq_ == nullptr || out_ == nullptr)
         return 0.0f;
     *freq_ = freq;
+    if (mw_ != nullptr) *mw_ = mw;
     if (gate_ != nullptr) *gate_ = gate;
     if (note_ != nullptr) *note_ = note;
     if (vel_ != nullptr) *vel_ = vel;
@@ -438,6 +446,7 @@ EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
     beat_ = mustRegVar (vm_, "beat", ok);
     for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
         macro_[i] = mustRegVar (vm_, kMacroNames[i], ok);
+    mw_ = mustRegVar (vm_, "mw", ok);
     if (! ok)
     {
         compileError_ = "NSEEL_VM_regvar failed (master)";
@@ -463,7 +472,7 @@ EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
         compileError_ = codeError (vm_);
         NSEEL_VM_free (vm_);
         vm_ = nullptr;
-        inl_ = inr_ = outl_ = outr_ = srate_ = bpm_ = beat_ = nullptr;
+        inl_ = inr_ = outl_ = outr_ = srate_ = bpm_ = beat_ = mw_ = nullptr;
         for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
             macro_[i] = nullptr;
         return;
@@ -482,7 +491,7 @@ EelMaster::~EelMaster()
 
 void EelMaster::renderSample (float inL, float inR, float& outL, float& outR,
                               const double macros[MacroSmoother::kNumMacros],
-                              const Transport& transport) noexcept
+                              const Transport& transport, double mw) noexcept
 {
     if (masterCode_ == nullptr || inl_ == nullptr || outl_ == nullptr)
     {
@@ -495,6 +504,7 @@ void EelMaster::renderSample (float inL, float inR, float& outL, float& outR,
     if (srate_ != nullptr) *srate_ = rackStorage_.sampleRate;
     if (bpm_ != nullptr) *bpm_ = transport.bpm;
     if (beat_ != nullptr) *beat_ = transport.beat;
+    if (mw_ != nullptr) *mw_ = mw;
     for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
         if (macro_[i] != nullptr)
             *macro_[i] = macros[i];
@@ -503,6 +513,11 @@ void EelMaster::renderSample (float inL, float inR, float& outL, float& outR,
     NSEEL_code_execute (masterCode_);
     outL = rawOutput (*outl_);
     outR = (outr_ != nullptr) ? rawOutput (*outr_) : outL;
+}
+
+const EEL_F* EelMaster::variable (const char* name) noexcept
+{
+    return vm_ != nullptr ? NSEEL_VM_regvar (vm_, name) : nullptr;
 }
 
 void EelMaster::resetRacks() noexcept

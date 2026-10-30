@@ -19,8 +19,6 @@
 
 // DaisySP (MIT repo, pinned SHA; daisysp_mit target).
 #include "Synthesis/oscillator.h"
-#include "Filters/svf.h"
-#include "Filters/ladder.h"
 #include "Control/adsr.h"
 #include "Effects/decimator.h"
 #include "Effects/chorus.h"
@@ -29,6 +27,7 @@
 
 // Own DSP (after DaisySP includes; see note at the top).
 #include "engine/ChaosMath.h"
+#include "engine/Filters.h"
 #include "engine/Utilities.h"
 #include "engine/Utilities2.h"
 #include "engine/Utilities3.h"
@@ -101,16 +100,8 @@ constexpr int kControlInterval = 16;
 
 struct OscCache     { float hz = -1.0f; float pw = -1.0f; };
 
-// SVF: SetFreq costs sinf + powf, so cutoff/res only change at ticks.
-struct SvfCache     { double rawCut = -1.0; double rawRes = -1.0;
-                      float hz = -1.0f; float res = -1.0f; int countdown = 0; };
-
-// Ladder: the target cutoff is mapped at ticks and ramped linearly over the
-// next kControlInterval samples (its SetFreq is a cheap polynomial, so the
-// ramp applies it per sample; no zipper on fast sweeps). Res at ticks.
-struct LadderCache  { double rawCut = -1.0; double rawRes = -1.0;
-                      float target = -1.0f; float hz = -1.0f; float step = 0.0f;
-                      int rampLeft = 0; int countdown = 0; };
+// flt_* (M7): own TPT SVF and ZDF ladder (engine/Filters.h) smooth and map
+// their inputs per sample, so they need no control-rate cache.
 
 // ADSR: times/sustain update at ticks and on every gate edge (so a new
 // note always starts with its own times); the gate itself is per sample.
@@ -148,15 +139,11 @@ struct VoiceRack
 
     SupersawState supersaw[kNumSupersawSlots];
 
-    daisysp::Svf fltLp[kNumSvfSlots];
-    daisysp::Svf fltHp[kNumSvfSlots];
-    daisysp::Svf fltBp[kNumSvfSlots];
-    SvfCache fltLpCache[kNumSvfSlots];
-    SvfCache fltHpCache[kNumSvfSlots];
-    SvfCache fltBpCache[kNumSvfSlots];
-
-    daisysp::LadderFilter fltLadder[kNumLadderSlots];
-    LadderCache ladderCache[kNumLadderSlots];
+    FilterRate filterRate;
+    SvfState fltLp[kNumSvfSlots];
+    SvfState fltHp[kNumSvfSlots];
+    SvfState fltBp[kNumSvfSlots];
+    LadderState fltLadder[kNumLadderSlots];
 
     daisysp::Adsr envAdsr[kNumAdsrSlots];
     AdsrCache adsrCache[kNumAdsrSlots];
@@ -167,7 +154,9 @@ struct VoiceRack
     CrushCache crushCache[kNumCrushSlots];
 
     CombState comb[kNumCombSlots];
-    float combBuf[kNumCombSlots][9600]; // sr/10 @96 kHz + margin; see init()
+    // 10 Hz at a 192 kHz voice rate (96 kHz host at 2x, M7); see init().
+    static constexpr int kCombCapacity = 19200;
+    float combBuf[kNumCombSlots][kCombCapacity];
 
     OttState ott[kNumOttSlots];
 

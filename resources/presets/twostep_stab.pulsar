@@ -70,5 +70,5 @@
     "voice": "// short amp envelope and a faster filter blip\nenv = env_adsr(0, gate, 0.05, 0.5 + m3 * 0.15, 0.25, 0.45);\nblip = env_adsr(1, gate, 0, 0.3 + m2 * 0.2, 0, 0.3);\n// warm detuned stack\nx = osc_supersaw(0, freq, m1, 0.7);\n// lowpass blip; velocity opens it further\ny = flt_lp(0, x, 0.3 + m4 * 0.3 + blip * (0.2 + 0.2 * vel), m5 * 0.6);\nout = y * env * 1.6;",
     "master": "// chorus, a multiband squash and glue for density, then a small room\ncl = bus_chorus(inl, inr, 0.4, m6 * 0.5);\ncr = bus_chorus_r();\ncl = bus_sat(fx_ott(0, cl, m8), 0.25) * 1.3;\ncr = bus_sat(fx_ott(1, cr, m8), 0.25) * 1.3;\noutl = bus_reverb(cl, cr, 0.35, m7 * 0.5);\noutr = bus_reverb_r();"
   },
-  "trim": 0.776539
+  "trim": 0.777124
 }

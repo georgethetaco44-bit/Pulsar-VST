@@ -2,7 +2,8 @@
 //
 // SPEC §4.2.1 wrapper rules: mappings are cached on their raw 0–1 inputs
 // and the coefficient-heavy Daisy setters run at control rate (every
-// kControlInterval samples per slot; see the caches in Lexicon.h).
+// kControlInterval samples per slot; see the caches in Lexicon.h). M7: the
+// filters are our own and smooth/map per sample (engine/Filters.h).
 
 #include "engine/LexiconArgs.h"
 
@@ -10,38 +11,14 @@ namespace vibesynth {
 
 namespace {
 
-// Shared Svf core: Process() updates all outputs; the wrapper picks a tap.
-// Cutoff/res are read at control ticks only (Daisy's SetFreq/SetRes cost a
-// sinf + powf each), so the cutoff moves in 16-sample steps.
-EEL_F svfCore (VoiceRack* rack, daisysp::Svf* pool, SvfCache* cache,
-               ModuleId mod, double slotIn, double in,
+// Shared SVF core (M7: own TPT SVF, engine/Filters.h). Cutoff and
+// resonance are smoothed and mapped per sample inside SvfState.
+EEL_F svfCore (VoiceRack* rack, SvfState* pool, ModuleId mod, double slotIn, double in,
                double cutoffIn, double resIn, int tap) noexcept
 {
     const int slot = clampSlot (slotIn, kNumSvfSlots);
-    auto& f = pool[slot];
-    auto& c = cache[slot];
-    if (--c.countdown <= 0)
-    {
-        c.countdown = kControlInterval;
-        if (cutoffIn != c.rawCut)
-        {
-            c.rawCut = cutoffIn;
-            const float hz = static_cast<float> (cutoffFromNorm (cutoffIn, rack->sampleRate));
-            if (hz != c.hz) { f.SetFreq (hz); c.hz = hz; }
-        }
-        if (resIn != c.rawRes)
-        {
-            c.rawRes = resIn;
-            const float res = static_cast<float> (clamp01 (resIn));
-            if (res != c.res) { f.SetRes (res); c.res = res; }
-        }
-    }
-    f.Process (sanitizeFloat (static_cast<float> (in)));
-    float out = 0.0f;
-    if (tap == 0) out = f.Low();
-    else if (tap == 1) out = f.High();
-    else out = f.Band();
-    out = sanitizeFloat (out);
+    const float out = sanitizeFloat (pool[slot].process (sanitizeFloat (static_cast<float> (in)),
+                                                         cutoffIn, resIn, rack->filterRate, tap));
     rack->recordMeter (mod, slot, out);
     return static_cast<EEL_F> (out);
 }
@@ -52,75 +29,38 @@ EEL_F NSEEL_CGEN_CALL fnFltLp (void* ctx, INT_PTR np, EEL_F** p)
 {
     auto* rack = voiceRackOf (ctx);
     if (rack == nullptr || np < 4) return 0.0;
-    return svfCore (rack, rack->fltLp, rack->fltLpCache, ModuleId::FltLp,
+    return svfCore (rack, rack->fltLp, ModuleId::FltLp,
                     argD (p, np, 0, 0.0), argD (p, np, 1, 0.0),
-                    argD (p, np, 2, 0.5), argD (p, np, 3, 0.0), 0);
+                    argD (p, np, 2, 0.5), argD (p, np, 3, 0.0), SvfState::Low);
 }
 
 EEL_F NSEEL_CGEN_CALL fnFltHp (void* ctx, INT_PTR np, EEL_F** p)
 {
     auto* rack = voiceRackOf (ctx);
     if (rack == nullptr || np < 4) return 0.0;
-    return svfCore (rack, rack->fltHp, rack->fltHpCache, ModuleId::FltHp,
+    return svfCore (rack, rack->fltHp, ModuleId::FltHp,
                     argD (p, np, 0, 0.0), argD (p, np, 1, 0.0),
-                    argD (p, np, 2, 0.5), argD (p, np, 3, 0.0), 1);
+                    argD (p, np, 2, 0.5), argD (p, np, 3, 0.0), SvfState::High);
 }
 
 EEL_F NSEEL_CGEN_CALL fnFltBp (void* ctx, INT_PTR np, EEL_F** p)
 {
     auto* rack = voiceRackOf (ctx);
     if (rack == nullptr || np < 4) return 0.0;
-    return svfCore (rack, rack->fltBp, rack->fltBpCache, ModuleId::FltBp,
+    return svfCore (rack, rack->fltBp, ModuleId::FltBp,
                     argD (p, np, 0, 0.0), argD (p, np, 1, 0.0),
-                    argD (p, np, 2, 0.5), argD (p, np, 3, 0.0), 2);
+                    argD (p, np, 2, 0.5), argD (p, np, 3, 0.0), SvfState::Band);
 }
 
-// Ladder: at each control tick the cutoff target is mapped (cached on the
-// raw input) and ramped linearly over the next kControlInterval samples.
-// Daisy's LadderFilter::SetFreq is a short polynomial (no transcendental),
-// so applying the ramp per sample is cheap and a fast sweep can't zipper.
+// Ladder (M7: own 4-pole ZDF ladder at the voice rate, engine/Filters.h).
 EEL_F NSEEL_CGEN_CALL fnFltLadder (void* ctx, INT_PTR np, EEL_F** p)
 {
     auto* rack = voiceRackOf (ctx);
     if (rack == nullptr || np < 4) return 0.0;
     const int slot = clampSlot (argD (p, np, 0, 0.0), kNumLadderSlots);
-    auto& f = rack->fltLadder[slot];
-    auto& c = rack->ladderCache[slot];
-    if (--c.countdown <= 0)
-    {
-        c.countdown = kControlInterval;
-        const double rawCut = argD (p, np, 2, 0.5);
-        if (rawCut != c.rawCut)
-        {
-            c.rawCut = rawCut;
-            c.target = static_cast<float> (cutoffFromNorm (rawCut, rack->sampleRate));
-        }
-        if (c.hz < 0.0f)
-        {
-            c.hz = c.target; // first tick after init/reset: no ramp
-            f.SetFreq (c.hz);
-            c.rampLeft = 0;
-        }
-        else if (c.target != c.hz)
-        {
-            c.step = (c.target - c.hz) / static_cast<float> (kControlInterval);
-            c.rampLeft = kControlInterval;
-        }
-        const double rawRes = argD (p, np, 3, 0.0);
-        if (rawRes != c.rawRes)
-        {
-            c.rawRes = rawRes;
-            f.SetRes (static_cast<float> (clamp01 (rawRes) * 1.8));
-        }
-    }
-    if (c.rampLeft > 0)
-    {
-        --c.rampLeft;
-        c.hz = (c.rampLeft == 0) ? c.target : c.hz + c.step;
-        f.SetFreq (c.hz);
-    }
-    const float out = sanitizeFloat (f.Process (sanitizeFloat (
-        static_cast<float> (argD (p, np, 1, 0.0)))));
+    const float out = sanitizeFloat (rack->fltLadder[slot].process (
+        sanitizeFloat (static_cast<float> (argD (p, np, 1, 0.0))),
+        argD (p, np, 2, 0.5), argD (p, np, 3, 0.0), rack->filterRate));
     rack->recordMeter (ModuleId::FltLadder, slot, out);
     return static_cast<EEL_F> (out);
 }

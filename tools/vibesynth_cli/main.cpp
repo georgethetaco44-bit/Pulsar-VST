@@ -26,6 +26,9 @@
 //   --validate   parse + offline-test one .pulsar file (exit 1 if rejected).
 //   --render     play the test phrase through PatchPlayer into a WAV; see
 //                Render.cpp.
+//   --os 1|2     (M7, any mode but the tests) the voice oversampling for
+//                --bench, --validate and --render; default 2 like the
+//                plugin. 1 exists for A/B aliasing comparisons only.
 
 #include <cstdarg>
 #include <cstddef>
@@ -46,8 +49,10 @@
 #include <juce_core/juce_core.h>
 
 #include "Bench.h"
+#include "CliCheck.h"
 #include "PulsarTestPatches.h"
 #include "Render.h"
+#include "SmokeM7.h"
 #include "engine/OutputStage.h"
 #include "patch/LoopNesting.h"
 #include "patch/Patch.h"
@@ -87,16 +92,10 @@ double validatorCpuScale()
     return runningUnderRosetta() ? 10.0 : 1.0;
 }
 
-bool check (bool ok, const char* fmt, ...)
-{
-    std::printf ("[%s] ", ok ? "PASS" : "FAIL");
-    va_list args;
-    va_start (args, fmt);
-    std::vprintf (fmt, args);
-    va_end (args);
-    std::printf ("\n");
-    return ok;
-}
+// --os (M7): voice oversampling for --bench, --validate and --render.
+int g_oversampling = vibesynth::PatchProgram::kDefaultOversampling;
+
+using vibesynth_cli::check;
 
 bool isFiniteFloat (float v)
 {
@@ -446,7 +445,7 @@ bool smokeAllFunctions()
     {
         const vibesynth_cli::BenchCase& bc = vibesynth_cli::kBenchCases[ci];
         const PatchStrings ps = { "fb1 = 0; prev = 0;", bc.voice, bc.master };
-        // Heap, not stack: EelVoice is ~87 KB (Windows' default stack is 1 MB).
+        // Heap, not stack: EelVoice is ~175 KB since M7 (Windows' default stack is 1 MB).
         const auto vp = std::make_unique<EelVoice> (ps, kSampleRate, 8u);
         const auto mp = std::make_unique<EelMaster> (ps, kSampleRate);
         EelVoice& v = *vp;
@@ -744,8 +743,8 @@ bool selftestPreset (int index, bool strictCpu)
                 kTrimToleranceDb) && ok;
 
     const double scale = validatorCpuScale();
-    const vibesynth_cli::PresetCost cost = vibesynth_cli::measurePresetCost (patch, kSelftestCostRuns,
-                                                                             kSelftestCostSamples);
+    const vibesynth_cli::PresetCost cost = vibesynth_cli::measurePresetCost (
+        patch, kSelftestCostRuns, kSelftestCostSamples, vibesynth::PatchProgram::kDefaultOversampling);
     const bool fits = cost.ok && cost.voiceNs <= patch.voiceBudgetNs() * scale
                       && cost.masterNs <= Patch::kMasterBudgetNs * scale;
     if (strictCpu)
@@ -1095,14 +1094,17 @@ bool smokeTransport()
                 a.beat, b.beat, c.beat) && ok;
 
     // Per-sample beat through the player: a held voice and the master each
-    // step to 0.1 at beat 1 (sample 24000 at 120 bpm, from beat 0).
-    for (int section = 0; section < 2; ++section)
+    // step to 0.1 at beat 1 (sample 24000 at 120 bpm, from beat 0). M7: at
+    // --os 1 exactly; at 2x the voice's step reaches the output through
+    // the half-band decimator (~1.4 host samples of delay, plus ringing).
+    for (int section = 0; section < 3; ++section)
     {
         Patch p;
         p.name = "beat step";
-        p.voice = section == 0 ? "out = beat >= 1 ? 0.1 : 0;" : "out = 0;";
-        p.master = section == 0 ? "" : "outl = outr = beat >= 1 ? 0.1 : 0;";
-        const auto pr = PatchProgram::build (p, kSampleRate, error);
+        p.voice = section != 1 ? "out = beat >= 1 ? 0.1 : 0;" : "out = 0;";
+        p.master = section != 1 ? "" : "outl = outr = beat >= 1 ? 0.1 : 0;";
+        const int os = section == 2 ? 2 : 1;
+        const auto pr = PatchProgram::build (p, kSampleRate, error, os);
         if (! check (pr != nullptr, "beat step program builds %s", error.c_str()))
             return false;
         PatchPlayer pl;
@@ -1120,9 +1122,11 @@ bool smokeTransport()
                     stepAt = start + i;
         }
         // 24000 * (120 / 2880000) rounds just below 1, so 24001 is exact too.
-        ok = check (stepAt == 24000 || stepAt == 24001,
-                    "%s sees beat 1 at sample %d (want 24000 at 120 bpm, +1 for rounding)",
-                    section == 0 ? "voice" : "master", stepAt) && ok;
+        const int late = os == 2 ? 3 : 1;
+        ok = check (stepAt >= 24000 && stepAt <= 24000 + late,
+                    "%s sees beat 1 at sample %d (want 24000 at 120 bpm, +%d for rounding%s)",
+                    section == 0 ? "voice (1x)" : section == 1 ? "master" : "voice (2x)", stepAt, late,
+                    os == 2 ? " and the decimator" : "") && ok;
     }
     return ok;
 }
@@ -1163,6 +1167,10 @@ int runSmoketest()
     ok = smokeMasterRack() && ok;
     ok = smokeTransport() && ok;
     ok = smokeSelftestRules() && ok;
+    ok = vibesynth_cli::smokeDecimator() && ok;
+    ok = vibesynth_cli::smokeAliasAB() && ok;
+    ok = vibesynth_cli::smokeFilters() && ok;
+    ok = vibesynth_cli::smokeVoiceModes() && ok;
     std::printf (ok ? "SMOKETEST PASS\n" : "SMOKETEST FAIL\n");
     return ok ? 0 : 1;
 }
@@ -1193,7 +1201,7 @@ int runValidate (const char* path)
         return 1;
     }
     const vibesynth::ValidationResult vr = vibesynth::validatePatch (pr.patch, kSampleRate, nullptr,
-                                                                     validatorCpuScale());
+                                                                     validatorCpuScale(), g_oversampling);
     if (! vr.ok())
     {
         std::printf ("REJECTED (%s): %s [%.0f ms]\n", vibesynth::patchStatusName (vr.status),
@@ -1212,14 +1220,33 @@ int runValidate (const char* path)
                          vr.configDc[n * 3 + set]);
         std::printf ("\n");
     }
-    std::printf ("PASS %s: peak %+.1f dBFS, trim %+.1f dB (%.6f), voice CPU %.2f%%, %.0f ms\n",
+    std::printf ("PASS %s: peak %+.1f dBFS, trim %+.1f dB (%.6f), voice CPU %.2f%%, %.0f ms (voices %dx)\n",
                  pr.patch.name.c_str(), 20.0 * std::log10 (vr.peak), 20.0 * std::log10 (vr.trim),
-                 vr.trim, 100.0 * vr.voiceCpu, vr.wallMs);
+                 vr.trim, 100.0 * vr.voiceCpu, vr.wallMs, g_oversampling);
     return 0;
 }
 
-int main (int argc, char** argv)
+int main (int argc, char** argvIn)
 {
+    // --os N anywhere after the mode (M7); removed before the mode parsing.
+    std::vector<char*> args (argvIn, argvIn + argc);
+    for (size_t i = 1; i + 1 < args.size(); ++i)
+    {
+        if (std::strcmp (args[i], "--os") != 0)
+            continue;
+        const std::string v = args[i + 1];
+        if (v != "1" && v != "2")
+        {
+            std::printf ("bad --os %s (want 1 or 2)\n", v.c_str());
+            return 2;
+        }
+        g_oversampling = v == "1" ? 1 : 2;
+        args.erase (args.begin() + (std::ptrdiff_t) i, args.begin() + (std::ptrdiff_t) i + 2);
+        break;
+    }
+    argc = static_cast<int> (args.size());
+    char** argv = args.data();
+
     const bool smoke = argc == 2 && std::strcmp (argv[1], "--smoketest") == 0;
     const bool self = (argc == 2 || (argc == 3 && std::strcmp (argv[2], "--strict-cpu") == 0))
                       && std::strcmp (argv[1], "--selftest") == 0;
@@ -1231,7 +1258,8 @@ int main (int argc, char** argv)
         std::printf ("usage: vibesynth_cli (--smoketest | --selftest [--strict-cpu] | --bench | --validate file.pulsar\n"
                      "                     | --render <patch.pulsar | built-in> out.wav\n"
                      "                       [--sr HZ] [--seconds-tail S] [--bpm BPM] [--phrase default|riff]\n"
-                     "                       [--macro N=V]...)\n");
+                     "                       [--mode patch|poly|mono] [--glide G] [--macro N=V]...)\n"
+                     "                     [--os 1|2]  (bench/validate/render voice oversampling, default 2)\n");
         return 2;
     }
 
@@ -1249,12 +1277,12 @@ int main (int argc, char** argv)
                          initOk ? 1 : 0, jitOk ? 1 : 0);
             return 0;
         }
-        return vibesynth_cli::runBench();
+        return vibesynth_cli::runBench (g_oversampling);
     }
     if (validate)
         return jitOk ? runValidate (argv[2]) : 2;
     if (render)
-        return jitOk ? vibesynth_cli::runRender (argc - 2, argv + 2, validatorCpuScale()) : 2;
+        return jitOk ? vibesynth_cli::runRender (argc - 2, argv + 2, validatorCpuScale(), g_oversampling) : 2;
 
     bool ok = check (jit, "execution mode is %s", mode);
     ok = check (initOk, "NSEEL_init") && ok;

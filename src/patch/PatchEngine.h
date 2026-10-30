@@ -11,6 +11,9 @@
 // `vibesynth_engine` static lib, shared by the plugin and `vibesynth_cli`
 // so the CLI tests exactly the code the plugin runs.
 //
+// M7: `mw` (mod wheel) is bound in every VM; a voice VM's `srate` is its
+// own (oversampled) rate, set by the PatchProgram that builds it.
+//
 // M5: outputs are raw (no clamp), so the validator (§7.1) can measure NaN
 // and peaks above 0 dBFS; the processor's runtime guard (§7.2) does the
 // clamping. A non-finite result comes back as a float NaN.
@@ -246,12 +249,16 @@ public:
 
     VoiceRack& rack() noexcept { return rackStorage_; }
 
-    // `transport` is what init code sees as bpm/beat.
+    // `transport` is what init code sees as bpm/beat; `mw` the mod wheel.
     void noteOn (double freq, double note, double vel,
-                 const Transport& transport = {}) noexcept;
+                 const Transport& transport = {}, double mw = 0.0) noexcept;
     float renderSample (double freq, double gate, double note, double vel,
                         const double macros[MacroSmoother::kNumMacros],
-                        const Transport& transport = {}) noexcept;
+                        const Transport& transport = {}, double mw = 0.0) noexcept;
+
+    // Tests only (off the audio thread): a VM variable by name, registered
+    // if the code never used it. Null if the voice didn't compile.
+    const EEL_F* variable (const char* name) noexcept;
 
     // Runtime guard (SPEC §7.2): reset the rack, zero every VM variable
     // (pointer list collected at compile time) and mem[]. No allocation.
@@ -273,6 +280,7 @@ private:
     EEL_F* bpm_ = nullptr;
     EEL_F* beat_ = nullptr;
     EEL_F* macro_[MacroSmoother::kNumMacros] = {};
+    EEL_F* mw_ = nullptr;
     EEL_F* out_ = nullptr;
     std::vector<EEL_F_PTR> vars_;
     std::string compileSection_;
@@ -299,10 +307,13 @@ public:
 
     void renderSample (float inL, float inR, float& outL, float& outR,
                        const double macros[MacroSmoother::kNumMacros],
-                       const Transport& transport = {}) noexcept;
+                       const Transport& transport = {}, double mw = 0.0) noexcept;
 
     // Resets both racks (patch swap, SPEC §7.3). No allocation.
     void resetRacks() noexcept;
+
+    // Tests only, as EelVoice::variable (null for a passthrough master).
+    const EEL_F* variable (const char* name) noexcept;
 
     // Same as EelVoice::resetState, for the master VM and both racks.
     void resetState() noexcept;
@@ -327,6 +338,7 @@ private:
     EEL_F* bpm_ = nullptr;
     EEL_F* beat_ = nullptr;
     EEL_F* macro_[MacroSmoother::kNumMacros] = {};
+    EEL_F* mw_ = nullptr;
     std::vector<EEL_F_PTR> vars_;
     bool passthrough_ = false;
     std::string compileError_;

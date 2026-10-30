@@ -69,11 +69,13 @@ void VoiceRack::init (double newSampleRate, uint32_t voiceSeed)
     for (int i = 0; i < kNumCombSlots; ++i)
     {
         comb[i].buf = combBuf[i];
-        comb[i].capacity = 9600; // sr/10 Hz @96 kHz + margin
+        comb[i].capacity = kCombCapacity;
     }
 
     for (int i = 0; i < kNumXoverSlots; ++i)
         xover[i].init (sampleRate);
+
+    filterRate.init (sampleRate);
 
     for (int i = 0; i < kNumOttSlots; ++i)
         ott[i].init (sampleRate);
@@ -84,9 +86,9 @@ void VoiceRack::init (double newSampleRate, uint32_t voiceSeed)
 }
 
 // Clears all module state without allocating (patch swap, hard-steal
-// retrigger). Daisy modules are re-initialised (LadderFilter::Init leaves
-// its stage memory alone, so it is value-reset first) and every setter
-// cache is cleared so the next control tick re-applies all parameters.
+// retrigger). Daisy modules are re-initialised and every setter cache is
+// cleared so the next control tick re-applies all parameters; the own
+// filters reset to "unset" (their first call snaps to its inputs).
 void VoiceRack::reset() noexcept
 {
     const float sr = static_cast<float> (sampleRate);
@@ -101,21 +103,10 @@ void VoiceRack::reset() noexcept
 
     for (int i = 0; i < kNumSvfSlots; ++i)
     {
-        fltLp[i].Init (sr); fltHp[i].Init (sr); fltBp[i].Init (sr);
-        fltLpCache[i] = SvfCache();
-        fltHpCache[i] = SvfCache();
-        fltBpCache[i] = SvfCache();
+        fltLp[i].reset(); fltHp[i].reset(); fltBp[i].reset();
     }
-
     for (int i = 0; i < kNumLadderSlots; ++i)
-    {
-        fltLadder[i] = daisysp::LadderFilter();
-        fltLadder[i].Init (sr);
-        fltLadder[i].SetFilterMode (daisysp::LadderFilter::FilterMode::LP24);
-        fltLadder[i].SetInputDrive (1.0f);
-        fltLadder[i].SetPassbandGain (0.5f);
-        ladderCache[i] = LadderCache();
-    }
+        fltLadder[i].reset();
 
     // Init (not Retrigger): idle, level 0, gate low, so the next gate rise
     // starts a clean attack and a low gate stays silent.

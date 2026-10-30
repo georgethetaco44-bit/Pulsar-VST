@@ -19,7 +19,13 @@
 //     4.5-6.5 s  note 40 held while macro 1 sweeps 0 -> 1 (then stays at 1)
 //   --phrase riff (M6, 2 bars at --bpm): a syncopated 16th-note bass riff
 //     in E with octave jumps, rests and a held note; bar 1 at the macro
-//     defaults, bar 2 with macro 1 ramping 0 -> 1.
+//     defaults, bar 2 with macro 1 ramping 0 -> 1. M7: four slides, where
+//     a note is held a quarter step into the next one, so mono patches
+//     play them legato and glide.
+// M7 options: --mode patch|poly|mono (the plugin's "Voice Mode", default
+// patch) and --glide G (its "Glide", default 0.3 here so slides glide;
+// the plugin's default is 0). The voices run at --os x the rate (default
+// 2, the plugin's path).
 
 #include "Render.h"
 
@@ -61,22 +67,25 @@ constexpr PhraseNote kPhrase[] = {
     { 4.5, 6.5, 40 },
 };
 
-// The riff in 16th steps: { first step, length in steps, note }. Each note
-// is gated for its length minus a quarter step, so repeats re-trigger.
+// The riff in 16th steps: { first step, length in steps, note, slide }.
+// Each note is gated for its length minus a quarter step, so repeats
+// re-trigger; a slide note is held a quarter step past its length instead,
+// overlapping the next note (legato in mono).
 struct RiffNote
 {
     int step;
     int steps;
     int note;
+    bool slide;
 };
 
 constexpr RiffNote kRiff[] = {
     // bar 1
-    { 0, 3, 28 }, { 3, 1, 40 }, { 5, 1, 28 }, { 6, 2, 31 },              // 8-9 rest
-    { 10, 1, 40 }, { 11, 1, 28 }, { 12, 2, 33 }, { 14, 1, 35 },          // 15 rest
+    { 0, 3, 28, false }, { 3, 1, 40, false }, { 5, 1, 28, false }, { 6, 2, 31, false },   // 8-9 rest
+    { 10, 1, 40, false }, { 11, 1, 28, false }, { 12, 2, 33, true }, { 14, 1, 35, false }, // 15 rest
     // bar 2 (macro 1 ramps)
-    { 16, 6, 28 }, { 22, 1, 40 }, { 23, 1, 28 }, { 25, 1, 38 },          // 24 rest
-    { 26, 2, 40 }, { 29, 1, 43 }, { 30, 2, 31 },                         // 28 rest
+    { 16, 6, 28, true }, { 22, 1, 40, true }, { 23, 1, 28, false }, { 25, 1, 38, true },   // 24 rest
+    { 26, 2, 40, false }, { 29, 1, 43, false }, { 30, 2, 31, false },                     // 28 rest
 };
 constexpr int kRiffSteps = 32;
 
@@ -102,7 +111,7 @@ Phrase makePhrase (bool riff, double bpm)
     }
     const double step = 60.0 / bpm / 4.0;
     for (const RiffNote& n : kRiff)
-        p.notes.push_back ({ n.step * step, (n.step + n.steps - 0.25) * step, n.note });
+        p.notes.push_back ({ n.step * step, (n.step + n.steps + (n.slide ? 0.25 : -0.25)) * step, n.note });
     p.sweepStart = 16 * step;
     p.sweepEnd = kRiffSteps * step;
     p.end = kRiffSteps * step;
@@ -138,7 +147,7 @@ double dbfs (double v)
 
 } // namespace
 
-int runRender (int argc, char** argv, double cpuScale)
+int runRender (int argc, char** argv, double cpuScale, int oversampling)
 {
     if (argc < 2)
         return 2;
@@ -148,6 +157,8 @@ int runRender (int argc, char** argv, double cpuScale)
     double tail = 1.5;
     double bpm = 140.0;
     bool riff = false;
+    auto mode = PatchPlayer::VoiceMode::Patch;
+    double glide = 0.3;
     std::vector<std::pair<int, double>> macroOverrides;
     for (int i = 2; i < argc; ++i)
     {
@@ -169,6 +180,20 @@ int runRender (int argc, char** argv, double cpuScale)
             }
             riff = name == "riff";
         }
+        else if (opt == "--mode" && hasValue)
+        {
+            const std::string name = argv[++i];
+            if (name == "patch") mode = PatchPlayer::VoiceMode::Patch;
+            else if (name == "poly") mode = PatchPlayer::VoiceMode::Poly;
+            else if (name == "mono") mode = PatchPlayer::VoiceMode::Mono;
+            else
+            {
+                std::printf ("bad --mode %s (want patch, poly or mono)\n", name.c_str());
+                return 2;
+            }
+        }
+        else if (opt == "--glide" && hasValue)
+            glide = std::atof (argv[++i]);
         else if (opt == "--macro" && hasValue)
         {
             const juce::String kv (argv[++i]);
@@ -187,9 +212,9 @@ int runRender (int argc, char** argv, double cpuScale)
         }
     }
     if (! (sr >= 8000.0 && sr <= 384000.0) || ! (tail >= 0.0 && tail <= 60.0)
-        || ! (bpm >= 20.0 && bpm <= 999.0))
+        || ! (bpm >= 20.0 && bpm <= 999.0) || ! (glide >= 0.0 && glide <= 1.0))
     {
-        std::printf ("bad --sr, --seconds-tail or --bpm\n");
+        std::printf ("bad --sr, --seconds-tail, --bpm or --glide\n");
         return 2;
     }
 
@@ -222,7 +247,8 @@ int runRender (int argc, char** argv, double cpuScale)
     vibesynth::Patch patch = pr.patch;
     if (! builtin)
     {
-        const vibesynth::ValidationResult vr = vibesynth::validatePatch (patch, sr, nullptr, cpuScale);
+        const vibesynth::ValidationResult vr = vibesynth::validatePatch (patch, sr, nullptr, cpuScale,
+                                                                         oversampling);
         if (! vr.ok())
         {
             std::printf ("REJECTED (%s): %s\n", vibesynth::patchStatusName (vr.status), vr.error.c_str());
@@ -231,7 +257,7 @@ int runRender (int argc, char** argv, double cpuScale)
         patch.trim = vr.trim;
     }
     std::string error;
-    const auto program = vibesynth::PatchProgram::build (patch, sr, error);
+    const auto program = vibesynth::PatchProgram::build (patch, sr, error, oversampling);
     if (program == nullptr)
     {
         std::printf ("REJECTED: %s\n", error.c_str());
@@ -266,6 +292,7 @@ int runRender (int argc, char** argv, double cpuScale)
     player.setProgram (program.get());
     player.prepare (sr, kBlock, targets);
     player.setHostTransport (bpm, false, false, 0.0); // beat runs on from 0
+    player.setVoiceControls (mode, glide);
 
     const int total = (int) std::lround ((phrase.end + tail) * sr);
     juce::AudioBuffer<float> out (2, total);
@@ -313,10 +340,11 @@ int runRender (int argc, char** argv, double cpuScale)
     writer.reset(); // flushes and closes the file
 
     std::printf ("rendered %s (%s, trim %+.1f dB) -> %s: %.2f s at %.0f Hz, %.0f bpm, "
-                 "%s phrase, 24-bit stereo, peak %+.1f dBFS, RMS %+.1f dBFS\n",
+                 "%s phrase, %s (glide %.2f), voices %dx, 24-bit stereo, peak %+.1f dBFS, RMS %+.1f dBFS\n",
                  patch.name.c_str(), builtin ? "built-in, stored trim" : "file, computed trim",
                  dbfs (patch.trim), outFile.getFullPathName().toRawUTF8(), total / sr, sr, bpm,
-                 riff ? "riff" : "default", dbfs (peak), dbfs (rms));
+                 riff ? "riff" : "default", player.monoActive() ? "mono" : "poly", glide,
+                 program->oversampling(), dbfs (peak), dbfs (rms));
     return 0;
 }
 

@@ -42,6 +42,8 @@ VibeSynthAudioProcessor::VibeSynthAudioProcessor()
 {
     for (int i = 0; i < numMacros; ++i)
         macroParams[(size_t) i] = apvts.getRawParameterValue ("macro" + juce::String (i + 1));
+    voiceModeParam = apvts.getRawParameterValue (voiceModeParamId);
+    glideParam = apvts.getRawParameterValue (glideParamId);
 
     // The default patch (SPEC 9.4: reese.pulsar). Compiled in the first
     // prepareToPlay with its stored trim (no matrix; it is a built-in).
@@ -99,6 +101,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout VibeSynthAudioProcessor::cre
             juce::NormalisableRange<float> (0.0f, 1.0f),
             0.5f));
     }
+
+    // M7 (SPEC 9.1): added after the macros, never removed. Choice order
+    // matches vibesynth::PatchPlayer::VoiceMode.
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        voiceModeParamId, "Voice Mode", juce::StringArray { "Patch", "Poly", "Mono" }, 0));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        glideParamId, "Glide", juce::NormalisableRange<float> (0.0f, 1.0f), 0.0f));
 
     return layout;
 }
@@ -628,6 +637,15 @@ void VibeSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             }
         }
         player.setHostTransport (bpm, playing, hasPpq, ppq);
+    }
+
+    // Voice mode and glide (SPEC 9.1), once per block.
+    {
+        const int mode = voiceModeParam != nullptr
+                             ? juce::jlimit (0, 2, (int) std::lround (voiceModeParam->load (std::memory_order_relaxed)))
+                             : 0;
+        const float glide = glideParam != nullptr ? glideParam->load (std::memory_order_relaxed) : 0.0f;
+        player.setVoiceControls (static_cast<vibesynth::PatchPlayer::VoiceMode> (mode), glide);
     }
 
     float* outL = buffer.getWritePointer (0);

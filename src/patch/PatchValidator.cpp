@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <iterator>
 
+#include "engine/Oversampler.h"
 #include "patch/LoopNesting.h"
 
 namespace vibesynth {
@@ -22,7 +23,7 @@ std::string formatCompileError (const std::string& section, const std::string& t
 }
 
 std::unique_ptr<PatchProgram> PatchProgram::build (const Patch& patch, double sampleRate,
-                                                   std::string& error)
+                                                   std::string& error, int oversampling)
 {
     // Restores and built-ins skip the matrix, so the nesting check runs
     // here too: a 3-deep loop would stall the audio thread.
@@ -36,6 +37,7 @@ std::unique_ptr<PatchProgram> PatchProgram::build (const Patch& patch, double sa
     std::unique_ptr<PatchProgram> prog (new PatchProgram());
     prog->patch_ = patch;
     prog->sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
+    prog->oversampling_ = std::clamp (oversampling, 1, kMaxOversampling);
     const double t = patch.trim;
     prog->trim_ = static_cast<float> (isFiniteBits (t) && t > 0.0 && t <= 1.0 ? t : 1.0);
 
@@ -50,7 +52,7 @@ std::unique_ptr<PatchProgram> PatchProgram::build (const Patch& patch, double sa
     }
     for (int i = 0; i < kNumVoices; ++i)
     {
-        prog->voices_[i] = std::make_unique<EelVoice> (ps, prog->sampleRate_, voiceSeed (i));
+        prog->voices_[i] = std::make_unique<EelVoice> (ps, prog->voiceRate(), voiceSeed (i));
         if (! prog->voices_[i]->isValid())
         {
             error = formatCompileError (prog->voices_[i]->compileSection(),
@@ -71,7 +73,7 @@ constexpr int kNumMacroSets = 3;          // all 0, defaults, all 1
 constexpr double kConfigSeconds = 1.0;
 constexpr double kNoteOffSeconds = 0.7;
 constexpr double kDcWindowSeconds = 0.5;  // the last 0.5 s
-constexpr int kChunk = 64;                // voice samples per timing chunk
+constexpr int kChunk = 64;                // host samples per timing chunk
 constexpr double kMaxConfigCpu = 0.50;    // voice + master, per configuration
 constexpr double kDeadlineMs = 1000.0 * kConfigSeconds * kMaxConfigCpu; // 500 ms
 constexpr double kMaxPeak = 3.9810717055349722;  // +12 dBFS
@@ -111,19 +113,23 @@ ValidationResult reject (ValidationResult r, PatchStatus status, std::string mes
 } // namespace
 
 ValidationResult validatePatch (const Patch& patch, double sampleRate,
-                                const std::atomic<bool>* cancel, double cpuScale)
+                                const std::atomic<bool>* cancel, double cpuScale,
+                                int oversampling)
 {
     ValidationResult result;
     const double scale = cpuScale >= 1.0 ? cpuScale : 1.0;
     const double deadlineMs = kDeadlineMs * scale;
     const auto wallStart = Clock::now();
     const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
+    const int os = std::clamp (oversampling, 1, PatchProgram::kMaxOversampling);
+    const double voiceRate = sr * os;
     const int total = static_cast<int> (std::lround (sr * kConfigSeconds));
     const int noteOff = static_cast<int> (std::lround (sr * kNoteOffSeconds));
     const int dcStart = total - static_cast<int> (std::lround (sr * kDcWindowSeconds));
 
     const PatchStrings ps = { patch.init.c_str(), patch.voice.c_str(), patch.master.c_str() };
-    float voiceBuf[kChunk];
+    float voiceBuf[kChunk * PatchProgram::kMaxOversampling];
+    float hostBuf[kChunk];
     double voiceNs = 0.0;
     double worstPeak = 0.0;
     auto finish = [&] (ValidationResult r)
@@ -149,8 +155,9 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
             for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
                 macros[m] = set == 0 ? 0.0 : set == 2 ? 1.0 : patch.macroDefault (m);
 
-            // Fresh test VMs for every configuration (SPEC §7.1).
-            const auto voice = std::make_unique<EelVoice> (ps, sr, PatchProgram::voiceSeed (0));
+            // Fresh test VMs for every configuration (SPEC §7.1); the
+            // voice at the oversampled rate, as the plugin runs it.
+            const auto voice = std::make_unique<EelVoice> (ps, voiceRate, PatchProgram::voiceSeed (0));
             if (! voice->isValid())
                 return finish (reject (result, PatchStatus::CompileError,
                                        formatCompileError (voice->compileSection(),
@@ -160,23 +167,27 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
                 return finish (reject (result, PatchStatus::CompileError,
                                        formatCompileError ("master", master->compileError())));
 
+            HalfbandDecimator decimator;
             double peak = 0.0;
             double sumL = 0.0, sumR = 0.0;
             // No host: 120 bpm, beat 0 at the note-on (SPEC §4.3).
             Transport transport;
             const double beatStep = transport.beatStep (sr);
+            const double voiceBeatStep = transport.beatStep (voiceRate);
             const auto configStart = Clock::now();
             voice->noteOn (freq, note, 1.0, transport);
 
             for (int start = 0; start < total; start += kChunk)
             {
                 const int n = std::min (kChunk, total - start);
+                const int vn = n * os;
+                const int vstart = start * os;
                 const auto t0 = Clock::now();
                 auto t1 = t0;
-                for (int k = 0; k < n; ++k)
+                for (int k = 0; k < vn; ++k)
                 {
-                    const double gate = start + k < noteOff ? 1.0 : 0.0;
-                    transport.beat = (start + k) * beatStep;
+                    const double gate = start + k / os < noteOff ? 1.0 : 0.0;
+                    transport.beat = (vstart + k) * voiceBeatStep;
                     voiceBuf[k] = voice->renderSample (freq, gate, note, 1.0, macros, transport);
 
                     // Runaway guard (SPEC §7.1), after every sample: one
@@ -197,14 +208,21 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
                 // Includes the per-sample clock reads (~20 ns, ~0.1 % CPU).
                 voiceNs += std::chrono::duration<double, std::nano> (t1 - t0).count();
 
+                for (int k = 0; k < vn; ++k)
+                    if (! isFiniteBits (voiceBuf[k]))
+                        return finish (reject (result, PatchStatus::NonFinite,
+                                               "NaN or Inf in voice output at " + where (note, set)
+                                                   + ", after " + fmt ("%.2f s", (vstart + k) / voiceRate)));
+                if (os == 2)
+                    for (int k = 0; k < n; ++k)
+                        hostBuf[k] = decimator.process (voiceBuf[2 * k], voiceBuf[2 * k + 1]);
+                else
+                    std::copy (voiceBuf, voiceBuf + n, hostBuf);
+
                 for (int k = 0; k < n; ++k)
                 {
                     const int i = start + k;
-                    const float v = voiceBuf[k];
-                    if (! isFiniteBits (v))
-                        return finish (reject (result, PatchStatus::NonFinite,
-                                               "NaN or Inf in voice output at " + where (note, set)
-                                                   + ", after " + fmt ("%.2f s", i / sr)));
+                    const float v = hostBuf[k];
                     float l = 0.0f, r = 0.0f;
                     transport.beat = i * beatStep;
                     master->renderSample (v, v, l, r, macros, transport);

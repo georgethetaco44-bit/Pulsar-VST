@@ -247,8 +247,8 @@ there needs a gate the patch makes itself. `bus_*` functions stay master-only.
 | `osc_square(slot, hz, pw)` | DaisySP | pw 0–1 |
 | `osc_supersaw(slot, hz, detune, mix)` | own (7 PolyBLEP saws) or DaisySP | 2 slots |
 | `noise()` | own | stateless white noise |
-| `flt_lp(slot, in, cutoff, res)` `flt_hp(...)` `flt_bp(...)` | DaisySP Svf | cutoff 0–1 mapped exponentially 20 Hz–20 kHz; 3 slots |
-| `flt_ladder(slot, in, cutoff, res)` | DaisySP `LadderFilter` (`Filters/ladder.h`, MIT repo; MoogLadder is LGPL-only, so don't use it) | 2 slots |
+| `flt_lp(slot, in, cutoff, res)` `flt_hp(...)` `flt_bp(...)` | own TPT SVF (M7; `Filters.h`) | cutoff 0–1 mapped exponentially 20 Hz–20 kHz, smoothed per sample; linear; res 1 = Q 20; 3 slots |
+| `flt_ladder(slot, in, cutoff, res)` | own 4-pole ZDF ladder (M7; `Filters.h`), Padé tanh in the feedback | self-oscillates from res ≈ 0.95, bounded; 2 slots |
 | `env_adsr(slot, gate, a, d, s, r)` | DaisySP Adsr | times mapped 1 ms–10 s; 3 slots |
 | `env_follow(slot, in)` | own | 2 slots |
 | `fx_fold(in, amount)` | own (sin-fold) | stateless |
@@ -350,6 +350,24 @@ On parse, compile or test failure, send the model its own output plus the exact
 reason (e.g. `EEL2 compile error line 7: ...`, or
 `NaN produced at note=40, m3=1.0 after 0.31 s`). Maximum 2 retries, then report
 failure in the UI and keep the current patch playing.
+
+**M8 additions:**
+- **Lexicon lint before compile.** Every `name(` call in the code is checked
+  against the registered lexicon plus EEL2 built-ins and the patch's own
+  `function` definitions. An unknown name fails with the closest valid names
+  ("unknown function `osc_wavetable`; did you mean `osc_saw`, `osc_square`?
+  available osc_*: …"), because invented functions are the most common LLM
+  failure. Arity and literal slot ranges are checked the same way.
+- **Weight hint.** If a patch passes but its measured voice cost is over 1.5×
+  its §4.2.1 budget (poly/mono) and a retry is left, retry once with "too
+  heavy: N ns per voice-sample, budget B; simplify". If no retry is left,
+  accept it. CPU is never a hard reject beyond the §7.1 rule.
+- **Single source for the API reference.** `resources/prompts/api_reference.md`
+  is checked by the smoketest against the registered lexicon: every
+  registered function documented with the right arity, nothing documented
+  that isn't registered.
+- **Token use** (prompt + completion, from the API's `usage`) is logged per
+  request in `--batch`, never the key or full headers.
 
 ### 6.5 API key handling
 - User enters a key in a settings panel; stored with `juce::PropertiesFile` in
@@ -513,8 +531,8 @@ In `master`: `outl = bus_mono_low(inl, inr); outr = bus_mono_low_r();` then
 - Pitch bend ±2 semitones; mod wheel is readable as variable `mw` (0–1).
 - **M7 details.** Two non-macro host parameters, added at startup and never
   removed: "Voice Mode" (Patch / Poly / Mono; Patch follows the patch's
-  `voiceMode`) and "Glide" (0–1 → 0–1 s, exponential in pitch; used in mono
-  only). Mono is last-note priority with a held-note stack: releasing the top
+  `voiceMode`) and "Glide" (0–1 → glide² seconds, so 0.3 → 90 ms and
+  1 → 1 s; constant-time, linear in pitch; used in mono only). Mono is last-note priority with a held-note stack: releasing the top
   note returns to the previous held one. Legato: a note-on while another is
   held glides `freq` without retriggering (`gate` stays 1, `trig` stays 0,
   `init` doesn't run). A note after all keys are up retriggers the same voice
@@ -745,6 +763,17 @@ Each milestone has an exit test. Don't start the next until it passes.
 7. **Voice features.** Mono/legato + glide, pitch bend, mod wheel, voice
    stealing, 2× oversampling. *Exit: reese/sub presets play legato cleanly;
    folding presets audibly alias less.*
+   **Result: passed. Own polyphase-IIR half-band (−106 dB from 0.55 × host
+   rate, 1.37 host samples latency, unreported; 12 ns per host sample for all
+   voices). A fold at 2× has 25.4 dB less inharmonic energy than at 1×. Own TPT
+   SVF (≤ 29 ns swept, linear, Q floor 20) and ZDF ladder (≤ 51 ns, k = 4.2·res,
+   self-oscillates from res ≈ 0.95); the DaisySP Svf and LadderFilter are no
+   longer built. Legato, glide, bend and mw verified by smoketest and in REAPER.
+   For the Sound pass: phys_string bottoms out at ~94 Hz at a 96 kHz voice rate
+   (DaisySP's fixed 1,024-sample delay), so it needs an own string for basses;
+   Wonk Dive's ladder no longer self-oscillates at res 0.72. The validator and
+   bench drive EelVoice directly (not PatchPlayer) on the same 2× path, so keep
+   them in sync whenever the voice path changes.**
 8. **AI generation.** MetaClient, PromptBuilder, ResponseParser, self-heal,
    settings panel, `--batch`. *Exit: ≥70 % of a 30-prompt batch produce a
    passing patch within 2 retries.*

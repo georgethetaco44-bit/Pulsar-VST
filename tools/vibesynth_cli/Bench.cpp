@@ -1,21 +1,25 @@
 // M4: vibesynth_cli --bench (SPEC §4.2.1, §10.3). Report-only, never
 // gating: prints ns per voice-sample for every lexicon function and for
 // every built-in preset (M5: resources/presets/*.pulsar), each the MEDIAN
-// of 7 runs of 1 s at 48 kHz (single runs vary up to 2x on the Deck) and
-// marked PASS/FAIL against the 300 ns voice budget (M6: a mono preset's
-// voice against 1,200 ns; bus_* and preset masters against the 2 µs master
-// budget).
+// of 7 runs of 48,000 voice samples (single runs vary up to 2x on the
+// Deck) and marked PASS/FAIL against the 300 ns voice budget (M6: a mono
+// preset's voice against 1,200 ns; bus_* and preset masters against the
+// 2 µs master budget). M7: voice VMs run at the oversampled voice rate
+// (2 x 48 kHz unless --os 1), so the voice budgets are per OVERSAMPLED
+// sample; masters run at 48 kHz, fed through the half-band decimator.
 
 #include "Bench.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "engine/Oversampler.h"
 #include "patch/Patch.h"
 #include "patch/PatchEngine.h"
 
@@ -62,12 +66,14 @@ const int kNumBenchCases = static_cast<int> (sizeof (kBenchCases) / sizeof (kBen
 
 namespace {
 
-constexpr double kSampleRate = 48000.0;
-constexpr int kSamples = 48000; // 1 s
+constexpr double kSampleRate = 48000.0;  // host rate
+constexpr int kSamples = 48000; // timed samples per run (voice or host)
 constexpr int kRuns = 7;
 constexpr double kBenchFreq = 220.0;
 constexpr double kVoiceBudgetNs = vibesynth::Patch::kPolyVoiceBudgetNs;  // SPEC §4.2.1
 constexpr double kMasterBudgetNs = vibesynth::Patch::kMasterBudgetNs;   // ≈10 % of a core
+constexpr double kSvfTargetNs = 30.0;     // M7 own-filter targets, per call
+constexpr double kLadderTargetNs = 60.0;
 
 using Clock = std::chrono::steady_clock;
 
@@ -87,12 +93,12 @@ double median (std::vector<double> v)
 // advancing at 120 bpm (so tempo-synced code takes its real paths).
 double timeVoice (vibesynth::EelVoice& v, double freq, double note,
                   const double macros[vibesynth::MacroSmoother::kNumMacros],
-                  int runs = kRuns, int samples = kSamples)
+                  double voiceRate, int runs = kRuns, int samples = kSamples)
 {
     volatile float sink = 0.0f;
     std::vector<double> times;
     vibesynth::Transport t;
-    const double step = t.beatStep (kSampleRate);
+    const double step = t.beatStep (voiceRate);
     v.noteOn (freq, note, 0.9, t);
     // Run -1 is the untimed warm-up pass (SPEC §4.2.1: the clock ramps).
     for (int r = -1; r < runs; ++r)
@@ -142,20 +148,80 @@ double timeMaster (vibesynth::EelMaster& m, const std::vector<float>& in,
     return median (times);
 }
 
+// `samples` host samples of master input: the voice at `os` x 48 kHz,
+// through the half-band decimator when os = 2 (the plugin's path).
 std::vector<float> renderInput (vibesynth::EelVoice& v, double freq,
                                 const double macros[vibesynth::MacroSmoother::kNumMacros],
-                                int samples = kSamples)
+                                int os, int samples = kSamples)
 {
     std::vector<float> out ((size_t) samples, 0.0f);
     vibesynth::Transport t;
-    const double step = t.beatStep (kSampleRate);
+    const double step = t.beatStep (kSampleRate * os);
+    vibesynth::HalfbandDecimator decimator;
     v.noteOn (freq, 57.0, 0.9, t);
     for (int i = 0; i < samples; ++i)
     {
-        t.beat += step;
-        out[(size_t) i] = v.renderSample (freq, 1.0, 57.0, 0.9, macros, t);
+        float pair[2] = {};
+        for (int k = 0; k < os; ++k)
+        {
+            t.beat += step;
+            pair[k] = v.renderSample (freq, 1.0, 57.0, 0.9, macros, t);
+        }
+        out[(size_t) i] = os == 2 ? decimator.process (pair[0], pair[1]) : pair[0];
     }
     return out;
+}
+
+void fillMacros (double macros[vibesynth::MacroSmoother::kNumMacros], double v)
+{
+    for (int i = 0; i < vibesynth::MacroSmoother::kNumMacros; ++i)
+        macros[i] = v;
+}
+
+// A lexicon call's own cost: the median over 9 rounds of (test - ref),
+// each round timing `ref` then `test` back to back (the code differs only
+// by the call under test), so clock drift and run-to-run noise cancel.
+double ownCost (const char* ref, const char* test, double voiceRate)
+{
+    const vibesynth::PatchStrings pr = { "0;", ref, "outl = inl; outr = inr;" };
+    const vibesynth::PatchStrings pt = { "0;", test, "outl = inl; outr = inr;" };
+    const auto vr = std::make_unique<vibesynth::EelVoice> (pr, voiceRate, 7u);
+    const auto vt = std::make_unique<vibesynth::EelVoice> (pt, voiceRate, 7u);
+    if (! vr->isValid() || ! vt->isValid())
+        return -1.0;
+    double macros[vibesynth::MacroSmoother::kNumMacros] = {};
+    fillMacros (macros, 0.5);
+    std::vector<double> diffs;
+    for (int r = 0; r < 9; ++r)
+    {
+        const double a = timeVoice (*vr, kBenchFreq, 57.0, macros, voiceRate, 1, kSamples / 2);
+        const double b = timeVoice (*vt, kBenchFreq, 57.0, macros, voiceRate, 1, kSamples / 2);
+        diffs.push_back (b - a);
+    }
+    return median (diffs);
+}
+
+// Median ns per host sample of the half-band decimator alone.
+double timeDecimator()
+{
+    vibesynth::HalfbandDecimator d;
+    std::vector<float> in ((size_t) kSamples * 2);
+    for (size_t i = 0; i < in.size(); ++i)
+        in[i] = static_cast<float> (std::sin (0.01 * static_cast<double> (i)));
+    volatile float sink = 0.0f;
+    std::vector<double> times;
+    for (int r = -1; r < kRuns; ++r)
+    {
+        float acc = 0.0f;
+        const auto t0 = Clock::now();
+        for (int i = 0; i < kSamples; ++i)
+            acc += d.process (in[(size_t) (2 * i)], in[(size_t) (2 * i + 1)]);
+        const auto t1 = Clock::now();
+        sink = sink + acc;
+        if (r >= 0)
+            times.push_back (nsPerSample (t0, t1, kSamples));
+    }
+    return median (times);
 }
 
 void printRow (const char* name, double ns, double base, double budget)
@@ -164,11 +230,6 @@ void printRow (const char* name, double ns, double base, double budget)
                  budget, ns <= budget ? "PASS" : "FAIL");
 }
 
-void fillMacros (double macros[vibesynth::MacroSmoother::kNumMacros], double v)
-{
-    for (int i = 0; i < vibesynth::MacroSmoother::kNumMacros; ++i)
-        macros[i] = v;
-}
 
 // Replaces the first `from` call in `code` with `to` (filter variants).
 std::string swapCall (const char* code, const std::string& from, const std::string& to)
@@ -198,7 +259,8 @@ void warmUp()
             sink = sink + v.renderSample (kBenchFreq, 1.0, 57.0, 0.9, macros);
 }
 
-PresetCost measurePresetCost (const vibesynth::Patch& patch, int runs, int samples)
+PresetCost measurePresetCost (const vibesynth::Patch& patch, int runs, int samples,
+                              int oversampling)
 {
     using namespace vibesynth;
     PresetCost cost;
@@ -206,27 +268,31 @@ PresetCost measurePresetCost (const vibesynth::Patch& patch, int runs, int sampl
     double macros[MacroSmoother::kNumMacros] = {};
     for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
         macros[m] = patch.macroDefault (m);
-    const auto v = std::make_unique<EelVoice> (ps, kSampleRate, 9u);
+    const double voiceRate = kSampleRate * oversampling;
+    const auto v = std::make_unique<EelVoice> (ps, voiceRate, 9u);
     const auto m = std::make_unique<EelMaster> (ps, kSampleRate);
     if (! v->isValid() || ! m->isValid())
         return cost;
-    cost.voiceNs = timeVoice (*v, 55.0, 33.0, macros, runs, samples);
-    const std::vector<float> in = renderInput (*v, 55.0, macros, samples);
+    cost.voiceNs = timeVoice (*v, 55.0, 33.0, macros, voiceRate, runs, samples);
+    const std::vector<float> in = renderInput (*v, 55.0, macros, oversampling, samples);
     cost.masterNs = timeMaster (*m, in, macros, runs, samples);
     cost.ok = true;
     return cost;
 }
 
-int runBench()
+int runBench (int oversampling)
 {
     using namespace vibesynth;
 
     double macros[MacroSmoother::kNumMacros] = {};
     fillMacros (macros, 0.5);
+    const int os = oversampling == 1 ? 1 : 2;
+    const double voiceRate = kSampleRate * os;
 
-    std::printf ("\n-- bench: ns per voice-sample, median of %d x 1 s @ 48 kHz --\n", kRuns);
-    std::printf ("voice cases: budget %.0f ns per voice-sample incl. execute overhead;\n"
-                 "bus_* cases: master VM only, budget %.0f ns per sample (SPEC 4.2.1).\n"
+    std::printf ("\n-- bench: ns per voice-sample, median of %d x %d samples; voices @ %.0f kHz "
+                 "(%dx), master @ 48 kHz --\n", kRuns, kSamples, voiceRate / 1000.0, os);
+    std::printf ("voice cases: budget %.0f ns per (oversampled) voice-sample incl. execute overhead;\n"
+                 "bus_* cases: master VM only, budget %.0f ns per host sample (SPEC 4.2.1).\n"
                  "'vs base' subtracts the matching baseline (voice: out = 0; master:\n"
                  "outl = inl; outr = inr;). Cases fed by osc_saw(1, ...) include it;\n"
                  "the (swept) filter cases also include an osc_sine LFO on the cutoff.\n\n",
@@ -237,14 +303,12 @@ int runBench()
 
     double voiceBase = 0.0;
     double masterBase = 0.0;
-    double sawNs = 0.0;
-    double ladderNs = 0.0;
     for (int ci = 0; ci < kNumBenchCases; ++ci)
     {
         const BenchCase& bc = kBenchCases[ci];
         const PatchStrings ps = { "fb1 = 0; prev = 0;", bc.voice, bc.master };
-        // Heap, not stack: EelVoice is ~87 KB (Windows' default stack is 1 MB).
-        const auto vp = std::make_unique<EelVoice> (ps, kSampleRate, 7u);
+        // Heap, not stack: EelVoice is ~175 KB since M7 (Windows' default stack is 1 MB).
+        const auto vp = std::make_unique<EelVoice> (ps, voiceRate, 7u);
         const auto mp = std::make_unique<EelMaster> (ps, kSampleRate);
         EelVoice& v = *vp;
         EelMaster& m = *mp;
@@ -256,7 +320,7 @@ int runBench()
         }
         if (bc.isMaster)
         {
-            const std::vector<float> in = renderInput (v, kBenchFreq, macros);
+            const std::vector<float> in = renderInput (v, kBenchFreq, macros, os);
             const double ns = timeMaster (m, in, macros);
             if (masterBase == 0.0)
                 masterBase = ns; // the first master case is the master baseline
@@ -264,13 +328,9 @@ int runBench()
         }
         else
         {
-            const double ns = timeVoice (v, kBenchFreq, 57.0, macros);
+            const double ns = timeVoice (v, kBenchFreq, 57.0, macros, voiceRate);
             if (ci == 0)
                 voiceBase = ns;
-            if (std::string (bc.name) == "osc_saw")
-                sawNs = ns;
-            if (std::string (bc.name) == "flt_ladder")
-                ladderNs = ns;
             printRow (bc.name, ns, voiceBase, kVoiceBudgetNs);
         }
     }
@@ -298,7 +358,7 @@ int runBench()
         for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
             presetMacros[m] = patch.macroDefault (m);
 
-        const auto pvPtr = std::make_unique<EelVoice> (ps, kSampleRate, 9u);
+        const auto pvPtr = std::make_unique<EelVoice> (ps, voiceRate, 9u);
         const auto pmPtr = std::make_unique<EelMaster> (ps, kSampleRate);
         if (! pvPtr->isValid() || ! pmPtr->isValid())
         {
@@ -306,8 +366,8 @@ int runBench()
                          pvPtr->compileError().c_str(), pmPtr->compileError().c_str());
             continue;
         }
-        const double vNs = timeVoice (*pvPtr, 55.0, 33.0, presetMacros);
-        const std::vector<float> in = renderInput (*pvPtr, 55.0, presetMacros);
+        const double vNs = timeVoice (*pvPtr, 55.0, 33.0, presetMacros, voiceRate);
+        const std::vector<float> in = renderInput (*pvPtr, 55.0, presetMacros, os);
         const double mNs = timeMaster (*pmPtr, in, presetMacros);
         const std::string vName = patch.name + " voice";
         const std::string mName = patch.name + " master";
@@ -322,28 +382,45 @@ int runBench()
                 ? swapCall (patch.voice.c_str(), "flt_ladder", "flt_lp")
                 : swapCall (patch.voice.c_str(), "flt_lp", "flt_ladder");
             const PatchStrings alt = { patch.init.c_str(), altVoice.c_str(), patch.master.c_str() };
-            const auto avPtr = std::make_unique<EelVoice> (alt, kSampleRate, 9u);
+            const auto avPtr = std::make_unique<EelVoice> (alt, voiceRate, 9u);
             if (avPtr->isValid())
                 printRow (usesLadder ? "  variant with flt_lp" : "  variant with ladder",
-                          timeVoice (*avPtr, 55.0, 33.0, presetMacros), voiceBase, patch.voiceBudgetNs());
+                          timeVoice (*avPtr, 55.0, 33.0, presetMacros, voiceRate), voiceBase,
+                          patch.voiceBudgetNs());
         }
     }
 
-    // Ladder's own cost (for the M7 decision on an own 1x ladder): Daisy
-    // runs it 4x oversampled internally, so at a 2x voice rate it is paid
-    // twice per host sample (8x total).
-    const double ladderOwn = ladderNs - sawNs;
-    std::printf ("\nflt_ladder own cost: %.1f ns per call (flt_ladder case minus osc_saw);\n"
-                 "  at the M7 2x voice rate: %.1f ns per host sample\n",
-                 ladderOwn, 2.0 * ladderOwn);
+    // M7 own filters, per call (interleaved pairs, see ownCost).
+    struct OwnCase { const char* name; const char* ref; const char* test; double target; };
+    const OwnCase own[] = {
+        { "flt_lp (SVF)", "out = osc_saw(1, freq);",
+          "out = flt_lp(0, osc_saw(1, freq), 0.5, 0.3);", kSvfTargetNs },
+        { "flt_lp (SVF, swept)", "c = 0.4 + 0.3 * osc_sine(2, 5); out = osc_saw(1, freq);",
+          "c = 0.4 + 0.3 * osc_sine(2, 5); out = flt_lp(0, osc_saw(1, freq), c, 0.3);", kSvfTargetNs },
+        { "flt_ladder", "out = osc_saw(1, freq);",
+          "out = flt_ladder(0, osc_saw(1, freq), 0.5, 0.5);", kLadderTargetNs },
+        { "flt_ladder (swept)", "c = 0.4 + 0.3 * osc_sine(2, 5); out = osc_saw(1, freq);",
+          "c = 0.4 + 0.3 * osc_sine(2, 5); out = flt_ladder(0, osc_saw(1, freq), c, 0.5);", kLadderTargetNs },
+    };
+    std::printf ("\n-- own filters per call at %.0f kHz (median of 9 interleaved with/without pairs) --\n",
+                 voiceRate / 1000.0);
+    for (const OwnCase& oc : own)
+    {
+        const double ns = ownCost (oc.ref, oc.test, voiceRate);
+        std::printf ("%-24s %8.1f ns per call (target <= %.0f)  [%s]\n", oc.name, ns, oc.target,
+                     ns <= oc.target ? "PASS" : "FAIL");
+    }
 
-    // Budget arithmetic (SPEC 4.2.1): 8 voices, 48 kHz, 2x oversampling
-    // from M7 on; one core = 1e9 ns per second.
-    const double voice1x = voiceNs * 8.0 * kSampleRate / 1e7;
-    const double voice2x = voice1x * 2.0;
+    const double decimatorNs = os == 2 ? timeDecimator() : 0.0;
+    std::printf ("half-band decimator: %.1f ns per host sample (one for all voices)\n", decimatorNs);
+
+    // Budget arithmetic (SPEC 4.2.1): 8 voices at the voice rate, plus the
+    // decimator and the master at 48 kHz; one core = 1e9 ns per second.
+    const double voicePct = voiceNs * 8.0 * voiceRate / 1e7;
+    const double decimatorPct = decimatorNs * kSampleRate / 1e7;
     const double masterPct = masterNs * kSampleRate / 1e7;
-    std::printf ("default preset, projected 8 voices @48 kHz: %.1f%% of a core at 1x, "
-                 "%.1f%% at 2x (budget 25%%)\n", voice1x, voice2x);
+    std::printf ("default preset, projected 8 voices @ %.0f kHz (%dx): %.1f%% of a core "
+                 "(budget 25%%), + decimator %.2f%%\n", voiceRate / 1000.0, os, voicePct, decimatorPct);
     std::printf ("default preset, projected master @48 kHz: %.2f%% of a core (budget 10%%)\n",
                  masterPct);
     std::printf ("BENCH DONE (report-only; exit 0)\n");

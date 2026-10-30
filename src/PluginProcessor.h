@@ -18,7 +18,7 @@
 
 //==============================================================================
 /**
-    VibeSynthAudioProcessor, Milestone 6 (SPEC section 13, M6).
+    VibeSynthAudioProcessor, Milestone 7 (SPEC section 13, M7).
 
     - 8 automatable float parameters "Macro 1".."Macro 8" (0..1, default 0.5)
       exposed via AudioProcessorValueTreeState, smoothed per sample by
@@ -35,6 +35,10 @@
       --render). Its voice slot state (note, gate, steal fade) survives a
       swap. At most 8 voices sound at once; the 2 spares let a stolen voice
       fade out over 2 ms while the new note starts immediately.
+    - M7: voices run at 2x the host rate with one half-band decimator on
+      their sum (SPEC 4.2); "Voice Mode" (Patch / Poly / Mono) and "Glide"
+      host parameters after the macros, pitch bend and the mod wheel (`mw`)
+      (SPEC 9.1), all in the player.
     - Runtime guard (SPEC 7.2): a voice that outputs a non-finite sample is
       zeroed, reset (rack + VM variables + mem[]) and muted for 20 ms; the
       master gets the same treatment. Output chain: trim -> DC block ->
@@ -103,6 +107,8 @@ public:
 
     //==============================================================================
     static constexpr int numMacros = vibesynth::MacroSmoother::kNumMacros;
+    static constexpr const char* voiceModeParamId = "voiceMode";  // M7
+    static constexpr const char* glideParamId = "glide";          // M7
     static constexpr double swapFadeSeconds = 0.005;   // SPEC 7.3
 
     juce::AudioProcessorValueTreeState apvts;
@@ -201,6 +207,8 @@ private:
     float fadeStep = 1.0f;
     std::array<PatchProgram*, 8> retireStash {};  // retire queue full (rare)
     std::array<std::atomic<float>*, numMacros> macroParams {};
+    std::atomic<float>* voiceModeParam = nullptr;
+    std::atomic<float>* glideParam = nullptr;
 
     // Worker -> audio, audio -> worker (SPEC 3: ownership moves only here).
     ProgramQueue<16> swapQueue;

@@ -44,22 +44,18 @@ but this single file's header grants zlib terms, so it is kept verbatim.
 Fetched via CPM, pinned to commit 2c72eaf9eac5fc0dca1919d65d606da907832618
 (see CMakeLists.txt). Upstream: https://github.com/electro-smith/DaisySP
 
-Only MIT-repo modules are built into `daisysp_mit` (Oscillator, Svf,
-LadderFilter, Adsr, Decimator, Chorus/ChorusEngine, Resonator,
+Only MIT-repo modules are built into `daisysp_mit` (Oscillator, Adsr,
+Decimator, Chorus/ChorusEngine, Resonator,
 KarplusString `String`, plus their header-only helpers and
 Dynamics/crossfade + Utility/dcblock for the string).
 `DaisySP-LGPL` is never compiled or linked (we fetch with CPM
 `DOWNLOAD_ONLY` — CPM 0.42.1 does not forward `GIT_SUBMODULES`, so the
 submodule directory may exist inertly in the CPM cache — and build only
 the whitelisted MIT sources below into `daisysp_mit`; a configure-time
-assertion fails the build if the LGPL classes ever enter the tree), so
-lexicon entry uses MIT-repo `LadderFilter` and the master bus reverb is
-our own FDN.
-
-`Source/Filters/ladder.h` carries its own in-file attribution
-(Huovilainen New Moog model, via Teensy's Audio library and Infrasonic
-Audio LLC) under the same permissive terms; the vendored headers' licence
-text is authoritative.
+assertion fails the build if the LGPL classes ever enter the tree). The
+`flt_*` filters (TPT SVF, ZDF ladder) and the master bus reverb are our
+own code, so neither DaisySP's LGPL `MoogLadder` nor its MIT `Svf` and
+`LadderFilter` are used (M7 removed the last two from the build).
 
 ## CPM.cmake — MIT (Lars Melchior et al.)
 `cmake/CPM.cmake` is the stock CPM distribution file (MIT), with its
