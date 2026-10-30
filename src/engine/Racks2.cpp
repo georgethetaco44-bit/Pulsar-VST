@@ -1,0 +1,89 @@
+// M4 — Racks2.cpp: MasterRack + FdnReverbState init/reset/metering.
+
+#include "engine/Lexicon.h"
+#include "engine/MasterRack.h"
+
+#include <cmath>
+
+namespace vibesynth {
+
+void MasterRack::recordMeter (ModuleId module, int slot, float out) noexcept
+{
+    const int m = static_cast<int> (module);
+    if (m < 0 || m >= kNumModules || slot < 0 || slot >= kMaxSlotsPerModule)
+        return;
+    const float mag = std::fabs (sanitizeFloat (out));
+    const float prev = meters[m][slot].load (std::memory_order_relaxed);
+    if (mag > prev)
+        meters[m][slot].store (mag, std::memory_order_relaxed);
+    // Plain load first: the locked RMW only runs on the first touch.
+    const uint32_t bit = static_cast<uint32_t> (1u << slot);
+    if ((touched[m].load (std::memory_order_relaxed) & bit) == 0u)
+        touched[m].fetch_or (bit, std::memory_order_relaxed);
+}
+
+void FdnReverbState::reset() noexcept
+{
+    for (int l = 0; l < kNumLines; ++l)
+    {
+        if (buf[l] != nullptr && capacity[l] > 0)
+            for (int i = 0; i < capacity[l]; ++i)
+                buf[l][i] = 0.0f;
+        writePos[l] = 0;
+        lpState[l] = 0.0f;
+    }
+}
+
+void MasterRack::init (double newSampleRate)
+{
+    sampleRate = newSampleRate > 0.0 ? newSampleRate : 48000.0;
+    const float sr = static_cast<float> (sampleRate);
+
+    chorusL.Init (sr);
+    chorusR.Init (sr);
+    chorusL.SetLfoFreq (0.7f); chorusR.SetLfoFreq (0.9f);
+    chorusL.SetFeedback (0.2f); chorusR.SetFeedback (0.2f);
+    chorusL.SetDelayMs (14.0f); chorusR.SetDelayMs (14.0f);
+    chorusMix = 0.5f;
+
+    monoXoverL.init (sampleRate);
+    monoXoverR.init (sampleRate);
+    monoRightHi = 0.0f;
+
+    // FDN storage: worst case = max base × (sr/48k) × 1.5 + margin.
+    // combBuf-style: the owner allocates reverbStorage before calling init
+    // (see PatchEngine for sizes); init only carves it up.
+    const double scale = sampleRate / 48000.0 * 1.5;
+    int offset = 0;
+    for (int l = 0; l < FdnReverbState::kNumLines; ++l)
+    {
+        const int need = static_cast<int> (FdnReverbState::kBaseLen[l] * scale) + 64;
+        reverb.buf[l] = (reverbStorage != nullptr && offset + need <= reverbCapacity)
+                        ? reverbStorage + offset : nullptr;
+        reverb.capacity[l] = (reverb.buf[l] != nullptr) ? need : 0;
+        reverb.writePos[l] = 0;
+        reverb.delayLen[l] = static_cast<float> (FdnReverbState::kBaseLen[l]);
+        reverb.lpState[l] = 0.0f;
+        offset += need;
+    }
+
+    reset();
+}
+
+void MasterRack::reset() noexcept
+{
+    monoXoverL.reset();
+    monoXoverR.reset();
+    monoRightHi = 0.0f;
+    reverb.reset();
+    reverbRight = 0.0f;
+    chorusRight = 0.0f;
+    for (int m = 0; m < kNumModules; ++m)
+    {
+        for (int s = 0; s < kMaxSlotsPerModule; ++s)
+            meters[m][s].store (0.0f, std::memory_order_relaxed);
+        touched[m].store (0u, std::memory_order_relaxed);
+    }
+}
+
+} // namespace vibesynth

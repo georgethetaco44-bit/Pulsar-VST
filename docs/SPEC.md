@@ -117,6 +117,53 @@ Universal Binaries, libtcc1 runtime helpers) is fragile.
   A newly loaded patch starts with all variables at 0.
 - VM memory (`mem[]`, for user delay lines or tables) is capped per VM
   (e.g. 65,536 slots).
+- **EEL2 allocates `mem[]` lazily** (`calloc` on first access, inside
+  `__NSEEL_RAMAlloc`), which would mean an allocation on the audio thread.
+  Every VM must call `NSEEL_VM_preallocram(vm, -1)` after
+  `NSEEL_VM_setramsize`, off the audio thread, before it is ever executed.
+  Named `gmem` is not exposed to patches.
+
+### 4.2.1 CPU budget (from Milestone 3 measurements)
+- Measured cost of one `NSEEL_code_execute` running `out = osc_sine(0, freq);`:
+  Steam Deck 66 ns/sample, CI Linux 54, Windows 49, macOS arm64 69. Almost all
+  of that is fixed per-execute overhead, not the sine.
+- **Budget: the whole voice section (8 voices, 2× oversampling, 48 kHz) uses at
+  most 25 % of one Steam Deck core.** That is **≤ 300 ns per voice per
+  oversampled sample**, including the ~66 ns execute overhead, leaving about
+  230 ns for lexicon calls. The master VM gets at most 10 % (≈ 2 µs per
+  sample), which is where reverb and chorus live.
+- Lexicon functions should be designed so that a typical patch (one or two
+  oscillators, a filter, an envelope, a shaper, feedback) fits the budget. Each
+  function's cost is benchmarked in `vibesynth_cli`.
+- Milestone 4 measured on the Deck: the execute baseline is ~32 ns. Every single
+  lexicon function fits; the heaviest are `flt_ladder` (+178 ns, because DaisySP
+  oversamples it 4× internally), `phys_resonator` (+145) and `phys_string`
+  (+112). The first test preset (supersaw + saw + sine + ladder + adsr + sat +
+  fold + safe_fb) cost 518 ns, so a full patch, not any one function, is what
+  breaks the budget.
+- Performance rules for wrappers:
+  - Cache parameter mappings on their **raw 0–1 inputs**, before any `pow`, so
+    a mapping is only recomputed when its input changes.
+  - Coefficient-heavy setters (filter cutoff/res, envelope times, resonator) run
+    at **control rate**: update every 16 samples, with linear interpolation of
+    the mapped value where zipper noise would be audible.
+  - Use cheap approximations (rational tanh, polynomial sin) where they are
+    inaudible, and precompute any per-sample `exp`.
+- After these rules the test preset costs 283 ns with `flt_lp` but still 413 ns
+  with `flt_ladder` (the ladder alone is ≈144 ns per call). The default preset
+  therefore uses `flt_lp`. In Milestone 7, when voices run at 2×, DaisySP's
+  internal 4× ladder would become 8×. So M7 replaces it with our own 1× ladder,
+  and probably our own TPT SVF too, whose coefficients can be interpolated
+  per sample. DaisySP's Svf can only step its cutoff every 16 samples.
+- Headroom is thin: one typical patch is about one filter plus one shaper
+  plus an oscillator stack. The M8 prompt examples must stay that lean.
+- The Deck bench is noisy (cheap rows vary up to 2× between runs), so judge by
+  the median of several runs and by absolute ns. The `out = 0` baseline shifts
+  with the build layout (32 vs 68 ns), so "vs base" is unreliable.
+- macOS x86_64 under Rosetta measured 2,435 ns/sample (Rosetta translates
+  JIT-generated code slowly). It is correct but not usable for real-time work.
+  The README tells Apple Silicon users to run their DAW natively, not under
+  Rosetta. Real Intel Macs run the same x86_64 JIT as Linux/Windows.
 
 ### 4.3 Variables bound into each VM
 
@@ -171,7 +218,7 @@ Universal Binaries, libtcc1 runtime helpers) is fragile.
 | `osc_supersaw(slot, hz, detune, mix)` | own (7 PolyBLEP saws) or DaisySP | 2 slots |
 | `noise()` | own | stateless white noise |
 | `flt_lp(slot, in, cutoff, res)` `flt_hp(...)` `flt_bp(...)` | DaisySP Svf | cutoff 0–1 mapped exponentially 20 Hz–20 kHz; 3 slots |
-| `flt_ladder(slot, in, cutoff, res)` | DaisySP MoogLadder (check it's not in DaisySP-LGPL; else own) | 2 slots |
+| `flt_ladder(slot, in, cutoff, res)` | DaisySP `LadderFilter` (`Filters/ladder.h`, MIT repo; MoogLadder is LGPL-only, so don't use it) | 2 slots |
 | `env_adsr(slot, gate, a, d, s, r)` | DaisySP Adsr | times mapped 1 ms–10 s; 3 slots |
 | `env_follow(slot, in)` | own | 2 slots |
 | `fx_fold(in, amount)` | own (sin-fold) | stateless |
@@ -180,8 +227,8 @@ Universal Binaries, libtcc1 runtime helpers) is fragile.
 | `fx_comb(slot, in, hz, feedback)` | own fractional delay | 2 slots |
 | `phys_resonator(slot, exciter, hz, structure, brightness, damping)` | DaisySP Resonator | 1 slot |
 | `phys_string(slot, exciter, hz, brightness, damping)` | DaisySP KarplusString | 1 slot |
-| `chaos_lorenz(slot, rate, axis)` | own ChaosMath.h | rate 0–1 maps LFO range → audio range; axis 0/1/2 |
-| `chaos_duffing(slot, hz, chaos)` | own ChaosMath.h | 2 slots |
+| `chaos_lorenz(slot, rate, axis)` | own ChaosMath.h (RK2, ≤4 substeps) | rate 0–1 maps exponentially to an orbit rate of 0.05 Hz–1 kHz; axis 0/1/2; initial state seeded per voice; 2 slots |
+| `chaos_duffing(slot, hz, chaos)` | own ChaosMath.h (forced Duffing, ±cos forcing, DC-blocked) | hz sets the forcing period (capped at ~0.076·sr); chaos 0–1 sets forcing strength 0.20–0.50; 2 slots |
 | `util_safe_fb(slot, x)` | own | 20 Hz DC block + slew limit + tanh. All feedback must pass through this |
 | `util_xover_lo(slot, in)` / `util_xover_hi(slot)` | own Linkwitz-Riley 4th order @ 100 Hz | `_hi` returns the high band of the last `_lo` call |
 | `util_bytebeat(t, mode)` | own | bitwise helpers; integer ops done in C++ |
@@ -192,8 +239,8 @@ Universal Binaries, libtcc1 runtime helpers) is fragile.
 |---|---|
 | `bus_sat(in, drive)` | stereo-safe saturation (call per channel) |
 | `bus_mono_low(l, r)` / `bus_mono_low_r()` | sums sub-100 Hz to mono, returns new L (and R via second call) |
-| `bus_chorus(l, r, depth, mix)` | own or DaisySP Chorus |
-| `bus_reverb(l, r, size, mix)` | own small FDN or DaisySP (non-LGPL only) |
+| `bus_chorus(l, r, depth, mix)` / `bus_chorus_r()` | own or DaisySP Chorus; returns new L, R via the second call (same pattern as `bus_mono_low`) |
+| `bus_reverb(l, r, size, mix)` / `bus_reverb_r()` | own small FDN (DaisySP ReverbSc is in the LGPL repo, so don't use it); returns new L, R via the second call |
 
 Always on after the master code (not callable): DC block → peak limiter →
 hard clip at ±1.0.
@@ -554,9 +601,11 @@ Each milestone has an exit test. Don't start the next until it passes.
    with one registered native function, run it per sample. *Exit: runs with JIT
    on Linux, Windows x64, macOS arm64 + x86_64 in CI (`vibesynth_cli` smoke
    test). If not, switch that platform to EEL2 portable mode and record it.*
+   **Result: passed. JIT on all four targets, no portable fallback needed.**
 4. **Lexicon core.** VoiceRack/MasterRack, DaisySP wrappers, ChaosMath,
    Utilities, auto-metering, normalized clamped API. *Exit: a hand-written
-   preset using 6+ functions sounds right in REAPER.*
+   preset using 6+ functions sounds right in REAPER, and its benchmark on the
+   Steam Deck is within the §4.2.1 budget.*
 5. **Patch system & safety.** `.vibepatch` load/save, offline test matrix, trim,
    runtime guard, master limiter, fade-swap protocol with retire queue, state
    persistence. *Exit: a deliberately broken patch is rejected; switching

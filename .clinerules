@@ -26,6 +26,8 @@
    release zips, the app-data folder and the README. "VibeSynth" is the
    internal codename and may appear only in code: the CMake target, class
    names, `vibesynth_cli` and the `VIBESYNTH_API_KEY` env var.
-10. Never put a directory on an include path if it contains non-header files.
-    Never name a file with a name that matches a standard header (version,
-    limits, string, etc.) on any OS: macOS and Windows are case-insensitive.
+10. A directory on an include path must not contain extensionless files
+    (e.g. VERSION, LICENSE) or any file whose name, ignoring case and
+    extension, matches a standard header (version, limits, string, etc.):
+    macOS and Windows are case-insensitive, so `#include <version>` can pick
+    such a file up. .cpp files next to headers are fine.
