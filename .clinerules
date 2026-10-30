@@ -1,0 +1,23 @@
+# VibeSynthVST — Cline working rules (Milestone 1)
+
+1. SPEC.md is the source of truth. docs/SPEC.md governs all design
+   decisions; do not deviate from it without asking the user first.
+2. Work one milestone at a time (SPEC section 13). Each milestone must pass
+   its exit test before the next one starts.
+3. All builds run inside the Distrobox container "juce" (Ubuntu 22.04).
+   The terminal is on the SteamOS host, so wrap every build command as:
+   distrobox enter juce -- <command>
+4. After every code change, run the build and fix errors before continuing.
+5. Real-time rules (SPEC section 11): on the audio thread, no allocation,
+   locks, logging, I/O, exceptions, or capturing std::function. Threads
+   communicate through SPSC queues and atomics only. No -ffast-math on
+   validation, safety or guard code. NaN/Inf checks use bit-pattern tests,
+   not std::isnan.
+6. Dependencies must be permissive (MIT/BSD/zlib). Never add LGPL/GPL
+   dependencies other than JUCE itself. Keep THIRD_PARTY_LICENSES.md up to
+   date as dependencies are added.
+7. Never hardcode API keys or write them to any file in the repo. The key
+   lives in the settings panel / VIBESYNTH_API_KEY env var only (SPEC 6.5).
+8. Do not invent JUCE APIs. If unsure about a JUCE signature or behaviour,
+   check the JUCE source in the build's CPM cache (build/**/_deps/) before
+   writing code.
