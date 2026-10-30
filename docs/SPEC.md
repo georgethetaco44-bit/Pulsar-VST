@@ -1,4 +1,4 @@
-# VibeSynthVST — Specification (v2)
+# Pulsar — Specification (v2)
 
 > v2 replaces the original architecture draft. Key changes: EEL2 replaces
 > libtcc, the DSP library list is cut to an MVP core, the safety system gains a
@@ -21,6 +21,12 @@
   (matches the Linux CI runner). CMake + Ninja. REAPER (Flatpak) for testing.
 - **Target formats:** VST3 + Standalone on Windows x64, macOS (x86_64 + arm64),
   Linux x86_64.
+- **Naming:** everything a user sees is **Pulsar**: the plugin name in the DAW,
+  the `.vst3` bundle, the Standalone app, window titles, release zips, the
+  app-data folder and the README. "VibeSynth" is the internal codename and may
+  appear only in code: the CMake target, class names, `vibesynth_cli` and the
+  `VIBESYNTH_API_KEY` env var.
+- **Repo:** https://github.com/georgethetaco44-bit/Pulsar-VST (public, AGPLv3).
 
 ---
 
@@ -504,7 +510,7 @@ A console target sharing the engine code, with no DAW or UI:
 ## 12. Repository layout
 
 ```
-Pulsar/                         (repo root; product name VibeSynthVST)
+Pulsar/                         (repo root; product name Pulsar, codename VibeSynth)
 ├── CMakeLists.txt
 ├── cmake/                      CPM.cmake, EEL2.cmake, platform helpers
 ├── .github/workflows/build.yml
