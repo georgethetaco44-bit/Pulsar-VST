@@ -120,6 +120,16 @@ set_target_properties(daisysp_mit PROPERTIES
 target_compile_options(daisysp_mit PRIVATE
     $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-O3;-fno-fast-math>
     $<$<CXX_COMPILER_ID:MSVC>:/O2>)
+# MSVC only: two GCC-isms in the whitelisted sources, fixed here rather than
+# by patching the CPM checkout. Control/adsr.cpp uses M_E (needs
+# _USE_MATH_DEFINES); Filters/ladder.cpp uses
+# __attribute__((optimize("unroll-loops"))), which the force-included compat
+# header defines away. Force-included by absolute path, so cmake/msvc is
+# never on an include path (repo rule 10).
+target_compile_definitions(daisysp_mit PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:_USE_MATH_DEFINES>)
+target_compile_options(daisysp_mit PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/msvc/daisysp_msvc_compat.h>)
 
 # JUCE 8 pinned to an exact release tag (SPEC 10.1).
 CPMAddPackage(

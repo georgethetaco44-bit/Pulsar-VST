@@ -346,8 +346,11 @@ bool smokeAllFunctions()
     {
         const vibesynth_cli::BenchCase& bc = vibesynth_cli::kBenchCases[ci];
         const PatchStrings ps = { "fb1 = 0; prev = 0;", bc.voice, bc.master };
-        EelVoice v (ps, kSampleRate, 8u);
-        EelMaster m (ps, kSampleRate);
+        // Heap, not stack: EelVoice is ~87 KB (Windows' default stack is 1 MB).
+        const auto vp = std::make_unique<EelVoice> (ps, kSampleRate, 8u);
+        const auto mp = std::make_unique<EelMaster> (ps, kSampleRate);
+        EelVoice& v = *vp;
+        EelMaster& m = *mp;
         if (! v.isValid() || ! m.isValid())
         {
             ok = check (false, "%s compiles: %s %s", bc.name,
@@ -383,8 +386,10 @@ bool smokeAllFunctions()
 bool smokePreset()
 {
     using vibesynth::kTestPreset;
-    EelVoice voice (kTestPreset, kSampleRate, 0x1234u);
-    EelMaster master (kTestPreset, kSampleRate);
+    const auto voicePtr = std::make_unique<EelVoice> (kTestPreset, kSampleRate, 0x1234u);
+    const auto masterPtr = std::make_unique<EelMaster> (kTestPreset, kSampleRate);
+    EelVoice& voice = *voicePtr;
+    EelMaster& master = *masterPtr;
     bool ok = check (voice.isValid(), "test preset voice compiles (init+voice)%s%s",
                      voice.isValid() ? "" : ": ", voice.compileError().c_str());
     ok = check (master.isValid(), "test preset master compiles%s%s",

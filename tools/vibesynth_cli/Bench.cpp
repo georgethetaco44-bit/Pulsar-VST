@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -156,7 +157,8 @@ std::string swapCall (const char* code, const std::string& from, const std::stri
 void warmUp()
 {
     const vibesynth::PatchStrings ps = { "0;", "out = osc_saw(0, freq);", "outl = inl; outr = inr;" };
-    vibesynth::EelVoice v (ps, kSampleRate, 1u);
+    const auto vp = std::make_unique<vibesynth::EelVoice> (ps, kSampleRate, 1u);
+    vibesynth::EelVoice& v = *vp;
     double macros[vibesynth::MacroSmoother::kNumMacros] = {};
     fillMacros (macros, 0.5);
     volatile float sink = 0.0f;
@@ -194,8 +196,11 @@ int runBench()
     {
         const BenchCase& bc = kBenchCases[ci];
         const PatchStrings ps = { "fb1 = 0; prev = 0;", bc.voice, bc.master };
-        EelVoice v (ps, kSampleRate, 7u);
-        EelMaster m (ps, kSampleRate);
+        // Heap, not stack: EelVoice is ~87 KB (Windows' default stack is 1 MB).
+        const auto vp = std::make_unique<EelVoice> (ps, kSampleRate, 7u);
+        const auto mp = std::make_unique<EelMaster> (ps, kSampleRate);
+        EelVoice& v = *vp;
+        EelMaster& m = *mp;
         if (! v.isValid() || ! m.isValid())
         {
             std::printf ("%-24s COMPILE FAIL: %s %s\n", bc.name,
@@ -236,9 +241,12 @@ int runBench()
     std::printf ("\n-- full test preset (55 Hz, gate held) --\n");
     std::printf ("%-24s %11s  %8s  %6s\n", "part", "ns", "vs base", "budget");
 
-    EelVoice pv (kTestPreset, kSampleRate, 9u);
-    EelMaster pm (kTestPreset, kSampleRate);
-    EelVoice av (altPatch, kSampleRate, 9u);
+    const auto pvPtr = std::make_unique<EelVoice> (kTestPreset, kSampleRate, 9u);
+    const auto pmPtr = std::make_unique<EelMaster> (kTestPreset, kSampleRate);
+    const auto avPtr = std::make_unique<EelVoice> (altPatch, kSampleRate, 9u);
+    EelVoice& pv = *pvPtr;
+    EelMaster& pm = *pmPtr;
+    EelVoice& av = *avPtr;
     if (! pv.isValid() || ! pm.isValid() || ! av.isValid())
     {
         std::printf ("preset COMPILE FAIL: %s %s %s\n", pv.compileError().c_str(),
