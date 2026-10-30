@@ -1,0 +1,82 @@
+# Milestone 3 — EEL2 (Milestone 2 rules carry over: SPEC is source of truth,
+# one milestone at a time, Distrobox `juce` builds, no audio-thread
+# allocation/locks/logging/NaN-`std::isnan`, permissive deps only,
+# Pulsar externally / VibeSynth in code.)
+
+# Builds the vendored EEL2 subset in third_party/WDL as a static library.
+# See third_party/WDL/VERSION for the WDL pin and exactly which files are
+# vendored. Mirrors ysfx's approach: one static lib, portable-mode switch,
+# Windows-x64 prebuilt asm object, GAS .S for gcc/clang (including the
+# macOS Universal slices — the arch selection is all preprocessor macros,
+# so a single Universal compile works).
+option(VIBESYNTH_EEL_PORTABLE "Use EEL2 portable (non-JIT) bytecode mode" OFF)
+
+set(VIBESYNTH_WDL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/WDL/WDL")
+set(VIBESYNTH_EEL2_DIR "${VIBESYNTH_WDL_DIR}/eel2")
+
+set(VIBESYNTH_EEL2_SOURCES
+    "${VIBESYNTH_EEL2_DIR}/nseel-caltab.c"
+    "${VIBESYNTH_EEL2_DIR}/nseel-cfunc.c"
+    "${VIBESYNTH_EEL2_DIR}/nseel-compiler.c"
+    "${VIBESYNTH_EEL2_DIR}/nseel-eval.c"
+    "${VIBESYNTH_EEL2_DIR}/nseel-lextab.c"
+    "${VIBESYNTH_EEL2_DIR}/nseel-ram.c"
+    "${VIBESYNTH_EEL2_DIR}/nseel-yylex.c")
+
+add_library(eel2 STATIC)
+target_sources(eel2 PRIVATE ${VIBESYNTH_EEL2_SOURCES})
+
+# EEL2 is linked into the plugin shared objects: it must be position
+# independent on every platform (ysfx sets CMAKE_POSITION_INDEPENDENT_CODE
+# globally for the same reason).
+set_target_properties(eel2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# Include layout mirrors upstream (WDL/eel2/*.c #include "../wdltypes.h"
+# etc.), so the include root is third_party/WDL/WDL's parent is wrong: the
+# EEL2 headers want "WDL/eel2/ns-eel.h" or "../wdltypes.h" relative paths.
+# We expose third_party/WDL so consumers write "WDL/eel2/ns-eel.h".
+target_include_directories(eel2 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/WDL")
+
+target_link_libraries(eel2 PRIVATE Threads::Threads)
+
+if (VIBESYNTH_EEL_PORTABLE)
+    # EEL2 bytecode interpreter: no executable pages, ~1/8 JIT speed.
+    target_compile_definitions(eel2 PUBLIC EEL_TARGET_PORTABLE)
+else()
+    if (MSVC)
+        # MSVC Win64: WDL's shipped prebuilt object (from WDL's
+        # regenerate-x64-objects.sh, `nasm -f win64`). No NASM step needed.
+        # Other MSVC arches fall back: aarch64/arm64ec haves no prebuilt
+        # object here — portable mode must be used for those slices.
+        if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64)$" OR MSVC_C_ARCHITECTURE_ID STREQUAL "x64")
+            target_sources(eel2 PRIVATE "${VIBESYNTH_EEL2_DIR}/asm-nseel-x64.obj")
+        else()
+            message(WARNING "VibeSynth: no prebuilt EEL2 asm for this MSVC arch; "
+                            "EEL2 JIT glue will be missing. Consider -DVIBESYNTH_EEL_PORTABLE=ON.")
+        endif()
+    else()
+        # gcc/clang (Linux, macOS incl. Universal): ysfx's GAS conversion.
+        # The file self-guards to __x86_64__ (empty on arm64, which uses
+        # WDL's C glue via asm-nseel-aarch64-gcc.c), and handles non-Apple
+        # vs Apple symbol mangling, so one Universal compile just works.
+        enable_language(ASM)
+        set_source_files_properties(
+            "${VIBESYNTH_EEL2_DIR}/asm-nseel-x64-sse.S" PROPERTIES LANGUAGE ASM)
+        target_sources(eel2 PRIVATE "${VIBESYNTH_EEL2_DIR}/asm-nseel-x64-sse.S")
+    endif()
+endif()
+
+# Matches WDL's own Makefile / ysfx flags for this subset.
+if (NOT WIN32)
+    target_compile_definitions(eel2 PRIVATE _FILE_OFFSET_BITS=64)
+endif()
+if (MSVC)
+    target_compile_definitions(eel2 PRIVATE _CRT_NONSTDC_NO_WARNINGS)
+else()
+    # wdltypes.h wants signed char; ARM targets default to unsigned.
+    target_compile_options(eel2 PUBLIC -fsigned-char)
+endif()
+
+# Never fast-math on this target: bit-pattern NaN/Inf checks (SPEC §11)
+# must survive compiler flags anywhere EEL2 output is validated.
+target_compile_options(eel2 PRIVATE $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-fno-fast-math>)

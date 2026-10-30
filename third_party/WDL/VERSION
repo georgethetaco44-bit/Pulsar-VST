@@ -1,0 +1,37 @@
+WDL (EEL2 subset)
+================
+Upstream: https://github.com/justinfrankel/WDL
+Commit:   61c5553aad0d257775a4dd7bf36b8be617ec8281 (HEAD as of 2026-10-21)
+Date pinned: 2026-10-30
+
+Vendored files: WDL/eel2/{nseel-caltab.c,nseel-cfunc.c,nseel-compiler.c,
+nseel-eval.c,nseel-lextab.c,nseel-ram.c,nseel-yylex.c,y.tab.c,y.tab.h,
+ns-eel.h,ns-eel-int.h,ns-eel-addfuncs.h,ns-eel-func-ref.h,glue_*.h,
+asm-nseel-*-gcc.c,asm-nseel-x86-msvc.c,asm-nseel-x64-sse.asm,
+asm-nseel-x64.obj} and WDL/{wdltypes.h,wdlcstring.h,denormal.h,
+utf8_extended.h}. Nothing else from WDL is used.
+
+EEL2 has no bison/flex dependency: the pregenerated parser y.tab.c and the
+handwritten lexer (NSEEL_SUPER_MINIMAL_LEXER, on by default) are shipped
+upstream, so yacc/flex are never invoked.
+
+`asm-nseel-x64-sse.S` is ysfx's GAS conversion of the WDL x64 asm, used for
+gcc/clang builds (incl. macOS Universal, see cmake/EEL2.cmake):
+  ysfx: https://github.com/jpcima/ysfx
+  commit: 8077347ccf4115567aed81400281dca57acbb0cc (HEAD as of 2022-07-31)
+  file: sources/eel2-gas/sources/asm-nseel-x64-sse.S
+Ported onto the pinned WDL for two upstream changes: NSEEL_RAM_BLOCKS_LOG2
+9 -> 11 and the MXCSR mask `or ah, 136` -> `or ax, CSR_MASK` (FTZ +
+all exception masks) at 3 sites (eel_callcode64, eel_enterfp x2). If WDL's
+asm changes again, re-port the delta here; the GAS/original drift check is
+`cmake/EEL2.cmake`'s ref-hash comment.
+
+MSVC Win64 uses WDL's shipped prebuilt `asm-nseel-x64.obj` (produced
+upstream by WDL/eel2/regenerate-x64-objects.sh via `nasm -f win64`), so no
+NASM step is needed on Windows CI:
+  sha512: 9319592794fb624b6734df2207422155725d707bfa7e89b20c6560dc3fcd04bac8ccdbb557f7e5c861611d0252158c36d790ae372072fb3098f7c56b74d943be
+
+Licence: there is no standalone licence file in the WDL repo. EEL2 carries
+the standard zlib-style Cockos licence text in every source header; it is
+reproduced in THIRD_PARTY_LICENSES.md and the vendored headers themselves
+are the authoritative copy.

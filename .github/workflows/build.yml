@@ -75,10 +75,46 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
 
-      # The vibesynth_cli --selftest gate arrives with M3/M6. Until then this
-      # step is intentionally absent; pluginval below is the M2 exit test.
-      # - name: vibesynth_cli selftest (M3/M6)
-      #   run: ./build/vibesynth_cli --selftest
+      # M3 exit test (SPEC §13 M3): JIT-compile the hardcoded voice program
+      # and render 1 s. --smoketest exits 1 on any failure, failing the job.
+      # It passes only in a real JIT mode (portable is an explicit opt-in).
+      - name: vibesynth_cli smoketest (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          ./build/vibesynth_cli --smoketest
+
+      - name: vibesynth_cli smoketest (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          ./build/vibesynth_cli.exe --smoketest
+
+      # macOS Universal: prove BOTH slices actually execute JIT code — the
+      # native arm64 run, plus the x86_64 slice under Rosetta. Rosetta may
+      # not be preinstalled, hence the probe + sudo install step (passwordless
+      # sudo is available on GitHub runners). If this install ever stops
+      # working, fall back to a macos-13 (Intel) job for the x86_64 slice.
+      - name: Prove Universal slices (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          lipo -info build/vibesynth_cli
+          lipo -info build/vibesynth_cli | grep -q "x86_64" || { echo "ERROR: x86_64 slice missing in vibesynth_cli"; exit 1; }
+          lipo -info build/vibesynth_cli | grep -q "arm64" || { echo "ERROR: arm64 slice missing in vibesynth_cli"; exit 1; }
+          arch -x86_64 /usr/bin/true 2>/dev/null || sudo softwareupdate --install-rosetta --agree-to-license
+
+      - name: vibesynth_cli smoketest (macOS arm64)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ./build/vibesynth_cli --smoketest
+
+      - name: vibesynth_cli smoketest (macOS x86_64 via Rosetta)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          arch -x86_64 ./build/vibesynth_cli --smoketest
 
       # pluginval v1.0.4 is the latest stable release (v2.x is pre-release).
       # Validating the VST3 at strictness level 5 (Linux runs headless under

@@ -32,6 +32,12 @@ option(VIBESYNTH_COPY_PLUGIN "Copy built plugins to system plugin folders" ON)
 
 include(cmake/CPM.cmake)
 
+# Threads needed by EEL2 (worker mutexes around RAM alloc / tables).
+find_package(Threads REQUIRED)
+
+# EEL2 static library (SPEC §4/§10.1; see cmake/EEL2.cmake).
+include(cmake/EEL2.cmake)
+
 # JUCE 8 pinned to an exact release tag (SPEC 10.1).
 CPMAddPackage(
     NAME JUCE
@@ -63,12 +69,32 @@ juce_add_plugin(VibeSynthVST
     ${VIBESYNTH_LINUX_OPTS})
 
 target_sources(VibeSynthVST PRIVATE
-    src/PluginProcessor.cpp)
+    src/PluginProcessor.cpp
+    src/patch/PatchEngine.cpp)
+
+target_include_directories(VibeSynthVST PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 target_compile_definitions(VibeSynthVST PUBLIC
     JUCE_VST3_CAN_REPLACE_VST2=0)
 
 target_link_libraries(VibeSynthVST PRIVATE
+    eel2
     juce::juce_audio_utils
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
+
+# M3 spike: the shared DSP engine (also linked into the plugin above).
+add_library(vibesynth_engine STATIC
+    src/patch/PatchEngine.cpp)
+target_include_directories(vibesynth_engine PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/WDL")
+target_link_libraries(vibesynth_engine PUBLIC eel2)
+
+# M3 spike: headless test tool (SPEC §10.3). Console target sharing the
+# engine code; run in CI with --smoketest.
+add_executable(vibesynth_cli tools/vibesynth_cli/main.cpp)
+target_include_directories(vibesynth_cli PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(vibesynth_cli PRIVATE vibesynth_engine)

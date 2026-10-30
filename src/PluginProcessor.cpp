@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
 
+#include "patch/PatchEngine.h"
+
 #include <cmath>
 
 namespace
@@ -12,15 +14,20 @@ public:
     bool appliesToChannel (int) override { return true; }
 };
 
-// Simple sine voice with a short click-free envelope.
+// M3: sine voice driven by an EEL2 VM. The per-sample DSP is the hardcoded
+// program `out = osc_sine(0, freq);` — one native function call with the
+// per-voice context (SPEC §4.2). ADSR and output level behaviour are
+// unchanged from M1/M2; `out` is clamped and NaN/Inf-sanitised per SPEC §11.
 //
-// renderNextBlock ADDS into the output buffer, starting at startSample for
-// numSamples. It never overwrites and never clears: the Synthesiser mixes all
-// voices additively, and the processor clears only surplus channels.
+// Threading: the EelVoice is compiled in the constructor (off the audio
+// thread). The audio thread only runs renderSample() — no allocation,
+// locks, or logging. A failed compile yields silence plus one logged line
+// from prepareVoice (off-thread), never a crash.
 class SineVoice final : public juce::SynthesiserVoice
 {
 public:
     SineVoice()
+        : eel ("out = osc_sine(0, freq);")
     {
         // ~5 ms attack, no decay, full sustain, ~30 ms release: no clicks.
         adsr.setParameters ({ 0.005f, 0.0f, 1.0f, 0.03f });
@@ -34,11 +41,10 @@ public:
     void startNote (int midiNoteNumber, float velocity,
                     juce::SynthesiserSound*, int /*currentPitchWheelPosition*/) override
     {
-        currentAngle = 0.0;
         level = velocity;
-        angleDelta = juce::MathConstants<double>::twoPi
-                   * juce::MidiMessage::getMidiNoteInHertz (midiNoteNumber)
-                   / getSampleRate();
+        freqHz = juce::MidiMessage::getMidiNoteInHertz (midiNoteNumber);
+        gateHeld = true;
+        eel.resetOscillator();
 
         adsr.reset();
         adsr.noteOn();
@@ -46,6 +52,7 @@ public:
 
     void stopNote (float /*velocity*/, bool allowTailOff) override
     {
+        gateHeld = false;
         if (allowTailOff)
         {
             adsr.noteOff();
@@ -66,6 +73,19 @@ public:
     {
         SynthesiserVoice::setCurrentPlaybackSampleRate (newRate);
         adsr.setSampleRate (newRate);
+        eel.setSampleRate (newRate);
+    }
+
+    // Off audio thread: called from prepareToPlay. Reports a compile
+    // failure exactly once per voice (logged, not thrown, not on-thread).
+    void prepareVoice()
+    {
+        if (! eel.isValid() && ! compileErrorLogged)
+        {
+            compileErrorLogged = true;
+            juce::Logger::writeToLog ("Pulsar: EEL2 voice program failed: "
+                                      + juce::String (eel.compileError()));
+        }
     }
 
     void renderNextBlock (juce::AudioBuffer<float>& outputBuffer,
@@ -73,8 +93,6 @@ public:
     {
         if (! isVoiceActive())
             return;
-
-        constexpr double twoPi = juce::MathConstants<double>::twoPi;
 
         const int numChannels = outputBuffer.getNumChannels();
         int sampleIndex = startSample;
@@ -89,11 +107,10 @@ public:
             }
 
             const float envValue = adsr.getNextSample();
-            const float sample = static_cast<float> (std::sin (currentAngle)) * level * envValue;
-
-            currentAngle += angleDelta;
-            if (currentAngle >= twoPi)
-                currentAngle -= twoPi;
+            // renderSample() clamps and sanitises `out` (SPEC §11); the
+            // voice stays silent if its VM failed to compile.
+            const float sample = eel.renderSample (freqHz, gateHeld ? 1.0 : 0.0)
+                               * level * envValue;
 
             for (int ch = 0; ch < numChannels; ++ch)
                 outputBuffer.addSample (ch, sampleIndex, sample);
@@ -105,9 +122,11 @@ public:
 
 private:
     juce::ADSR adsr;
-    double currentAngle = 0.0;
-    double angleDelta = 0.0;
+    vibesynth::EelVoice eel;
+    double freqHz = 440.0;
     float level = 0.0f;
+    bool gateHeld = false;
+    bool compileErrorLogged = false;
 };
 } // namespace
 
@@ -208,6 +227,11 @@ void VibeSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     // size works (pluginval will exercise this in M2).
     juce::ignoreUnused (samplesPerBlock);
     synth.setCurrentPlaybackSampleRate (sampleRate);
+
+    // M3: surface an EEL2 compile failure once, off the audio thread.
+    for (int i = 0; i < synth.getNumVoices(); ++i)
+        if (auto* v = dynamic_cast<SineVoice*> (synth.getVoice (i)))
+            v->prepareVoice();
 }
 
 void VibeSynthAudioProcessor::releaseResources()
