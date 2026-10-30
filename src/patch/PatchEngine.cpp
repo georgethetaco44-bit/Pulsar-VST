@@ -264,6 +264,8 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
     gate_ = mustRegVar (vm_, "gate", ok);
     trig_ = mustRegVar (vm_, "trig", ok);
     srate_ = mustRegVar (vm_, "srate", ok);
+    bpm_ = mustRegVar (vm_, "bpm", ok);
+    beat_ = mustRegVar (vm_, "beat", ok);
     for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
         macro_[i] = mustRegVar (vm_, kMacroNames[i], ok);
     out_ = mustRegVar (vm_, "out", ok);
@@ -278,6 +280,7 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
         return;
     }
     *srate_ = rackStorage_.sampleRate;
+    *bpm_ = Transport::kDefaultBpm;
     for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
         *macro_[i] = 0.5;
 
@@ -318,7 +321,7 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
         if (voiceCode_ != nullptr) { NSEEL_code_free (voiceCode_); voiceCode_ = nullptr; }
         NSEEL_VM_free (vm_);
         vm_ = nullptr;
-        freq_ = note_ = vel_ = gate_ = trig_ = srate_ = out_ = nullptr;
+        freq_ = note_ = vel_ = gate_ = trig_ = srate_ = bpm_ = beat_ = out_ = nullptr;
         for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
             macro_[i] = nullptr;
         return;
@@ -337,11 +340,14 @@ EelVoice::~EelVoice()
 // SPEC §4.3: trig is 1 on the note-on sample only. It is 1 while init runs
 // and stays 1 into the next renderSample() (the note-on sample), which
 // clears it after executing the voice code.
-void EelVoice::noteOn (double freq, double note, double vel) noexcept
+void EelVoice::noteOn (double freq, double note, double vel,
+                       const Transport& transport) noexcept
 {
     if (vm_ == nullptr || freq_ == nullptr)
         return;
     *freq_ = freq;
+    if (bpm_ != nullptr) *bpm_ = transport.bpm;
+    if (beat_ != nullptr) *beat_ = transport.beat;
     if (note_ != nullptr) *note_ = note;
     if (vel_ != nullptr) *vel_ = vel;
     if (gate_ != nullptr) *gate_ = 1.0;
@@ -362,10 +368,13 @@ void EelVoice::resetState() noexcept
     zeroVmRam (vm_);
     if (srate_ != nullptr)
         *srate_ = rackStorage_.sampleRate;
+    if (bpm_ != nullptr)
+        *bpm_ = Transport::kDefaultBpm;
 }
 
 float EelVoice::renderSample (double freq, double gate, double note, double vel,
-                              const double macros[MacroSmoother::kNumMacros]) noexcept
+                              const double macros[MacroSmoother::kNumMacros],
+                              const Transport& transport) noexcept
 {
     if (voiceCode_ == nullptr || freq_ == nullptr || out_ == nullptr)
         return 0.0f;
@@ -374,6 +383,8 @@ float EelVoice::renderSample (double freq, double gate, double note, double vel,
     if (note_ != nullptr) *note_ = note;
     if (vel_ != nullptr) *vel_ = vel;
     if (srate_ != nullptr) *srate_ = rackStorage_.sampleRate;
+    if (bpm_ != nullptr) *bpm_ = transport.bpm;
+    if (beat_ != nullptr) *beat_ = transport.beat;
     for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
         if (macro_[i] != nullptr)
             *macro_[i] = macros[i];
@@ -398,7 +409,8 @@ EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
     rackStorage_.reverbStorage = reverbStorage_;
     rackStorage_.reverbCapacity = reverbCapacity_;
     rackStorage_.init (sampleRate > 0.0 ? sampleRate : 48000.0);
-    rackCtx_.voice = nullptr;
+    voiceRackStorage_.init (sampleRate > 0.0 ? sampleRate : 48000.0, kRackSeed);
+    rackCtx_.voice = &voiceRackStorage_;
     rackCtx_.master = &rackStorage_;
 
     if (! ensureEelInitialised() || ! isJitUsable())
@@ -422,6 +434,8 @@ EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
     outl_ = mustRegVar (vm_, "outl", ok);
     outr_ = mustRegVar (vm_, "outr", ok);
     srate_ = mustRegVar (vm_, "srate", ok);
+    bpm_ = mustRegVar (vm_, "bpm", ok);
+    beat_ = mustRegVar (vm_, "beat", ok);
     for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
         macro_[i] = mustRegVar (vm_, kMacroNames[i], ok);
     if (! ok)
@@ -432,6 +446,7 @@ EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
         return;
     }
     *srate_ = rackStorage_.sampleRate;
+    *bpm_ = Transport::kDefaultBpm;
     for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
         *macro_[i] = 0.5;
 
@@ -448,7 +463,7 @@ EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
         compileError_ = codeError (vm_);
         NSEEL_VM_free (vm_);
         vm_ = nullptr;
-        inl_ = inr_ = outl_ = outr_ = srate_ = nullptr;
+        inl_ = inr_ = outl_ = outr_ = srate_ = bpm_ = beat_ = nullptr;
         for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
             macro_[i] = nullptr;
         return;
@@ -466,7 +481,8 @@ EelMaster::~EelMaster()
 }
 
 void EelMaster::renderSample (float inL, float inR, float& outL, float& outR,
-                              const double macros[MacroSmoother::kNumMacros]) noexcept
+                              const double macros[MacroSmoother::kNumMacros],
+                              const Transport& transport) noexcept
 {
     if (masterCode_ == nullptr || inl_ == nullptr || outl_ == nullptr)
     {
@@ -477,6 +493,8 @@ void EelMaster::renderSample (float inL, float inR, float& outL, float& outR,
     *inl_ = inL;
     if (inr_ != nullptr) *inr_ = inR;
     if (srate_ != nullptr) *srate_ = rackStorage_.sampleRate;
+    if (bpm_ != nullptr) *bpm_ = transport.bpm;
+    if (beat_ != nullptr) *beat_ = transport.beat;
     for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
         if (macro_[i] != nullptr)
             *macro_[i] = macros[i];
@@ -487,9 +505,15 @@ void EelMaster::renderSample (float inL, float inR, float& outL, float& outR,
     outR = (outr_ != nullptr) ? rawOutput (*outr_) : outL;
 }
 
-void EelMaster::resetState() noexcept
+void EelMaster::resetRacks() noexcept
 {
     rackStorage_.reset();
+    voiceRackStorage_.reset();
+}
+
+void EelMaster::resetState() noexcept
+{
+    resetRacks();
     if (vm_ == nullptr)
         return;
     for (EEL_F_PTR v : vars_)
@@ -497,6 +521,8 @@ void EelMaster::resetState() noexcept
     zeroVmRam (vm_);
     if (srate_ != nullptr)
         *srate_ = rackStorage_.sampleRate;
+    if (bpm_ != nullptr)
+        *bpm_ = Transport::kDefaultBpm;
 }
 
 const char* eelExecutionMode()

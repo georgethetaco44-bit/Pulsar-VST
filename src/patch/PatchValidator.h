@@ -24,8 +24,9 @@ class PatchProgram
 public:
     static constexpr int kNumVoices = 10;
 
-    // Compiles all 11 VMs. On failure returns null and sets `error` to
-    // "compile error in <section>: <EEL2 text>". Trim comes from
+    // Runs the loop-nesting check, then compiles all 11 VMs. On failure
+    // returns null and sets `error` ("loops nested too deep ..." or
+    // "compile error in <section>: <EEL2 text>"). Trim comes from
     // patch.trim (set it from the validator first).
     static std::unique_ptr<PatchProgram> build (const Patch& patch, double sampleRate,
                                                 std::string& error);
@@ -59,7 +60,12 @@ struct ValidationResult
     bool cancelled = false;    // stopped early through `cancel`
     double trim = 1.0;         // gain putting the worst-case peak at -3 dBFS (<= 1)
     double peak = 0.0;         // worst-case |master output| before trim
+    // Per-configuration peaks (note-major: notes 28, 40, 55 x macros all 0,
+    // defaults, all 1); 0 for configurations that never ran.
+    double configPeak[9] = {};
+    double configDc[9] = {};   // |mean| over the last 0.5 s, same order
     double voiceCpu = 0.0;     // voice render time / audio time, all configs
+    double configCpu = 0.0;    // worst configuration: voice + master time / its 1 s
     double wallMs = 0.0;       // whole matrix incl. compiling the test VMs
 
     bool ok() const noexcept { return status == PatchStatus::Ok && ! cancelled; }
@@ -68,8 +74,11 @@ struct ValidationResult
 // Runs the SPEC §7.1 matrix at `sampleRate` on fresh test VMs (never on a
 // PatchProgram's voices): notes {28, 40, 55} x macros {all 0, defaults,
 // all 1}, note-on at 0, note-off at 0.7 s, 1 s each, measured on the
-// master output before trim/limiter. Compile errors are reported first.
-// `cancel` (optional) is polled with the 64-sample deadline check.
+// master output before trim/limiter. The loop-nesting check and compile
+// errors are reported first. `cancel` (optional) is polled with the
+// deadline after every voice sample. A configuration whose voice + master
+// rendering takes more than 50 % of real time (500 ms for its 1 s) is
+// rejected as too slow: a runaway guard, not the §4.2.1 design budget.
 // `cpuScale` multiplies the CPU limit and the deadline; the plugin always
 // uses 1. Only vibesynth_cli raises it, when it runs as x86_64 under
 // Rosetta, where JIT code is ~8x slower (SPEC §4.2.1) and no patch runs in

@@ -4,8 +4,8 @@
 //
 // One `EelVoice` owns one EEL2 VM compiled from a patch's `init` + `voice`
 // sections (two code handles on the same VM, sharing variables). One
-// `EelMaster` owns one VM compiled from `master` with a `MasterRack`
-// context. The audio thread only writes bound variables and calls
+// `EelMaster` owns one VM compiled from `master` with a `MasterRack` and
+// (M6, SPEC §5.2) its own `VoiceRack`, so the whole lexicon works there. The audio thread only writes bound variables and calls
 // renderSample() / noteOn() / resetState(); all VM creation and
 // compilation happens off the audio thread (constructor). Linkage:
 // `vibesynth_engine` static lib, shared by the plugin and `vibesynth_cli`
@@ -77,6 +77,22 @@ inline float rawOutput (double v) noexcept
         return -1.0e6f;
     return static_cast<float> (v);
 }
+
+// Host tempo for one sample (SPEC §4.3, M6): `bpm` (120 when the host
+// gives none) and `beat`, the position in quarter notes. The default is
+// what a VM sees with no host: 120 bpm at beat 0.
+struct Transport
+{
+    static constexpr double kDefaultBpm = 120.0;
+    double bpm = kDefaultBpm;
+    double beat = 0.0;
+
+    // Beats per sample at this tempo.
+    double beatStep (double sampleRate) const noexcept
+    {
+        return bpm / (60.0 * (sampleRate > 0.0 ? sampleRate : 48000.0));
+    }
+};
 
 // mem[] slots per VM (SPEC §4.2), preallocated at construction.
 constexpr int kVmRamSlots = 65536;
@@ -230,9 +246,12 @@ public:
 
     VoiceRack& rack() noexcept { return rackStorage_; }
 
-    void noteOn (double freq, double note, double vel) noexcept;
+    // `transport` is what init code sees as bpm/beat.
+    void noteOn (double freq, double note, double vel,
+                 const Transport& transport = {}) noexcept;
     float renderSample (double freq, double gate, double note, double vel,
-                        const double macros[MacroSmoother::kNumMacros]) noexcept;
+                        const double macros[MacroSmoother::kNumMacros],
+                        const Transport& transport = {}) noexcept;
 
     // Runtime guard (SPEC §7.2): reset the rack, zero every VM variable
     // (pointer list collected at compile time) and mem[]. No allocation.
@@ -251,6 +270,8 @@ private:
     EEL_F* gate_ = nullptr;
     EEL_F* trig_ = nullptr;
     EEL_F* srate_ = nullptr;
+    EEL_F* bpm_ = nullptr;
+    EEL_F* beat_ = nullptr;
     EEL_F* macro_[MacroSmoother::kNumMacros] = {};
     EEL_F* out_ = nullptr;
     std::vector<EEL_F_PTR> vars_;
@@ -258,7 +279,8 @@ private:
     std::string compileError_;
 };
 
-// Master bus: one VM, master code handle, MasterRack context.
+// Master bus: one VM, master code handle; its rack context points to both
+// a MasterRack (bus_*) and its own VoiceRack (every other function).
 class EelMaster
 {
 public:
@@ -273,18 +295,27 @@ public:
     const std::string& compileError() const noexcept { return compileError_; }
 
     MasterRack& rack() noexcept { return rackStorage_; }
+    VoiceRack& voiceRack() noexcept { return voiceRackStorage_; }
 
     void renderSample (float inL, float inR, float& outL, float& outR,
-                       const double macros[MacroSmoother::kNumMacros]) noexcept;
+                       const double macros[MacroSmoother::kNumMacros],
+                       const Transport& transport = {}) noexcept;
 
-    // Same as EelVoice::resetState, for the master VM and MasterRack.
+    // Resets both racks (patch swap, SPEC §7.3). No allocation.
+    void resetRacks() noexcept;
+
+    // Same as EelVoice::resetState, for the master VM and both racks.
     void resetState() noexcept;
+
+    // Seed for the master's VoiceRack (chaos start points, supersaw phases).
+    static constexpr uint32_t kRackSeed = 0x3A57E2u;
 
 private:
     NSEEL_VMCTX vm_ = nullptr;
     NSEEL_CODEHANDLE masterCode_ = nullptr;
     void* gram_ = nullptr;
     MasterRack rackStorage_;
+    VoiceRack voiceRackStorage_;
     float* reverbStorage_ = nullptr;
     int reverbCapacity_ = 0;
     VmRackContext rackCtx_;
@@ -293,6 +324,8 @@ private:
     EEL_F* outl_ = nullptr;
     EEL_F* outr_ = nullptr;
     EEL_F* srate_ = nullptr;
+    EEL_F* bpm_ = nullptr;
+    EEL_F* beat_ = nullptr;
     EEL_F* macro_[MacroSmoother::kNumMacros] = {};
     std::vector<EEL_F_PTR> vars_;
     bool passthrough_ = false;

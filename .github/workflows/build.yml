@@ -1,8 +1,10 @@
 # Pulsar CI — Milestone 2 (SPEC sections 10.2, 13).
 #
 # 3-OS matrix (ubuntu-22.04 / windows-latest / macos-14): Release + Ninja
-# everywhere, pluginval at strictness 5 on the VST3, zipped artefacts, and a
-# GitHub release on v* tags.
+# everywhere, vibesynth_cli --smoketest and (M6) --selftest gating the
+# build, pluginval at strictness 5 on the VST3, zipped artefacts, and a
+# GitHub release on v* tags. Linux also renders every built-in preset to
+# WAV (Pulsar-preset-renders; not gating beyond the render succeeding).
 #
 # Pins: every action is pinned to a verified tag; pluginval is pinned to the
 # latest stable release v1.0.4 (v2.x is pre-release only).
@@ -117,6 +119,57 @@ jobs:
         shell: bash
         run: |
           arch -x86_64 ./build/vibesynth_cli --smoketest
+
+      # M6 preset gate (SPEC 10.3): every built-in parses, round-trips,
+      # passes the offline matrix with its stored trim within 1 dB of the
+      # computed one, and builds. Exit 1 on any failure. Never pass
+      # --strict-cpu here: on shared runners the per-preset ns are only
+      # reported, and CPU gates only through the validator's runaway rule
+      # (50 % of real time per configuration, 500 ms deadline; x10 under
+      # Rosetta) (SPEC 4.2.1, 7.1).
+      - name: vibesynth_cli selftest (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          ./build/vibesynth_cli --selftest
+
+      - name: vibesynth_cli selftest (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          ./build/vibesynth_cli.exe --selftest
+
+      - name: vibesynth_cli selftest (macOS arm64)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ./build/vibesynth_cli --selftest
+
+      - name: vibesynth_cli selftest (macOS x86_64 via Rosetta)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          arch -x86_64 ./build/vibesynth_cli --selftest
+
+      # Every built-in through the plugin's own chain (PatchPlayer) into a
+      # 24-bit WAV, for auditioning. Fails only if a render fails.
+      - name: Render built-in presets (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p renders
+          for f in resources/presets/*.pulsar; do
+            name=$(basename "$f" .pulsar)
+            ./build/vibesynth_cli --render "$name" "renders/$name.wav"
+          done
+
+      - name: Upload Pulsar-preset-renders
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: Pulsar-preset-renders
+          path: renders/*.wav
+          if-no-files-found: error
 
       # pluginval v1.0.4 is the latest stable release (v2.x is pre-release).
       # Validating the VST3 at strictness level 5 (Linux runs headless under

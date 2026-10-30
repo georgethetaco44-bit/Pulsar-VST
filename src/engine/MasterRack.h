@@ -57,9 +57,10 @@ struct MasterRack
 };
 
 // ---------------------------------------------------------------------------
-// Per-VM rack context: exactly one of the two pointers is non-null.
-// Voice wrappers return 0 on a master VM (and vice versa) instead of
-// misinterpreting the other rack type.
+// Per-VM rack context. A voice VM has only `voice`; the master VM has both
+// (M6, SPEC §5.2: its own VoiceRack runs osc_*/flt_*/... with their own
+// slots). bus_* wrappers return 0 on a voice VM instead of misinterpreting
+// the other rack type.
 
 struct VmRackContext
 {

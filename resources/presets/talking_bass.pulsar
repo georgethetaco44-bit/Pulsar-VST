@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "name": "Talking Bass",
+  "prompt": "neuro reese that talks: three vowel formants sweep over a driven reese, and the formant output growls back into the reese's own pitch",
+  "macros": [
+    {
+      "label": "Talk",
+      "default": 0.25
+    },
+    {
+      "label": "Talk Rate",
+      "default": 0.6
+    },
+    {
+      "label": "Talk Depth",
+      "default": 0.45
+    },
+    {
+      "label": "Growl",
+      "default": 0.45
+    },
+    {
+      "label": "Detune",
+      "default": 0.4
+    },
+    {
+      "label": "Sub",
+      "default": 0.6
+    },
+    {
+      "label": "Drive",
+      "default": 0.5
+    }
+  ],
+  "voiceMode": "mono",
+  "graph": {
+    "edges": [
+      [
+        "osc_supersaw:0",
+        "fx_sat"
+      ],
+      [
+        "osc_saw:0",
+        "fx_sat"
+      ],
+      [
+        "fx_sat",
+        "flt_bp:0"
+      ],
+      [
+        "fx_sat",
+        "flt_bp:1"
+      ],
+      [
+        "fx_sat",
+        "flt_bp:2"
+      ],
+      [
+        "flt_bp:0",
+        "fx_fold"
+      ],
+      [
+        "flt_bp:1",
+        "fx_fold"
+      ],
+      [
+        "flt_bp:2",
+        "fx_fold"
+      ],
+      [
+        "fx_fold",
+        "util_safe_fb:0"
+      ],
+      [
+        "util_safe_fb:0",
+        "osc_supersaw:0"
+      ],
+      [
+        "util_safe_fb:0",
+        "osc_saw:0"
+      ],
+      [
+        "fx_fold",
+        "out"
+      ],
+      [
+        "osc_sine:0",
+        "out"
+      ],
+      [
+        "env_adsr:0",
+        "out"
+      ]
+    ]
+  },
+  "code": {
+    "init": "// vowel formants in Hz, u o a e i (one extra entry so v = 4 interpolates)\nf1 = 0; f2 = 8; f3 = 16;\nf1[0] = 320; f1[1] = 520; f1[2] = 760; f1[3] = 480; f1[4] = 280; f1[5] = 280;\nf2[0] = 760; f2[1] = 920; f2[2] = 1220; f2[3] = 1850; f2[4] = 2350; f2[5] = 2350;\nf3[0] = 2300; f3[1] = 2450; f3[2] = 2550; f3[3] = 2600; f3[4] = 3100; f3[5] = 3100;\nk = 1 / log(1000);\nfb1 = 0;",
+    "voice": "// reese: supersaw + counter-detuned saw; the growl feedback bends both pitches\ndet = 1 + m5 * 0.012;\npm = 1 + fb1 * m4 * 0.045;\na = osc_supersaw(0, freq * det * pm, 0.25 + m5 * 0.5, 0.7);\nb = osc_saw(0, freq / det * pm);\nx = fx_sat((a * 0.6 + b * 0.5) * 1.8, 0.75);\n// vowel position: Talk sets it, a beat-synced LFO swings it (off, 1/2, 1/4, 1/8, 1/8T, 1/16)\nrate = m2 < 0.15 ? 0 : m2 < 0.35 ? 0.5 : m2 < 0.55 ? 1 : m2 < 0.75 ? 2 : m2 < 0.9 ? 3 : 4;\nlfo = 0.5 - 0.5 * cos(2 * $pi * beat * rate);\n// formant targets, every 16 samples (the filters update at that rate anyway)\n(cnt -= 1) <= 0 ? (\n  cnt = 16;\n  v = min(max(m1 * 4 + (lfo - 0.5) * m3 * 3, 0), 4);\n  i = floor(v); t = v - i;\n  c1 = log((f1[i] + (f1[i + 1] - f1[i]) * t) / 20) * k;\n  c2 = log((f2[i] + (f2[i + 1] - f2[i]) * t) / 20) * k;\n  c3 = log((f3[i] + (f3[i + 1] - f3[i]) * t) / 20) * k;\n);\n// three narrow band-passes = the mouth; fed quietly, as their resonance has ~12x gain\nxf = x * 0.06;\ny = (flt_bp(0, xf, c1, 0.86) + flt_bp(1, xf, c2, 0.9) * 0.8 + flt_bp(2, xf, c3, 0.92) * 0.45) * 1.6;\n// growl: drive the voice, and feed it back into the reese pitch next sample\ny = fx_sat(y * (1 + m4 * 2), 0.15 + m4 * 0.45);\nfb1 = util_safe_fb(0, y);\n// clean sub under the talking mids\nenv = env_adsr(0, gate, 0.004, 0.3, 1, 0.1);\nout = (y * 0.55 + osc_sine(0, freq) * m6 * 0.75) * env;",
+    "master": "// split at 100 Hz: the sub stays clean and mono, the mids get drive, a 6 kHz fizz cut and width\nlo = util_xover_lo(0, inl);\nhi = fx_sat(util_xover_hi(0) * (1 + m7 * 4), 0.3 + m7 * 0.6);\nhi = flt_lp(0, hi, 0.83, 0.05);\nwl = bus_chorus(hi, hi, 0.25, 0.35);\nwr = bus_chorus_r();\noutl = lo + wl;\noutr = lo + wr;"
+  },
+  "trim": 0.495997
+}

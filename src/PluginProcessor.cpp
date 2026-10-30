@@ -9,20 +9,15 @@
 //   message thread  posts load jobs (mutex-protected deque; never touched
 //                   by the audio thread), applies results (macro defaults,
 //                   labels, status) through AsyncUpdater.
-//   worker          parse -> offline matrix (Load only) -> compile ->
+//   worker          parse -> offline matrix (file loads only) -> compile ->
 //                   push PatchProgram* on the SPSC swap queue; frees
 //                   programs from the SPSC retire queue.
 //   audio thread    pops the swap queue, fades out 5 ms, swaps, fades in
 //                   5 ms, pushes the old program on the retire queue.
 //
-// Voice stealing (SPEC 9.1, amended): at most 8 voices SOUND at once
-// (Active, or Fading with a queued note). A 9th note-on gives the steal
-// victim (the oldest released voice, else the oldest held one) a 2 ms
-// linear fade and starts the new note at once on a free spare. Only when no
-// spare is free is a voice hard-stolen: it fades for 2 ms in place, then its
-// rack is reset and the queued note starts. A voice is freed by
-// VoiceLifetime (-80 dB for 50 ms after gate-off, 10 s cap) or when its
-// steal fade ends.
+// M6: voices, stealing, MIDI, the master VM, the runtime guard and the
+// output stage are vibesynth::PatchPlayer (see PatchPlayer.h), shared with
+// vibesynth_cli --render; this file keeps the threads and the swap fade.
 //
 // Real-time rules (SPEC 11): processBlock performs no allocation, locks,
 // logging, I/O or exceptions, and never frees a program. MIDI is parsed
@@ -47,8 +42,6 @@ VibeSynthAudioProcessor::VibeSynthAudioProcessor()
 {
     for (int i = 0; i < numMacros; ++i)
         macroParams[(size_t) i] = apvts.getRawParameterValue ("macro" + juce::String (i + 1));
-    for (int i = 0; i < numVoiceObjects; ++i)
-        voices[(size_t) i].index = i;
 
     // The default patch (SPEC 9.4: reese.pulsar). Compiled in the first
     // prepareToPlay with its stored trim (no matrix; it is a built-in).
@@ -69,8 +62,8 @@ VibeSynthAudioProcessor::VibeSynthAudioProcessor()
 
 VibeSynthAudioProcessor::~VibeSynthAudioProcessor()
 {
-    // Stop the worker first (a validation in progress aborts at its next
-    // 64-sample check), then free everything it or the audio thread owned.
+    // Stop the worker first (a validation in progress aborts after its
+    // current sample), then free everything it or the audio thread owned.
     cancelValidation = true;
     worker.signalThreadShouldExit();
     worker.notify();
@@ -88,8 +81,9 @@ VibeSynthAudioProcessor::~VibeSynthAudioProcessor()
     }
     delete heldProgram;
     delete incoming;
-    delete program;
-    heldProgram = incoming = program = nullptr;
+    delete player.program();
+    player.setProgram (nullptr);
+    heldProgram = incoming = nullptr;
 }
 
 //==============================================================================
@@ -144,8 +138,10 @@ bool VibeSynthAudioProcessor::isMidiEffect() const
 
 double VibeSynthAudioProcessor::getTailLengthSeconds() const
 {
-    // The built-in presets' releases reach -80 dB in about 0.45 s.
-    return 0.5;
+    // The longest built-in tails (Velvet Pad's release into a large reverb,
+    // Lorenz Drift) reach -80 dB about 5.8 s after the last note-off
+    // (measured with vibesynth_cli --render --seconds-tail 8).
+    return 6.0;
 }
 
 //==============================================================================
@@ -186,7 +182,7 @@ void VibeSynthAudioProcessor::loadBuiltin (int index)
         return;
     currentProgramIndex = index;
     LoadJob job;
-    job.kind = LoadJob::Kind::Load;
+    job.kind = LoadJob::Kind::Builtin; // compile-only, stored trim (SPEC 9.4)
     job.text = vibesynth::builtinPresetText (index);
     job.source = juce::String (vibesynth::builtinPresetName (index));
     postJob (std::move (job));
@@ -309,7 +305,10 @@ bool VibeSynthAudioProcessor::buildAndPushLocked (const vibesynth::Patch& patch,
 
 void VibeSynthAudioProcessor::processJob (const LoadJob& job)
 {
-    const bool isLoad = job.kind == LoadJob::Kind::Load;
+    // Only files get the offline matrix; built-ins and restores compile
+    // with their stored trim (SPEC 9.3, 9.4).
+    const bool validate = job.kind == LoadJob::Kind::Load;
+    const bool isRestore = job.kind == LoadJob::Kind::Restore;
     auto stale = [this, &job] { return job.generation != generation.load(); };
     auto fail = [this, &job] (const juce::String& reason)
     {
@@ -326,7 +325,7 @@ void VibeSynthAudioProcessor::processJob (const LoadJob& job)
     {
         patch = parsed.patch;
     }
-    else if (isLoad)
+    else if (! isRestore)
     {
         fail (parsed.error);
         return;
@@ -337,7 +336,7 @@ void VibeSynthAudioProcessor::processJob (const LoadJob& job)
         patch = defaultPatch;
     }
 
-    if (isLoad)
+    if (validate)
     {
         const double rate = preparedRate.load();
         const auto vr = vibesynth::validatePatch (patch, rate > 0.0 ? rate : 48000.0, &cancelValidation);
@@ -358,7 +357,7 @@ void VibeSynthAudioProcessor::processJob (const LoadJob& job)
         std::string error;
         if (! buildAndPushLocked (patch, error))
         {
-            if (isLoad)
+            if (! isRestore)
             {
                 fail (error);
                 return;
@@ -376,12 +375,12 @@ void VibeSynthAudioProcessor::processJob (const LoadJob& job)
     LoadResult r;
     r.ok = true;
     r.patch = patch;
-    r.setMacros = isLoad;
+    r.setMacros = ! isRestore;
     r.generation = job.generation;
     if (restoreError.isNotEmpty())
         r.message = "Saved patch failed (" + restoreError + "); loaded " + juce::String (patch.name);
     else
-        r.message = (isLoad ? "Loaded " : "Restored ") + juce::String (patch.name)
+        r.message = (isRestore ? "Restored " : "Loaded ") + juce::String (patch.name)
                   + ", trim " + formatDb (patch.trim);
     postResult (std::move (r));
 }
@@ -436,10 +435,7 @@ void VibeSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 
     const double rate = sampleRate > 0.0 ? sampleRate : 48000.0;
     const int block = samplesPerBlock > 0 ? samplesPerBlock : 512;
-    currentSampleRate = rate;
-    chunkCapacity = block;
-    voiceSum.assign ((size_t) chunkCapacity, 0.0f);
-    macroBlock.assign ((size_t) chunkCapacity * (size_t) numMacros, 0.0);
+    PatchProgram* program = player.program();
 
     // Take over everything in flight: the newest pushed program is the
     // patch to keep; the rest is freed (no audio thread is running).
@@ -498,23 +494,18 @@ void VibeSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
         if (program == nullptr)
             juce::Logger::writeToLog ("Pulsar: the default patch failed to compile: " + juce::String (error));
     }
+    player.setProgram (program);
     preparedRate = rate;
     preparedBlockSize = block;
 
-    resetVoiceSlots();
     fade = Fade::None;
     fadeGain = 1.0f;
     fadeStep = 1.0f / (float) std::max (1, (int) std::lround (swapFadeSeconds * rate));
-    guardMuteLength = std::max (1, (int) std::lround (guardMuteSeconds * rate));
-    masterMuteSamples = 0;
-    outputStage.init (rate);
 
     float targets[numMacros] = {};
     for (int m = 0; m < numMacros; ++m)
         targets[m] = macroParams[(size_t) m] != nullptr ? macroParams[(size_t) m]->load() : 0.5f;
-    smoother.init (rate);
-    smoother.snapAll (targets);
-    noteCounter = 0;
+    player.prepare (rate, block, targets);
 }
 
 void VibeSynthAudioProcessor::releaseResources()
@@ -535,16 +526,6 @@ bool VibeSynthAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts
    #endif
 
     return true;
-}
-
-void VibeSynthAudioProcessor::resetVoiceSlots() noexcept
-{
-    for (auto& v : voices)
-    {
-        const int index = v.index;
-        v = VoiceSlot();
-        v.index = index;
-    }
 }
 
 //==============================================================================
@@ -584,7 +565,7 @@ void VibeSynthAudioProcessor::pollSwapQueue() noexcept
     }
     if (incoming == nullptr)
         return;
-    if (program == nullptr)
+    if (player.program() == nullptr)
     {
         // Nothing playing: swap now and fade in.
         fadeGain = 0.0f;
@@ -601,298 +582,10 @@ int VibeSynthAudioProcessor::samplesUntilSilent() const noexcept
 
 void VibeSynthAudioProcessor::swapPrograms() noexcept
 {
-    retire (program);
-    program = incoming;
+    // Held notes restart on their new voices (PatchPlayer::swapProgram).
+    retire (player.swapProgram (incoming));
     incoming = nullptr;
-    masterMuteSamples = 0;
-
-    // Held notes restart on their new voice (trig = 1, init runs);
-    // released and fading voices are dropped, except a queued hard-steal
-    // note, which starts now.
-    for (auto& v : voices)
-    {
-        const bool held = v.state == VoiceSlot::State::Active
-                          && (v.lifetime.gateHeld || v.releasePending);
-        if (held)
-        {
-            v.lifetime.noteOn();
-            v.muteSamples = 0;
-            v.renderedSinceNoteOn = false;
-            voiceOf (v).noteOn (v.freq, static_cast<double> (v.note), v.vel);
-        }
-        else if (v.state == VoiceSlot::State::Fading && v.hasPending)
-        {
-            const bool released = v.pendingReleased;
-            beginNote (v, v.pendingNote, v.pendingVel);
-            v.releasePending = released;
-        }
-        else
-        {
-            const int index = v.index;
-            v = VoiceSlot();
-            v.index = index;
-        }
-    }
     fade = Fade::In;
-}
-
-//==============================================================================
-// Voice management (audio thread; no allocation).
-
-VibeSynthAudioProcessor::VoiceSlot* VibeSynthAudioProcessor::findFree() noexcept
-{
-    for (auto& v : voices)
-        if (v.state == VoiceSlot::State::Free)
-            return &v;
-    return nullptr;
-}
-
-VibeSynthAudioProcessor::VoiceSlot*
-VibeSynthAudioProcessor::oldestWhere (bool (*pred) (const VoiceSlot&)) noexcept
-{
-    VoiceSlot* best = nullptr;
-    for (auto& v : voices)
-        if (pred (v) && (best == nullptr || v.startOrder < best->startOrder))
-            best = &v;
-    return best;
-}
-
-VibeSynthAudioProcessor::VoiceSlot* VibeSynthAudioProcessor::stealVictim() noexcept
-{
-    // A note-off still waiting for its note-on sample counts as released.
-    if (auto* v = oldestWhere ([] (const VoiceSlot& s)
-                               { return s.state == VoiceSlot::State::Active
-                                        && (! s.lifetime.gateHeld || s.releasePending); }))
-        return v;
-    return oldestWhere ([] (const VoiceSlot& s) { return s.state == VoiceSlot::State::Active; });
-}
-
-void VibeSynthAudioProcessor::beginNote (VoiceSlot& v, int note, double velocity) noexcept
-{
-    v.state = VoiceSlot::State::Active;
-    v.note = note;
-    v.freq = juce::MidiMessage::getMidiNoteInHertz (note);
-    v.vel = velocity;
-    v.startOrder = ++noteCounter;
-    v.renderedSinceNoteOn = false;
-    v.releasePending = false;
-    v.hasPending = false;
-    v.pendingReleased = false;
-    v.muteSamples = 0;
-    v.lifetime.noteOn();
-    voiceOf (v).noteOn (v.freq, static_cast<double> (note), velocity);
-}
-
-void VibeSynthAudioProcessor::beginFade (VoiceSlot& v) noexcept
-{
-    v.state = VoiceSlot::State::Fading;
-    v.releasePending = false;
-    v.lifetime.startStealFade (currentSampleRate);
-}
-
-void VibeSynthAudioProcessor::startNote (int note, double velocity) noexcept
-{
-    using State = VoiceSlot::State;
-
-    if (program == nullptr)
-        return;
-
-    int sounding = 0;
-    for (const auto& v : voices)
-        if (v.state == State::Active || (v.state == State::Fading && v.hasPending))
-            ++sounding;
-
-    if (sounding >= maxSoundingVoices)
-        if (auto* victim = stealVictim())
-            beginFade (*victim);
-
-    if (auto* spare = findFree())
-    {
-        beginNote (*spare, note, velocity);
-        return;
-    }
-
-    // No spare: hard steal. Prefer a voice that is already fading with
-    // nothing queued (its fade is shorter), else fade the steal victim in
-    // place. With every voice fading and queued (10 note-ons within 2 ms)
-    // the oldest queued note is replaced.
-    VoiceSlot* target = oldestWhere ([] (const VoiceSlot& s)
-                                     { return s.state == State::Fading && ! s.hasPending; });
-    if (target == nullptr)
-    {
-        target = stealVictim();
-        if (target != nullptr)
-            beginFade (*target);
-    }
-    if (target == nullptr)
-        target = oldestWhere ([] (const VoiceSlot& s) { return s.state == State::Fading; });
-    if (target == nullptr)
-        return;
-
-    target->hasPending = true;
-    target->pendingNote = note;
-    target->pendingVel = velocity;
-    target->pendingReleased = false;
-}
-
-void VibeSynthAudioProcessor::stopNote (int note) noexcept
-{
-    for (auto& v : voices)
-    {
-        if (v.state == VoiceSlot::State::Active && v.note == note && v.lifetime.gateHeld)
-        {
-            // The patch must see gate = 1 for at least the note-on sample,
-            // or its envelope never gets a rising edge.
-            if (v.renderedSinceNoteOn)
-                v.lifetime.noteOff();
-            else
-                v.releasePending = true;
-        }
-        else if (v.state == VoiceSlot::State::Fading && v.hasPending && v.pendingNote == note)
-        {
-            v.pendingReleased = true;
-        }
-    }
-}
-
-void VibeSynthAudioProcessor::allNotesOff() noexcept
-{
-    for (auto& v : voices)
-    {
-        if (v.state == VoiceSlot::State::Active && v.lifetime.gateHeld)
-        {
-            if (v.renderedSinceNoteOn)
-                v.lifetime.noteOff();
-            else
-                v.releasePending = true;
-        }
-        v.pendingReleased = true;
-    }
-}
-
-void VibeSynthAudioProcessor::allSoundOff() noexcept
-{
-    for (auto& v : voices)
-    {
-        if (v.state == VoiceSlot::State::Active)
-            beginFade (v);
-        v.hasPending = false;
-    }
-}
-
-void VibeSynthAudioProcessor::handleMidi (const juce::uint8* data, int numBytes) noexcept
-{
-    if (data == nullptr || numBytes < 3)
-        return;
-    const int type = data[0] & 0xF0;
-    const int d1 = data[1] & 0x7F;
-    const int d2 = data[2] & 0x7F;
-
-    if (type == 0x90 && d2 > 0)
-        startNote (d1, static_cast<double> (d2) / 127.0);
-    else if (type == 0x80 || type == 0x90)
-        stopNote (d1);
-    else if (type == 0xB0 && d1 == 120)
-        allSoundOff();
-    else if (type == 0xB0 && d1 == 123)
-        allNotesOff();
-}
-
-// Runtime guard (SPEC 7.2): the voice produced a non-finite sample. Reset
-// its rack, VM variables and mem[]; a held note restarts (note-on now,
-// first rendered after a 20 ms mute), anything else is dropped.
-void VibeSynthAudioProcessor::tripVoice (VoiceSlot& v) noexcept
-{
-    voiceOf (v).resetState();
-    const bool held = v.state == VoiceSlot::State::Active
-                      && (v.lifetime.gateHeld || v.releasePending);
-    if (held)
-    {
-        voiceOf (v).noteOn (v.freq, static_cast<double> (v.note), v.vel);
-        v.lifetime.noteOn();
-        v.renderedSinceNoteOn = false;
-        v.muteSamples = guardMuteLength;
-    }
-    else if (v.state == VoiceSlot::State::Fading && v.hasPending)
-    {
-        const bool released = v.pendingReleased;
-        beginNote (v, v.pendingNote, v.pendingVel);
-        v.releasePending = released;
-        v.muteSamples = guardMuteLength;
-    }
-    else
-    {
-        const int index = v.index;
-        v = VoiceSlot();
-        v.index = index;
-    }
-}
-
-void VibeSynthAudioProcessor::renderVoices (int start, int end) noexcept
-{
-    for (auto& v : voices)
-    {
-        if (v.state == VoiceSlot::State::Free)
-            continue;
-
-        int from = start;
-        if (v.muteSamples > 0)
-        {
-            const int skip = std::min (v.muteSamples, end - start);
-            v.muteSamples -= skip;
-            from += skip;
-            if (v.muteSamples > 0)
-                continue;
-            // Mute over: a note released meanwhile is dropped unheard.
-            if (v.releasePending || ! v.lifetime.gateHeld)
-            {
-                const int index = v.index;
-                v = VoiceSlot();
-                v.index = index;
-                continue;
-            }
-        }
-
-        auto& eel = voiceOf (v);
-        auto& lt = v.lifetime;
-        for (int i = from; i < end; ++i)
-        {
-            const double* macros = macroBlock.data() + (size_t) i * (size_t) numMacros;
-            const float s = eel.renderSample (v.freq, lt.gateHeld ? 1.0 : 0.0,
-                                              static_cast<double> (v.note), v.vel, macros);
-            if (! vibesynth::isFiniteBits (s))
-            {
-                tripVoice (v);
-                break;
-            }
-            voiceSum[(size_t) i] += s * lt.fadeGain();
-            v.renderedSinceNoteOn = true;
-            if (v.releasePending)
-            {
-                v.releasePending = false;
-                lt.noteOff();
-            }
-
-            if (! lt.track (s, currentSampleRate))
-                continue;
-
-            if (v.state == VoiceSlot::State::Fading && v.hasPending)
-            {
-                // Hard steal: the fade has reached 0. Reset the rack so the
-                // patch's envelopes restart from 0 (no jump), then start the
-                // queued note in place on the next sample.
-                const bool released = v.pendingReleased;
-                eel.rack().reset();
-                beginNote (v, v.pendingNote, v.pendingVel);
-                v.releasePending = released;
-                continue;
-            }
-
-            v.state = VoiceSlot::State::Free;
-            v.hasPending = false;
-            break;
-        }
-    }
 }
 
 void VibeSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
@@ -904,7 +597,7 @@ void VibeSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     const int numChannels = buffer.getNumChannels();
     buffer.clear();
 
-    if (chunkCapacity <= 0 || numChannels <= 0)
+    if (player.maxChunk() <= 0 || numChannels <= 0)
         return;
 
     flushRetireStash();
@@ -914,6 +607,28 @@ void VibeSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         targets[m] = macroParams[(size_t) m] != nullptr
                          ? macroParams[(size_t) m]->load (std::memory_order_relaxed)
                          : 0.5f;
+
+    // bpm/beat for the patch (SPEC §4.3): host tempo, and the host's PPQ
+    // position while it plays; free-running otherwise.
+    {
+        double bpm = 0.0, ppq = 0.0;
+        bool playing = false, hasPpq = false;
+        if (auto* host = getPlayHead())
+        {
+            if (const auto position = host->getPosition())
+            {
+                if (const auto hostBpm = position->getBpm())
+                    bpm = *hostBpm;
+                if (const auto hostPpq = position->getPpqPosition())
+                {
+                    ppq = *hostPpq;
+                    hasPpq = true;
+                }
+                playing = position->getIsPlaying();
+            }
+        }
+        player.setHostTransport (bpm, playing, hasPpq, ppq);
+    }
 
     float* outL = buffer.getWritePointer (0);
     float* outR = numChannels > 1 ? buffer.getWritePointer (1) : nullptr;
@@ -926,62 +641,18 @@ void VibeSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     {
         pollSwapQueue();
 
-        int n = std::min (chunkCapacity, numSamples - chunkStart);
+        int n = std::min (player.maxChunk(), numSamples - chunkStart);
         // A fade-out ends exactly on a chunk boundary, where the swap runs.
         if (fade == Fade::Out)
             n = std::min (n, samplesUntilSilent());
 
-        for (int i = 0; i < n; ++i)
-        {
-            smoother.step (targets);
-            std::copy (smoother.current, smoother.current + numMacros,
-                       macroBlock.data() + (size_t) i * (size_t) numMacros);
-        }
-        std::fill (voiceSum.begin(), voiceSum.begin() + n, 0.0f);
-
-        // Sample-accurate MIDI: render up to each event, then apply it.
-        int pos = 0;
-        for (; midiIt != midiEnd; ++midiIt)
-        {
-            const auto event = *midiIt;
-            const int at = std::max (event.samplePosition - chunkStart, pos);
-            if (at >= n)
-                break;
-            if (at > pos && program != nullptr)
-            {
-                renderVoices (pos, at);
-                pos = at;
-            }
-            handleMidi (event.data, event.numBytes);
-        }
-        if (pos < n && program != nullptr)
-            renderVoices (pos, n);
+        // Voices (sample-accurate MIDI), master VM, guard, output stage.
+        player.renderChunk (n, targets, midiIt, midiEnd, chunkStart);
+        const float* chunkL = player.outL();
+        const float* chunkR = player.outR();
 
         for (int i = 0; i < n; ++i)
         {
-            float l = 0.0f, r = 0.0f;
-            if (program != nullptr)
-            {
-                if (masterMuteSamples > 0)
-                {
-                    --masterMuteSamples;
-                }
-                else
-                {
-                    const float in = voiceSum[(size_t) i];
-                    program->master().renderSample (in, in, l, r,
-                                                    macroBlock.data() + (size_t) i * (size_t) numMacros);
-                    if (! vibesynth::isFiniteBits (l) || ! vibesynth::isFiniteBits (r))
-                    {
-                        // Runtime guard for the master VM (same as a voice).
-                        program->master().resetState();
-                        masterMuteSamples = guardMuteLength;
-                        l = r = 0.0f;
-                    }
-                }
-                outputStage.process (l, r, program->trim(), l, r);
-            }
-
             if (fade == Fade::Out)
             {
                 fadeGain = std::max (0.0f, fadeGain - fadeStep);
@@ -992,8 +663,8 @@ void VibeSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                 if (fadeGain >= 1.0f)
                     fade = Fade::None;
             }
-            l *= fadeGain;
-            r *= fadeGain;
+            const float l = chunkL[i] * fadeGain;
+            const float r = chunkR[i] * fadeGain;
 
             if (outR != nullptr)
             {
@@ -1015,7 +686,7 @@ void VibeSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (; midiIt != midiEnd; ++midiIt)
     {
         const auto event = *midiIt;
-        handleMidi (event.data, event.numBytes);
+        player.handleMidi (event.data, event.numBytes);
     }
 }
 

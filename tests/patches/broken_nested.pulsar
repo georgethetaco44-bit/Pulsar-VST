@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "Broken: nested",
+  "prompt": "test patch for the M6 loop-nesting check (must be rejected)",
+  "macros": [
+    {
+      "label": "A",
+      "default": 0.5
+    }
+  ],
+  "voiceMode": "poly",
+  "code": {
+    "init": "",
+    "voice": "// three levels: up to 1024^3 iterations per sample with the loop\n// cap, so the text check rejects it before compiling (counts are\n// irrelevant)\nloop(4, loop(4, loop(4, z += 1)));\nout = osc_sine(0, freq) * 0.3;",
+    "master": ""
+  }
+}

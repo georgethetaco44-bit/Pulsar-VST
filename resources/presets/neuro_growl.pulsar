@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "name": "Neuro Growl",
+  "prompt": "neuro growl bass, clean sub underneath and a vowel formant on top that I can sweep and wobble",
+  "macros": [
+    {
+      "label": "Formant",
+      "default": 0.4
+    },
+    {
+      "label": "Vowel Q",
+      "default": 0.5
+    },
+    {
+      "label": "LFO Rate",
+      "default": 0.3
+    },
+    {
+      "label": "LFO Depth",
+      "default": 0.35
+    },
+    {
+      "label": "Growl",
+      "default": 0.5
+    },
+    {
+      "label": "Mid Level",
+      "default": 0.7
+    }
+  ],
+  "voiceMode": "mono",
+  "graph": {
+    "edges": [
+      [
+        "osc_saw:0",
+        "util_xover:0"
+      ],
+      [
+        "util_xover:0",
+        "flt_bp:0"
+      ],
+      [
+        "osc_tri:1",
+        "flt_bp:0"
+      ],
+      [
+        "flt_bp:0",
+        "fx_fold"
+      ],
+      [
+        "fx_fold",
+        "out"
+      ],
+      [
+        "util_xover:0",
+        "out"
+      ],
+      [
+        "out",
+        "bus_mono_low"
+      ],
+      [
+        "bus_mono_low",
+        "bus_sat"
+      ]
+    ]
+  },
+  "code": {
+    "init": "",
+    "voice": "// amp envelope\nenv = env_adsr(0, gate, 0.15, 0.4, 0.9, 0.35);\n// split-brain: one saw, clean band below 100 Hz, surgery above\nsrc = osc_saw(0, freq);\nlo = util_xover_lo(0, src);\nhi = util_xover_hi(0);\n// vowel formant: band-pass swept by Formant and a triangle LFO\nlfo = osc_tri(1, 0.5 + m3 * 7.5);\nhi = flt_bp(0, hi, 0.42 + m1 * 0.35 + lfo * m4 * 0.12, 0.5 + m2 * 0.4);\n// fold the formant into a growl\nhi = fx_fold(hi * 2, m5);\nout = (lo * 0.9 + hi * m6) * env;",
+    "master": "// keep the sub mono, glue with a little saturation\noutl = bus_mono_low(inl, inr);\noutr = bus_mono_low_r();\noutl = bus_sat(outl, 0.3);\noutr = bus_sat(outr, 0.3);"
+  },
+  "trim": 1.0
+}

@@ -155,10 +155,26 @@ Universal Binaries, libtcc1 runtime helpers) is fragile.
   internal 4× ladder would become 8×. So M7 replaces it with our own 1× ladder,
   and probably our own TPT SVF too, whose coefficients can be interpolated
   per sample. DaisySP's Svf can only step its cutoff every 16 samples.
-- Headroom is thin: one typical patch is about one filter plus one shaper
+- Headroom is thin for **poly** patches: about one filter plus one shaper
   plus an oscillator stack. The M8 prompt examples must stay that lean.
+- **Budget by voice mode (M6 amendment).** The 25 % budget assumes 8 sounding
+  voices. A `"voiceMode": "mono"` patch only ever sounds one voice (plus a
+  2 ms steal fade), so its voice section may cost **≤ 1,200 ns per oversampled
+  sample** (4× the poly figure, and still only ~12 % of a Deck core at 2×).
+  Poly patches stay at ≤ 300 ns. Until M7 enforces mono, a mono patch played
+  as a chord can overrun; that's accepted for the M6–M7 gap.
+- **The master is the cheap place for heavy processing.** It runs once, not
+  per voice, and its 2 µs budget was ~5 % used after M6. Character processing
+  that suits the bus (distortion chains, multiband, combs, chaos-modulated
+  filters) belongs in `master`, which can call the whole lexicon (§5.2).
 - The Deck bench is noisy (cheap rows vary up to 2× between runs), so judge by
-  the median of several runs and by absolute ns. The `out = 0` baseline shifts
+  the median of several runs and by absolute ns. The CPU clock ramps from idle
+  (the first run is ~45 % slower), so every timed measurement starts with one
+  untimed warm-up pass.
+- **Where the budget is enforced:** `vibesynth_cli --selftest --strict-cpu` on
+  the Deck fails any preset over its §4.2.1 budget. In CI (shared, variably
+  clocked runners, Rosetta) the per-preset ns are reported but never gate;
+  CI gates only on the §7.1 runaway rule. The `out = 0` baseline shifts
   with the build layout (32 vs 68 ns), so "vs base" is unreliable.
 - macOS x86_64 under Rosetta measured 2,435 ns/sample (Rosetta translates
   JIT-generated code slowly). It is correct but not usable for real-time work.
@@ -178,12 +194,14 @@ Universal Binaries, libtcc1 runtime helpers) is fragile.
 | `m1`…`m8` | macro values 0–1, smoothed per sample in C++ (~10 ms one-pole) |
 | `out` | **write**: the voice's output sample |
 | `fb1`, `fb2`, `prev` | conventions for one-sample feedback and zero-crossing detection (plain variables) |
+| `bpm` | host tempo (M6 amendment; 120 when the host gives none) |
+| `beat` | position in quarter notes, advanced per sample (host PPQ while playing; free-running from the last position when stopped), for tempo-synced LFOs, wobbles and stutters, e.g. `lfo = sin(beat * 2 * $pi * 2)` for 1/8 notes |
 
 | Master VM | Meaning |
 |---|---|
 | `inl`, `inr` | summed voice output |
 | `outl`, `outr` | **write**: bus output (default passthrough) |
-| `m1`…`m8`, `srate` | as above |
+| `m1`…`m8`, `srate`, `bpm`, `beat` | as above |
 
 ---
 
@@ -209,6 +227,12 @@ Universal Binaries, libtcc1 runtime helpers) is fragile.
 
 ### 5.2 Function list
 
+**Master VM (M6 amendment):** the master VM owns its own `VoiceRack` as well
+as the `MasterRack`, so every voice function below (`osc_*`, `flt_*`, `fx_*`,
+`env_follow`, `util_*`, `chaos_*`, `phys_*`) also works in `master`, with
+its own slots. `gate`, `freq` and `note` aren't bound in `master`, so `env_adsr`
+there needs a gate the patch makes itself. `bus_*` functions stay master-only.
+
 **[MVP] core (DaisySP + our own code):**
 
 | Function | Source | Notes |
@@ -225,6 +249,7 @@ Universal Binaries, libtcc1 runtime helpers) is fragile.
 | `fx_sat(in, drive)` | own (tanh with gain compensation) | stateless |
 | `fx_crush(slot, in, bits, rate)` | DaisySP Decimator | 2 slots |
 | `fx_comb(slot, in, hz, feedback)` | own fractional delay | 2 slots |
+| `fx_ott(slot, in, depth)` | own (M6): 3-band (≈120 Hz / 2.5 kHz) upward + downward compressor, the "OTT" staple of modern bass music; depth 0 = passthrough, 1 = full; fixed fast attack/release; output gain-compensated | 2 slots; works in master (one slot per channel) |
 | `phys_resonator(slot, exciter, hz, structure, brightness, damping)` | DaisySP Resonator | 1 slot |
 | `phys_string(slot, exciter, hz, brightness, damping)` | DaisySP KarplusString | 1 slot |
 | `chaos_lorenz(slot, rate, axis)` | own ChaosMath.h (RK2, ≤4 substeps) | rate 0–1 maps exponentially to an orbit rate of 0.05 Hz–1 kHz; axis 0/1/2; initial state seeded per voice; 2 slots |
@@ -269,8 +294,11 @@ block-based, overlaps DaisySP Resonator), Airwindows SubTight as a crossover
   wasn't shown).
 - `recipes/*.md` hold technique examples (§8). Pick 2–4 recipes by keyword
   match against the user prompt and append them. Always include at least one.
-- Include 2 complete example patches from the built-in presets as few-shot
-  examples.
+- Include 2 complete example patches as few-shot examples. These are
+  **separate, lean teaching files** in `resources/prompts/examples/` (M8),
+  not the built-in presets. The presets are a showcase and may be as rich as
+  the budget allows; the examples must stay within the poly budget and be easy
+  to imitate.
 - Files live in `resources/prompts/` and are embedded with JUCE BinaryData.
 
 ### 6.2 Response format
@@ -345,11 +373,16 @@ Reject (and retry via §6.4) if any configuration shows:
 - peak above +12 dBFS before the limiter
 - DC offset above 0.1 averaged over the last 0.5 s
 - all 9 configurations silent (peak below −80 dBFS): "patch makes no sound"
-- CPU over budget: average voice render time above 10 % of real time per voice
-  (a runaway guard, deliberately much looser than the §4.2.1 design budget,
-  so patches still load on slower machines than the Deck)
+- CPU over budget: one configuration (voice + master) takes more than 50 % of
+  real time to render (a runaway guard, deliberately much looser than the
+  §4.2.1 design budget, so patches still load on slower machines than the
+  Deck). M6 raised this from 10 %: a mono patch spending its full 1,200 ns
+  voice and 2 µs master budget on a cold Deck CPU needs ~220 ms per
+  configuration, more at 2× oversampling (M7), so a 10 % limit would reject
+  legal patches.
 
-Target: the whole matrix finishes in under 300 ms.
+Target (report-only, warm Deck): the whole matrix finishes in under 300 ms
+for poly patches and under 600 ms for mono patches.
 
 **Runaway code (M5).** JIT code can't be interrupted mid-sample, so:
 - EEL2 is built with `NSEEL_LOOPFUNC_SUPPORT_MAXLEN=1024` (the default is
@@ -357,7 +390,7 @@ Target: the whole matrix finishes in under 300 ms.
   on every JIT backend, because Windows x64 links prebuilt asm objects.
 - The validator checks a wall-clock deadline (and its cancel flag) after every
   sample and rejects the patch ("too slow") as soon as one configuration has
-  used more than 100 ms (10 % of its 1 s of audio, matching the CPU rule), so
+  used more than 500 ms (50 % of its 1 s of audio, matching the CPU rule), so
   it never waits out a slow patch. The per-sample clock read costs ~10 ms over
   the whole matrix; it runs only in the validator, never on the audio thread.
 - Before compiling, a text check rejects `loop`/`while` nested more than 2
@@ -493,7 +526,9 @@ or newer state versions fail soft.
 ### 9.4 Built-in presets **[MVP]**
 15+ hand-tuned patches in `resources/presets/*.pulsar`, covering reese,
 neuro, UKG organ/stab, sub, physical-model plucks, chaos textures. They are:
-the out-of-the-box demo, few-shot examples (§6.1) and regression tests.
+the out-of-the-box demo (a showcase of what only per-sample code can do,
+plus solid bread-and-butter sounds) and regression tests. They are not the
+LLM few-shot examples (§6.1).
 
 `.pulsar` format:
 ```json
@@ -513,7 +548,11 @@ project or picking a built-in needs no matrix. On load it is clamped to
 (0, 1]; any patch loaded from a file or generated is re-tested, and the
 computed trim replaces the stored one. Built-ins are compile-only on
 selection, because CI's selftest checks that each stored trim matches the
-computed one within 0.1 dB. Macro defaults and trim are rounded to 1e-6 so
+computed one within 1 dB (FMA on arm64 and chaotic or bit-crushed signals
+make the exact peak differ between platforms; a 1 dB trim difference is
+inaudible as a mismatch, and every platform still runs the full matrix).
+Patches must not be shaped to hit a trim of exactly 1.0 for CI's sake.
+Macro defaults and trim are rounded to 1e-6 so
 the file round-trips exactly.
 Loading a patch file runs the same compile + offline test as a generated patch.
 
@@ -579,7 +618,10 @@ Loading a patch file runs the same compile + offline test as a generated patch.
 ### 10.3 Headless test tool `vibesynth_cli` **[MVP]**
 A console target sharing the engine code, with no DAW or UI:
 - `--selftest`: compile and offline-test every built-in preset (used in CI).
-- `--render patch.pulsar out.wav`: render a test phrase to WAV.
+- `--render patch.pulsar out.wav`: render a test phrase to WAV. `--phrase
+  default|riff` (M6): `riff` is a 2-bar syncopated 16th-note bass riff with
+  octave jumps, rests and a hero-macro (m1) automation, so bass presets are
+  auditioned the way they'd be used; `--bpm` sets its tempo.
 - `--batch prompts.txt`: run each prompt through generate → compile → test,
   saving patches + WAVs, and print pass rates (parse / compile / test / retries).
   This is how prompt and recipe changes are evaluated and how API credits are

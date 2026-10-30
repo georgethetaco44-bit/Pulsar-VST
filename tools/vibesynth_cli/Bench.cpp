@@ -2,8 +2,9 @@
 // gating: prints ns per voice-sample for every lexicon function and for
 // every built-in preset (M5: resources/presets/*.pulsar), each the MEDIAN
 // of 7 runs of 1 s at 48 kHz (single runs vary up to 2x on the Deck) and
-// marked PASS/FAIL against the 300 ns voice budget (bus_* and preset
-// masters against the 2 µs master budget).
+// marked PASS/FAIL against the 300 ns voice budget (M6: a mono preset's
+// voice against 1,200 ns; bus_* and preset masters against the 2 µs master
+// budget).
 
 #include "Bench.h"
 
@@ -63,14 +64,14 @@ constexpr double kSampleRate = 48000.0;
 constexpr int kSamples = 48000; // 1 s
 constexpr int kRuns = 7;
 constexpr double kBenchFreq = 220.0;
-constexpr double kVoiceBudgetNs = 300.0;   // SPEC §4.2.1
-constexpr double kMasterBudgetNs = 2000.0; // SPEC §4.2.1 (≈10 % of a core)
+constexpr double kVoiceBudgetNs = vibesynth::Patch::kPolyVoiceBudgetNs;  // SPEC §4.2.1
+constexpr double kMasterBudgetNs = vibesynth::Patch::kMasterBudgetNs;   // ≈10 % of a core
 
 using Clock = std::chrono::steady_clock;
 
-double nsPerSample (Clock::time_point t0, Clock::time_point t1)
+double nsPerSample (Clock::time_point t0, Clock::time_point t1, int samples)
 {
-    return std::chrono::duration<double, std::nano> (t1 - t0).count() / kSamples;
+    return std::chrono::duration<double, std::nano> (t1 - t0).count() / samples;
 }
 
 double median (std::vector<double> v)
@@ -79,56 +80,79 @@ double median (std::vector<double> v)
     return v[v.size() / 2];
 }
 
-// Median of kRuns × 1 s of voice rendering, gate held.
+// Median of `runs` x `samples` of voice rendering (after one untimed
+// pass of `samples`), gate held, beat
+// advancing at 120 bpm (so tempo-synced code takes its real paths).
 double timeVoice (vibesynth::EelVoice& v, double freq, double note,
-                  const double macros[vibesynth::MacroSmoother::kNumMacros])
+                  const double macros[vibesynth::MacroSmoother::kNumMacros],
+                  int runs = kRuns, int samples = kSamples)
 {
     volatile float sink = 0.0f;
-    std::vector<double> runs;
-    v.noteOn (freq, note, 0.9);
-    for (int r = 0; r < kRuns; ++r)
+    std::vector<double> times;
+    vibesynth::Transport t;
+    const double step = t.beatStep (kSampleRate);
+    v.noteOn (freq, note, 0.9, t);
+    // Run -1 is the untimed warm-up pass (SPEC §4.2.1: the clock ramps).
+    for (int r = -1; r < runs; ++r)
     {
         float acc = 0.0f;
         const auto t0 = Clock::now();
-        for (int i = 0; i < kSamples; ++i)
-            acc += v.renderSample (freq, 1.0, note, 0.9, macros);
+        for (int i = 0; i < samples; ++i)
+        {
+            t.beat += step;
+            acc += v.renderSample (freq, 1.0, note, 0.9, macros, t);
+        }
         const auto t1 = Clock::now();
         sink = sink + acc;
-        runs.push_back (nsPerSample (t0, t1));
+        if (r >= 0)
+            times.push_back (nsPerSample (t0, t1, samples));
     }
-    return median (runs);
+    return median (times);
 }
 
-// Median of kRuns × 1 s of master rendering, fed from a pre-rendered input.
+// Median of `runs` x `samples` of master rendering (after one untimed
+// pass), fed from a
+// pre-rendered input (at least `samples` long).
 double timeMaster (vibesynth::EelMaster& m, const std::vector<float>& in,
-                   const double macros[vibesynth::MacroSmoother::kNumMacros])
+                   const double macros[vibesynth::MacroSmoother::kNumMacros],
+                   int runs = kRuns, int samples = kSamples)
 {
     volatile float sink = 0.0f;
-    std::vector<double> runs;
-    for (int r = 0; r < kRuns; ++r)
+    std::vector<double> times;
+    vibesynth::Transport t;
+    const double step = t.beatStep (kSampleRate);
+    for (int r = -1; r < runs; ++r)   // -1: untimed warm-up pass
     {
         float acc = 0.0f;
         const auto t0 = Clock::now();
-        for (int i = 0; i < kSamples; ++i)
+        for (int i = 0; i < samples; ++i)
         {
             float oL = 0.0f, oR = 0.0f;
-            m.renderSample (in[(size_t) i], in[(size_t) i], oL, oR, macros);
+            t.beat += step;
+            m.renderSample (in[(size_t) i], in[(size_t) i], oL, oR, macros, t);
             acc += oL + oR;
         }
         const auto t1 = Clock::now();
         sink = sink + acc;
-        runs.push_back (nsPerSample (t0, t1));
+        if (r >= 0)
+            times.push_back (nsPerSample (t0, t1, samples));
     }
-    return median (runs);
+    return median (times);
 }
 
 std::vector<float> renderInput (vibesynth::EelVoice& v, double freq,
-                                const double macros[vibesynth::MacroSmoother::kNumMacros])
+                                const double macros[vibesynth::MacroSmoother::kNumMacros],
+                                int samples = kSamples)
 {
-    std::vector<float> out ((size_t) kSamples, 0.0f);
-    v.noteOn (freq, 57.0, 0.9);
-    for (int i = 0; i < kSamples; ++i)
-        out[(size_t) i] = v.renderSample (freq, 1.0, 57.0, 0.9, macros);
+    std::vector<float> out ((size_t) samples, 0.0f);
+    vibesynth::Transport t;
+    const double step = t.beatStep (kSampleRate);
+    v.noteOn (freq, 57.0, 0.9, t);
+    for (int i = 0; i < samples; ++i)
+    {
+        t.beat += step;
+        out[(size_t) i] = v.renderSample (freq, 1.0, 57.0, 0.9, macros, t);
+    }
     return out;
 }
 
@@ -154,6 +178,8 @@ std::string swapCall (const char* code, const std::string& from, const std::stri
     return s;
 }
 
+} // namespace
+
 // Spins the CPU up to its sustained clock before anything is timed (the
 // first timed case otherwise read up to 3x slow).
 void warmUp()
@@ -170,7 +196,24 @@ void warmUp()
             sink = sink + v.renderSample (kBenchFreq, 1.0, 57.0, 0.9, macros);
 }
 
-} // namespace
+PresetCost measurePresetCost (const vibesynth::Patch& patch, int runs, int samples)
+{
+    using namespace vibesynth;
+    PresetCost cost;
+    const PatchStrings ps = { patch.init.c_str(), patch.voice.c_str(), patch.master.c_str() };
+    double macros[MacroSmoother::kNumMacros] = {};
+    for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
+        macros[m] = patch.macroDefault (m);
+    const auto v = std::make_unique<EelVoice> (ps, kSampleRate, 9u);
+    const auto m = std::make_unique<EelMaster> (ps, kSampleRate);
+    if (! v->isValid() || ! m->isValid())
+        return cost;
+    cost.voiceNs = timeVoice (*v, 55.0, 33.0, macros, runs, samples);
+    const std::vector<float> in = renderInput (*v, 55.0, macros, samples);
+    cost.masterNs = timeMaster (*m, in, macros, runs, samples);
+    cost.ok = true;
+    return cost;
+}
 
 int runBench()
 {
@@ -233,7 +276,8 @@ int runBench()
     // Every built-in preset (55 Hz, gate held, macros at the patch
     // defaults). Reese also gets its other-filter variant
     // (flt_lp <-> flt_ladder) for the M7 ladder decision.
-    std::printf ("\n-- built-in presets (55 Hz, gate held, macro defaults) --\n");
+    std::printf ("\n-- built-in presets (55 Hz, gate held, macro defaults; voice budget\n"
+                 "   %.0f ns poly, %.0f ns mono) --\n", Patch::kPolyVoiceBudgetNs, Patch::kMonoVoiceBudgetNs);
     std::printf ("%-24s %11s  %8s  %6s\n", "part", "ns", "vs base", "budget");
 
     double voiceNs = 0.0;  // the default preset (index 0), for the projection
@@ -265,7 +309,7 @@ int runBench()
         const double mNs = timeMaster (*pmPtr, in, presetMacros);
         const std::string vName = patch.name + " voice";
         const std::string mName = patch.name + " master";
-        printRow (vName.c_str(), vNs, voiceBase, kVoiceBudgetNs);
+        printRow (vName.c_str(), vNs, voiceBase, patch.voiceBudgetNs());
         printRow (mName.c_str(), mNs, masterBase, kMasterBudgetNs);
         if (pi == 0)
         {
@@ -279,7 +323,7 @@ int runBench()
             const auto avPtr = std::make_unique<EelVoice> (alt, kSampleRate, 9u);
             if (avPtr->isValid())
                 printRow (usesLadder ? "  variant with flt_lp" : "  variant with ladder",
-                          timeVoice (*avPtr, 55.0, 33.0, presetMacros), voiceBase, kVoiceBudgetNs);
+                          timeVoice (*avPtr, 55.0, 33.0, presetMacros), voiceBase, patch.voiceBudgetNs());
         }
     }
 

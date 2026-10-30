@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <iterator>
 
+#include "patch/LoopNesting.h"
+
 namespace vibesynth {
 
 std::string formatCompileError (const std::string& section, const std::string& text)
@@ -22,6 +24,15 @@ std::string formatCompileError (const std::string& section, const std::string& t
 std::unique_ptr<PatchProgram> PatchProgram::build (const Patch& patch, double sampleRate,
                                                    std::string& error)
 {
+    // Restores and built-ins skip the matrix, so the nesting check runs
+    // here too: a 3-deep loop would stall the audio thread.
+    const LoopNestingResult nesting = checkLoopNesting (patch);
+    if (! nesting.ok())
+    {
+        error = loopNestingError (nesting);
+        return nullptr;
+    }
+
     std::unique_ptr<PatchProgram> prog (new PatchProgram());
     prog->patch_ = patch;
     prog->sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
@@ -60,9 +71,9 @@ constexpr int kNumMacroSets = 3;          // all 0, defaults, all 1
 constexpr double kConfigSeconds = 1.0;
 constexpr double kNoteOffSeconds = 0.7;
 constexpr double kDcWindowSeconds = 0.5;  // the last 0.5 s
-constexpr int kCheckEvery = 64;           // deadline check stride (samples)
-constexpr double kDeadlineMs = 100.0;     // 10 % of a 1 s config
-constexpr double kMaxVoiceCpu = 0.10;
+constexpr int kChunk = 64;                // voice samples per timing chunk
+constexpr double kMaxConfigCpu = 0.50;    // voice + master, per configuration
+constexpr double kDeadlineMs = 1000.0 * kConfigSeconds * kMaxConfigCpu; // 500 ms
 constexpr double kMaxPeak = 3.9810717055349722;  // +12 dBFS
 constexpr double kSilence = 1.0e-4;              // -80 dBFS
 constexpr double kMaxDc = 0.1;
@@ -105,7 +116,6 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
     ValidationResult result;
     const double scale = cpuScale >= 1.0 ? cpuScale : 1.0;
     const double deadlineMs = kDeadlineMs * scale;
-    const double maxVoiceCpu = kMaxVoiceCpu * scale;
     const auto wallStart = Clock::now();
     const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
     const int total = static_cast<int> (std::lround (sr * kConfigSeconds));
@@ -113,7 +123,7 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
     const int dcStart = total - static_cast<int> (std::lround (sr * kDcWindowSeconds));
 
     const PatchStrings ps = { patch.init.c_str(), patch.voice.c_str(), patch.master.c_str() };
-    float voiceBuf[kCheckEvery];
+    float voiceBuf[kChunk];
     double voiceNs = 0.0;
     double worstPeak = 0.0;
     auto finish = [&] (ValidationResult r)
@@ -123,6 +133,13 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
         return r;
     };
 
+    // Before compiling (SPEC §7.1): with the 1024 loop cap, more than two
+    // levels could make one sample run for seconds, past any deadline.
+    const LoopNestingResult nesting = checkLoopNesting (patch);
+    if (! nesting.ok())
+        return finish (reject (result, PatchStatus::NestedLoops, loopNestingError (nesting)));
+
+    int config = 0;
     for (const int note : kNotes)
     {
         const double freq = 440.0 * std::pow (2.0, (note - 69) / 12.0);
@@ -145,19 +162,39 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
 
             double peak = 0.0;
             double sumL = 0.0, sumR = 0.0;
+            // No host: 120 bpm, beat 0 at the note-on (SPEC §4.3).
+            Transport transport;
+            const double beatStep = transport.beatStep (sr);
             const auto configStart = Clock::now();
-            voice->noteOn (freq, note, 1.0);
+            voice->noteOn (freq, note, 1.0, transport);
 
-            for (int start = 0; start < total; start += kCheckEvery)
+            for (int start = 0; start < total; start += kChunk)
             {
-                const int n = std::min (kCheckEvery, total - start);
+                const int n = std::min (kChunk, total - start);
                 const auto t0 = Clock::now();
+                auto t1 = t0;
                 for (int k = 0; k < n; ++k)
                 {
                     const double gate = start + k < noteOff ? 1.0 : 0.0;
-                    voiceBuf[k] = voice->renderSample (freq, gate, note, 1.0, macros);
+                    transport.beat = (start + k) * beatStep;
+                    voiceBuf[k] = voice->renderSample (freq, gate, note, 1.0, macros, transport);
+
+                    // Runaway guard (SPEC §7.1), after every sample: one
+                    // sample is at most ~1M loop iterations (nesting check
+                    // + 1024 cap), so a slow patch stops within a few ms
+                    // of the deadline and the worker can always be joined.
+                    t1 = Clock::now();
+                    if (msSince (configStart, t1) > deadlineMs)
+                        return finish (reject (result, PatchStatus::TooSlow,
+                                               "too slow: over " + fmt ("%.0f", deadlineMs)
+                                                   + " ms to render 1 s (" + where (note, set) + ")"));
+                    if (cancel != nullptr && cancel->load (std::memory_order_relaxed))
+                    {
+                        result.cancelled = true;
+                        return finish (reject (result, PatchStatus::TooSlow, "cancelled"));
+                    }
                 }
-                const auto t1 = Clock::now();
+                // Includes the per-sample clock reads (~20 ns, ~0.1 % CPU).
                 voiceNs += std::chrono::duration<double, std::nano> (t1 - t0).count();
 
                 for (int k = 0; k < n; ++k)
@@ -169,7 +206,8 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
                                                "NaN or Inf in voice output at " + where (note, set)
                                                    + ", after " + fmt ("%.2f s", i / sr)));
                     float l = 0.0f, r = 0.0f;
-                    master->renderSample (v, v, l, r, macros);
+                    transport.beat = i * beatStep;
+                    master->renderSample (v, v, l, r, macros, transport);
                     if (! isFiniteBits (l) || ! isFiniteBits (r))
                         return finish (reject (result, PatchStatus::NonFinite,
                                                "NaN or Inf in master output at " + where (note, set)
@@ -183,26 +221,26 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
                         sumR += r;
                     }
                 }
-
-                // Runaway guard (SPEC §7.1): never wait out a slow patch.
-                if (msSince (configStart, Clock::now()) > deadlineMs)
-                    return finish (reject (result, PatchStatus::TooSlow,
-                                           "too slow: over " + fmt ("%.0f", deadlineMs)
-                                               + " ms to render 1 s (" + where (note, set) + ")"));
-                if (cancel != nullptr && cancel->load (std::memory_order_relaxed))
-                {
-                    result.cancelled = true;
-                    return finish (reject (result, PatchStatus::TooSlow, "cancelled"));
-                }
             }
 
+            // CPU rule (SPEC §7.1): the deadline above only looks during the
+            // voice loop, so the last chunk's master is checked here.
+            const double configMs = msSince (configStart, Clock::now());
+            result.configCpu = std::max (result.configCpu, configMs / (1000.0 * kConfigSeconds));
+            if (configMs > deadlineMs)
+                return finish (reject (result, PatchStatus::TooSlow,
+                                       "too slow: " + fmt ("%.0f", configMs) + " ms to render 1 s (max "
+                                           + fmt ("%.0f", deadlineMs) + ", " + where (note, set) + ")"));
+
+            const double window = static_cast<double> (total - dcStart);
+            const double dc = std::max (std::fabs (sumL), std::fabs (sumR)) / window;
+            result.configDc[config] = dc;
+            result.configPeak[config++] = peak;
             worstPeak = std::max (worstPeak, peak);
             if (peak > kMaxPeak)
                 return finish (reject (result, PatchStatus::TooLoud,
                                        "too loud: peak " + fmt ("%+.1f", 20.0 * std::log10 (peak))
                                            + " dBFS (max +12) at " + where (note, set)));
-            const double window = static_cast<double> (total - dcStart);
-            const double dc = std::max (std::fabs (sumL), std::fabs (sumR)) / window;
             if (dc > kMaxDc)
                 return finish (reject (result, PatchStatus::DcOffset,
                                        "DC offset " + fmt ("%.2f", dc) + " (max 0.1) at "
@@ -214,11 +252,7 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
         return finish (reject (result, PatchStatus::Silent, "patch makes no sound"));
 
     const double audioNs = 1.0e9 * kConfigSeconds * static_cast<double> (std::size (kNotes) * kNumMacroSets);
-    result.voiceCpu = voiceNs / audioNs;
-    if (result.voiceCpu > maxVoiceCpu)
-        return finish (reject (result, PatchStatus::TooSlow,
-                               "too slow: voice uses " + fmt ("%.0f", 100.0 * result.voiceCpu)
-                                   + "% of real time (max " + fmt ("%.0f", 100.0 * maxVoiceCpu) + "%)"));
+    result.voiceCpu = voiceNs / audioNs;   // reported only
 
     result.trim = std::min (1.0, quantisePatchNumber (kTrimTarget / worstPeak));
     if (result.trim <= 0.0)

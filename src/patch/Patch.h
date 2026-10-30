@@ -34,6 +34,7 @@ enum class PatchStatus
     BadField,      // version, voiceMode, macros or code have the wrong shape
     MissingVoice,  // code.voice absent or empty
     TooLarge,      // file > 256 KB or a code section > 32 KB (SPEC §7.1)
+    NestedLoops,   // loop/while nested more than 2 deep (checked before compiling)
     CompileError,  // EEL2 rejected a section
     NonFinite,     // NaN or Inf in the offline test
     TooLoud,       // peak above +12 dBFS before the limiter
@@ -73,6 +74,16 @@ struct Patch
     std::string voice;
     std::string master;             // empty = inl/inr pass straight to outl/outr
     double trim = 1.0;              // output gain from the validator, 0 < trim <= 1
+
+    // Design budget for the voice section per voice-sample (SPEC §4.2.1, M6):
+    // a mono patch sounds one voice, so it gets 4x the poly figure.
+    static constexpr double kPolyVoiceBudgetNs = 300.0;
+    static constexpr double kMonoVoiceBudgetNs = 1200.0;
+    static constexpr double kMasterBudgetNs = 2000.0;
+    double voiceBudgetNs() const noexcept
+    {
+        return voiceMode == "mono" ? kMonoVoiceBudgetNs : kPolyVoiceBudgetNs;
+    }
 
     // Macro i's default (0.5 when the patch lists fewer than i + 1 macros).
     double macroDefault (int i) const noexcept

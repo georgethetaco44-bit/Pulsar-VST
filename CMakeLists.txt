@@ -179,7 +179,23 @@ juce_add_binary_data(PulsarPresetData
     SOURCES
         resources/presets/reese.pulsar
         resources/presets/sub.pulsar
-        resources/presets/pluck.pulsar)
+        resources/presets/talking_bass.pulsar
+        resources/presets/tape_stop.pulsar
+        resources/presets/neuro_growl.pulsar
+        resources/presets/neuro_comb.pulsar
+        resources/presets/fm_snarl.pulsar
+        resources/presets/wobble.pulsar
+        resources/presets/splice_bass.pulsar
+        resources/presets/garage_organ.pulsar
+        resources/presets/twostep_stab.pulsar
+        resources/presets/pluck.pulsar
+        resources/presets/glass_mallet.pulsar
+        resources/presets/mono_lead.pulsar
+        resources/presets/coupled_scream.pulsar
+        resources/presets/feedback_guitar.pulsar
+        resources/presets/velvet_pad.pulsar
+        resources/presets/lorenz_drift.pulsar
+        resources/presets/duffing_static.pulsar)
 
 target_sources(VibeSynthVST PRIVATE
     src/PluginProcessor.cpp
@@ -204,10 +220,14 @@ target_link_libraries(VibeSynthVST PRIVATE
 # M4: the shared DSP engine, linked into the plugin and the CLI alike
 # (SPEC §10.3) so both run exactly the same code. Lexicon + PatchEngine,
 # backed by eel2 and DaisySP (MIT pin above). M5 adds PatchProgram and the
-# offline validator (JUCE-free; Patch.h is header-only from here).
+# offline validator (JUCE-free; Patch.h is header-only from here). M6 adds
+# the loop-nesting check and PatchPlayer (voices + master + output stage,
+# moved out of the processor so vibesynth_cli --render plays the same chain).
 add_library(vibesynth_engine STATIC
     src/patch/PatchEngine.cpp
     src/patch/PatchValidator.cpp
+    src/patch/LoopNesting.cpp
+    src/patch/PatchPlayer.cpp
     src/engine/LexiconRacks.cpp
     src/engine/Racks.cpp
     src/engine/Racks2.cpp
@@ -238,23 +258,32 @@ target_compile_options(vibesynth_engine PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/O2>)
 
 # Headless test tool (SPEC §10.3). Console target sharing the engine code;
-# CI runs --smoketest (gating); --bench is report-only. Engine headers come
-# through vibesynth_engine's public include dirs (no repo-root include path,
-# repo rule 10). M5: a JUCE console app (juce_core only) so it compiles the
-# same Patch.cpp as the plugin; no curl, no web browser.
+# CI runs --smoketest and --selftest (gating); --bench is report-only.
+# Engine headers come through vibesynth_engine's public include dirs (no
+# repo-root include path, repo rule 10). M5: a JUCE console app so it
+# compiles the same Patch.cpp as the plugin; no curl, no web browser. M6:
+# juce_audio_formats for --render's WAV writer.
 juce_add_console_app(vibesynth_cli
     NEEDS_CURL FALSE
     NEEDS_WEB_BROWSER FALSE)
 target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/main.cpp
     tools/vibesynth_cli/Bench.cpp
+    tools/vibesynth_cli/Render.cpp
     ${VIBESYNTH_PATCH_SOURCES})
+# --render writes WAV only: keep JUCE's bundled FLAC/Ogg Vorbis codecs (and
+# the Windows Media reader) out of the CLI.
 target_compile_definitions(vibesynth_cli PRIVATE
     JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0)
+    JUCE_USE_CURL=0
+    JUCE_USE_FLAC=0
+    JUCE_USE_OGGVORBIS=0
+    JUCE_USE_MP3AUDIOFORMAT=0
+    JUCE_USE_WINDOWS_MEDIA_FORMAT=0)
 
 # Deliberately broken patches (tests/patches, not shipped): embedded in the
 # CLI only, so --smoketest does not depend on the working directory.
+# ok_nested is the passing two-level case for the M6 loop-nesting check.
 juce_add_binary_data(PulsarTestPatches
     HEADER_NAME PulsarTestPatches.h
     NAMESPACE PulsarTestPatches
@@ -267,13 +296,16 @@ juce_add_binary_data(PulsarTestPatches
         tests/patches/broken_slow.pulsar
         tests/patches/broken_bad_json.pulsar
         tests/patches/broken_missing_voice.pulsar
-        tests/patches/broken_oversize.pulsar)
+        tests/patches/broken_oversize.pulsar
+        tests/patches/broken_nested.pulsar
+        tests/patches/ok_nested.pulsar)
 
 target_link_libraries(vibesynth_cli PRIVATE
     vibesynth_engine
     PulsarPresetData
     PulsarTestPatches
     juce::juce_core
+    juce::juce_audio_formats
     juce::juce_recommended_config_flags)
 # Keep the binary at build/vibesynth_cli (CI and docs call it there), not
 # in JUCE's vibesynth_cli_artefacts/<config> folder.

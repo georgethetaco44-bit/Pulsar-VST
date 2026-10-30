@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "name": "Garage Organ",
+  "prompt": "classic UK garage organ stab, short, punchy and a bit hollow, like the old M1 organ",
+  "macros": [
+    {
+      "label": "Decay",
+      "default": 0.4
+    },
+    {
+      "label": "Sustain",
+      "default": 0.25
+    },
+    {
+      "label": "Octave",
+      "default": 0.6
+    },
+    {
+      "label": "Twelfth",
+      "default": 0.4
+    },
+    {
+      "label": "Tone",
+      "default": 0.5
+    },
+    {
+      "label": "Bite",
+      "default": 0.3
+    },
+    {
+      "label": "Chorus",
+      "default": 0.4
+    }
+  ],
+  "voiceMode": "poly",
+  "graph": {
+    "edges": [
+      [
+        "osc_square:0",
+        "flt_lp:0"
+      ],
+      [
+        "osc_sine:0",
+        "flt_lp:0"
+      ],
+      [
+        "osc_sine:1",
+        "flt_lp:0"
+      ],
+      [
+        "env_adsr:0",
+        "flt_lp:0"
+      ],
+      [
+        "flt_lp:0",
+        "fx_sat"
+      ],
+      [
+        "fx_sat",
+        "out"
+      ],
+      [
+        "out",
+        "bus_chorus"
+      ]
+    ]
+  },
+  "code": {
+    "init": "",
+    "voice": "// percussive organ envelope: quick decay into a low sustain\nenv = env_adsr(0, gate, 0.05, 0.45 + m1 * 0.2, m2 * 0.7, 0.4);\n// drawbars: hollow square fundamental, sine octave and twelfth\nx = osc_square(0, freq, 0.5) * 0.5 + osc_sine(0, freq * 2) * m3 * 0.6 + osc_sine(1, freq * 3) * m4 * 0.4;\n// key click: the filter is brightest at the attack\ny = flt_lp(0, x, 0.42 + m5 * 0.3 + env * 0.2, 0.2);\n// a little bite\ny = fx_sat(y, m6);\nout = y * env * (0.6 + 0.8 * vel);",
+    "master": "// light chorus for width\noutl = bus_chorus(inl, inr, 0.3, m7 * 0.5);\noutr = bus_chorus_r();"
+  },
+  "trim": 0.820477
+}

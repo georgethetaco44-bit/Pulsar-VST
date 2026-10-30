@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "name": "Splice Bass",
+  "prompt": "a bass that cuts between a raw saw and a plucked string on zero crossings, stuttery and alive",
+  "macros": [
+    {
+      "label": "Splice Rate",
+      "default": 0.4
+    },
+    {
+      "label": "String Tone",
+      "default": 0.5
+    },
+    {
+      "label": "String Decay",
+      "default": 0.6
+    },
+    {
+      "label": "String Level",
+      "default": 0.6
+    },
+    {
+      "label": "Drive",
+      "default": 0.3
+    }
+  ],
+  "voiceMode": "mono",
+  "graph": {
+    "edges": [
+      [
+        "osc_sine:0",
+        "out"
+      ],
+      [
+        "osc_saw:0",
+        "phys_string:0"
+      ],
+      [
+        "osc_saw:0",
+        "out"
+      ],
+      [
+        "phys_string:0",
+        "out"
+      ]
+    ]
+  },
+  "code": {
+    "init": "// every note starts on the saw\nflip = 0; n = 0; prev = 0;",
+    "voice": "// amp envelope\nenv = env_adsr(0, gate, 0.1, 0.4, 0.9, 0.3);\n// reference sine: its rising zero crossings are the splice points\nref = osc_sine(0, freq);\n// every N cycles (Splice Rate) switch engines\n(prev <= 0 && ref > 0) ? (\n  n += 1;\n  n >= 8 - floor(m1 * 7) ? (n = 0; flip = !flip);\n);\nprev = ref;\n// both engines run every sample so their phases stay continuous\na = osc_saw(0, freq);\nb = phys_string(0, a * 0.2, freq * 2, m2, 0.6 + m3 * 0.35) * m4 * 3;\nout = fx_sat(flip ? b : a, m5) * env;",
+    "master": ""
+  },
+  "trim": 0.940211
+}

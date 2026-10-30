@@ -20,7 +20,7 @@
       "default": 0.35
     }
   ],
-  "voiceMode": "poly",
+  "voiceMode": "mono",
   "graph": {
     "edges": [
       [
@@ -62,9 +62,9 @@
     ]
   },
   "code": {
-    "init": "fb1 = 0; prev = 0;",
-    "voice": "det = 1 + (m1 - 0.5) * 0.02;\na = osc_supersaw(0, freq * det * (1 + fb1 * m3 * 0.02), m1, 0.65);\nb = osc_saw(0, freq * (2 - det));\nsub = osc_sine(1, freq * 0.5);\nenv = env_adsr(0, gate, 0.08, 0.35, 0.55, 0.5);\ncut = min(0.97, 0.12 + m2 * 0.55 + env * 0.30);\nx = a * 0.7 + b * 0.3;\ny = flt_lp(0, x, cut, m3);\ny = fx_sat(y + sub * 0.5, m4);\ny = fx_fold(y, m4 * 0.35);\nfb1 = util_safe_fb(0, y);\n// DC trap (~3 Hz): the fold on a saw + octave + sub mix makes DC.\ndc += (y - dc) * 20 / srate;\ny -= dc;\nout = y * env * (0.5 + 0.5 * vel);",
-    "master": "outl = bus_mono_low(inl, inr);\noutr = bus_mono_low_r();\noutl = bus_sat(outl, 0.35);\noutr = bus_sat(outr, 0.35);"
+    "init": "// each note starts with no feedback\nfb1 = 0; prev = 0;",
+    "voice": "// supersaw + counter-detuned saw; last sample's output nudges the pitch\ndet = 1 + (m1 - 0.5) * 0.02;\na = osc_supersaw(0, freq * det * (1 + fb1 * m3 * 0.02), m1, 0.65);\nb = osc_saw(0, freq * (2 - det));\n// octave-down sine, summed into the drive below: this is the weight\nsub = osc_sine(1, freq * 0.5);\n// one envelope for amp and filter\nenv = env_adsr(0, gate, 0.08, 0.35, 0.55, 0.5);\ncut = min(0.97, 0.12 + m2 * 0.55 + env * 0.30);\nx = a * 0.7 + b * 0.3;\ny = flt_lp(0, x, cut, m3);\n// drive the filtered saws and the sub together, then a light fold\ny = fx_sat(y + sub * 0.5, m4);\ny = fx_fold(y, m4 * 0.35);\n// one-sample feedback, made safe\nfb1 = util_safe_fb(0, y);\n// DC trap (~3 Hz): the fold on a saw + octave + sub mix makes DC.\ndc += (y - dc) * 20 / srate;\ny -= dc;\nout = y * env * (0.5 + 0.5 * vel);",
+    "master": "// sub-100 Hz to mono, then glue\noutl = bus_mono_low(inl, inr);\noutr = bus_mono_low_r();\noutl = bus_sat(outl, 0.35);\noutr = bus_sat(outr, 0.35);"
   },
   "trim": 1.0
 }

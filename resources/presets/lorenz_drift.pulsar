@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "name": "Lorenz Drift",
+  "prompt": "dark drone that slowly drifts and never repeats, with a crunchy stepped edge",
+  "macros": [
+    {
+      "label": "Drift Rate",
+      "default": 0.3
+    },
+    {
+      "label": "Drift Depth",
+      "default": 0.4
+    },
+    {
+      "label": "Shape",
+      "default": 0.4
+    },
+    {
+      "label": "Cutoff",
+      "default": 0.45
+    },
+    {
+      "label": "Space",
+      "default": 0.5
+    }
+  ],
+  "voiceMode": "poly",
+  "graph": {
+    "edges": [
+      [
+        "chaos_lorenz:0",
+        "osc_saw:0"
+      ],
+      [
+        "chaos_lorenz:0",
+        "flt_lp:0"
+      ],
+      [
+        "osc_saw:0",
+        "flt_lp:0"
+      ],
+      [
+        "flt_lp:0",
+        "out"
+      ],
+      [
+        "env_adsr:0",
+        "out"
+      ],
+      [
+        "out",
+        "bus_reverb"
+      ],
+      [
+        "bus_reverb",
+        "bus_sat"
+      ]
+    ]
+  },
+  "code": {
+    "init": "",
+    "voice": "// slow Lorenz orbit (rate near 0 = LFO rate) is the drift source\nc = chaos_lorenz(0, m1 * 0.25, 0);\nx = osc_saw(0, freq * (1 + c * m2 * 0.03));\n// piece-wise shaper: sine fold above zero, stepped below\ny = x > 0 ? sin(x * (1 + m3 * 6)) : floor(x * 4) / 4;\n// the orbit also sweeps the lowpass\ny = flt_lp(0, y, 0.3 + m4 * 0.4 + c * 0.15, 0.35);\n// DC trap: the asymmetric shaper makes DC\ndc += (y - dc) * 20 / srate;\ny -= dc;\n// slow swell\nenv = env_adsr(0, gate, 0.65, 0.5, 1, 0.75);\nout = y * env * 0.5;",
+    "master": "// big space\noutl = bus_reverb(inl, inr, 0.75, m5 * 0.6);\noutr = bus_reverb_r();\n// bus_sat at drive 0.3 caps the output at 0.69, whatever the chaos does\noutl = bus_sat(outl, 0.3);\noutr = bus_sat(outr, 0.3);"
+  },
+  "trim": 1.0
+}

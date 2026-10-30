@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "name": "140 Wobble",
+  "prompt": "140 dubstep wobble bass, square wub over a solid sub, wobble rate stepping in note values",
+  "macros": [
+    {
+      "label": "Rate",
+      "default": 0.5
+    },
+    {
+      "label": "Depth",
+      "default": 0.6
+    },
+    {
+      "label": "Resonance",
+      "default": 0.45
+    },
+    {
+      "label": "Drive",
+      "default": 0.3
+    },
+    {
+      "label": "Wub Level",
+      "default": 0.8
+    },
+    {
+      "label": "Sub Level",
+      "default": 0.7
+    }
+  ],
+  "voiceMode": "mono",
+  "graph": {
+    "edges": [
+      [
+        "osc_square:0",
+        "flt_lp:0"
+      ],
+      [
+        "flt_lp:0",
+        "fx_sat"
+      ],
+      [
+        "fx_sat",
+        "out"
+      ],
+      [
+        "osc_sine:0",
+        "out"
+      ]
+    ]
+  },
+  "code": {
+    "init": "// restart the wobble at every note\nph = 0;",
+    "voice": "// amp envelope\nenv = env_adsr(0, gate, 0.1, 0.3, 1, 0.3);\n// LFO steps through 1/2, 1/4, 1/8, 1/16, 1/32 notes at 140 BPM\nrate = 2.3333 * 2 ^ (floor(m1 * 4.99) - 1);\nph += rate / srate;\nph -= floor(ph);\nlfo = 4 * ph * (1 - ph);\n// square wub through the swept lowpass, then drive\ny = flt_lp(0, osc_square(0, freq, 0.5), 0.2 + lfo * m2 * 0.55, 0.4 + m3 * 0.5);\ny = fx_sat(y, m4);\n// clean sine sub\nout = (y * m5 + osc_sine(0, freq) * m6) * env;",
+    "master": ""
+  },
+  "trim": 0.45511
+}

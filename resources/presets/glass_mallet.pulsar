@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "name": "Glass Mallet",
+  "prompt": "glassy mallet bell, struck with a bit of synth fizz, rings like a small metal bar",
+  "macros": [
+    {
+      "label": "Hardness",
+      "default": 0.4
+    },
+    {
+      "label": "Material",
+      "default": 0.45
+    },
+    {
+      "label": "Brightness",
+      "default": 0.55
+    },
+    {
+      "label": "Ring",
+      "default": 0.55
+    },
+    {
+      "label": "Room",
+      "default": 0.3
+    }
+  ],
+  "voiceMode": "poly",
+  "graph": {
+    "edges": [
+      [
+        "osc_saw:0",
+        "phys_resonator:0"
+      ],
+      [
+        "phys_resonator:0",
+        "out"
+      ],
+      [
+        "out",
+        "bus_reverb"
+      ]
+    ]
+  },
+  "code": {
+    "init": "// the mallet's decay: a 5-16 ms time constant by Hardness, set once per note\nhit = 1;\ndk = exp(-1 / (srate * 0.00525 * pow(3.02, m1)));",
+    "voice": "// the mallet: a short burst of a synth signal, not a click\nhit *= dk;\nex = osc_saw(0, freq * 1.5) * hit * hit * 0.5;\n// modal resonator: Material = inharmonicity, key-up damps the ring\ny = phys_resonator(0, ex, freq, 0.3 + m2 * 0.5, 0.35 + m3 * 0.55, gate ? 0.35 + m4 * 0.5 : 0.2);\nout = y * (0.6 + 0.4 * vel);",
+    "master": "// small room\noutl = bus_reverb(inl, inr, 0.45, m5 * 0.5);\noutr = bus_reverb_r();"
+  },
+  "trim": 0.82804
+}

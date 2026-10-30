@@ -12,8 +12,8 @@
 
 namespace vibesynth {
 
-// Rack of the calling VM; nullptr if the VM is the other type (voice
-// wrappers return 0 on a master VM and vice versa).
+// Rack of the calling VM; nullptr if the VM has none of that type (bus_*
+// wrappers return 0 on a voice VM). The master VM has both.
 inline VoiceRack* voiceRackOf (void* ctx) noexcept
 {
     auto* rc = static_cast<VmRackContext*> (ctx);

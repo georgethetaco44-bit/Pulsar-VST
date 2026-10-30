@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "OK: nested",
+  "prompt": "test patch for the M6 loop-nesting check (must pass: two levels)",
+  "macros": [
+    {
+      "label": "A",
+      "default": 0.5
+    }
+  ],
+  "voiceMode": "poly",
+  "code": {
+    "init": "",
+    "voice": "// loop(1, loop(1, loop(1, 0))) in a comment does not count\n/* nor does loop( while( loop( in a block comment */\nfunction smear(x) local(i) ( i = 0; loop(4, i += x); i * 0.25 );\n// the loop inside smear() is the second level\ns = osc_sine(0, freq);\ny = 0;\nloop(3, y += smear(s));\nout = y * 0.1;",
+    "master": ""
+  }
+}

@@ -78,6 +78,7 @@ const char* patchStatusName (PatchStatus s) noexcept
         case PatchStatus::BadField:     return "bad_field";
         case PatchStatus::MissingVoice: return "missing_voice";
         case PatchStatus::TooLarge:     return "oversize";
+        case PatchStatus::NestedLoops:  return "nested";
         case PatchStatus::CompileError: return "compile_error";
         case PatchStatus::NonFinite:    return "nan";
         case PatchStatus::TooLoud:      return "loud";
@@ -217,8 +218,9 @@ std::string serializePatch (const Patch& p)
 }
 
 // ---------------------------------------------------------------------------
-// Built-in presets. Order is the host program order; index 0 is the
-// default patch.
+// Built-in presets. Order is the host program order (and the editor's
+// preset box): basses, keys/stabs, plucks, leads/pads, textures. Index 0
+// is the default patch.
 
 namespace {
 
@@ -229,9 +231,30 @@ struct BuiltinEntry
 };
 
 constexpr BuiltinEntry kBuiltins[] = {
-    { "reese.pulsar", "reese_pulsar" },
-    { "sub.pulsar",   "sub_pulsar" },
-    { "pluck.pulsar", "pluck_pulsar" },
+    // basses
+    { "reese.pulsar",          "reese_pulsar" },
+    { "sub.pulsar",            "sub_pulsar" },
+    { "talking_bass.pulsar",   "talking_bass_pulsar" },
+    { "tape_stop.pulsar",      "tape_stop_pulsar" },
+    { "neuro_growl.pulsar",    "neuro_growl_pulsar" },
+    { "neuro_comb.pulsar",     "neuro_comb_pulsar" },
+    { "fm_snarl.pulsar",       "fm_snarl_pulsar" },
+    { "wobble.pulsar",         "wobble_pulsar" },
+    { "splice_bass.pulsar",    "splice_bass_pulsar" },
+    // keys / stabs
+    { "garage_organ.pulsar",   "garage_organ_pulsar" },
+    { "twostep_stab.pulsar",   "twostep_stab_pulsar" },
+    // plucks
+    { "pluck.pulsar",          "pluck_pulsar" },
+    { "glass_mallet.pulsar",   "glass_mallet_pulsar" },
+    // leads / pads
+    { "mono_lead.pulsar",      "mono_lead_pulsar" },
+    { "coupled_scream.pulsar", "coupled_scream_pulsar" },
+    { "feedback_guitar.pulsar", "feedback_guitar_pulsar" },
+    { "velvet_pad.pulsar",     "velvet_pad_pulsar" },
+    // textures
+    { "lorenz_drift.pulsar",   "lorenz_drift_pulsar" },
+    { "duffing_static.pulsar", "duffing_static_pulsar" },
 };
 
 constexpr int kNumBuiltins = static_cast<int> (sizeof (kBuiltins) / sizeof (kBuiltins[0]));

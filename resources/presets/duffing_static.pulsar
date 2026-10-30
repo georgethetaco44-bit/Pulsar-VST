@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "name": "Duffing Static",
+  "prompt": "gritty chaotic drone like a broken radio that is still slightly in tune",
+  "macros": [
+    {
+      "label": "Detune",
+      "default": 0.5
+    },
+    {
+      "label": "Chaos",
+      "default": 0.6
+    },
+    {
+      "label": "Duffing Mix",
+      "default": 0.5
+    },
+    {
+      "label": "Resonance",
+      "default": 0.6
+    },
+    {
+      "label": "Crush",
+      "default": 0.4
+    },
+    {
+      "label": "Downsample",
+      "default": 0.3
+    }
+  ],
+  "voiceMode": "poly",
+  "graph": {
+    "edges": [
+      [
+        "chaos_lorenz:0",
+        "fx_comb:0"
+      ],
+      [
+        "chaos_duffing:0",
+        "fx_comb:0"
+      ],
+      [
+        "fx_comb:0",
+        "fx_crush:0"
+      ],
+      [
+        "fx_crush:0",
+        "out"
+      ],
+      [
+        "env_adsr:0",
+        "out"
+      ],
+      [
+        "out",
+        "bus_sat"
+      ]
+    ]
+  },
+  "code": {
+    "init": "// Lorenz rate that puts the orbit at the note (0-1 maps to 0.05 Hz - 1 kHz)\nr = log(freq / 0.05) / log(20000);",
+    "voice": "// audio-rate Lorenz orbit near the note; Detune pulls it off pitch\nc = chaos_lorenz(0, r + (m1 - 0.5) * 0.06, 0);\n// Duffing forced at the note: a tone at Chaos 0, broken toward 1\nd = chaos_duffing(0, freq, m2);\nx = c * (1 - m3) + d * m3;\n// comb at the note keeps the chaos pitched\ny = fx_comb(0, x * 0.5, freq, 0.4 + m4 * 0.5);\n// radio crush\ny = fx_crush(0, y, 0.5 + m5 * 0.35, 1 - m6 * 0.7);\n// DC trap: Lorenz lobes (boosted by the comb) and truncation both make DC\ndc += (y - dc) * 20 / srate;\ny -= dc;\n// amp envelope\nenv = env_adsr(0, gate, 0.3, 0.5, 0.9, 0.6);\nout = y * env;",
+    "master": "// bus_sat at drive 0.3 caps the output at 0.69, whatever the chaos does\noutl = bus_sat(outl, 0.3);\noutr = bus_sat(outr, 0.3);"
+  },
+  "trim": 1.0
+}

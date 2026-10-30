@@ -11,14 +11,14 @@
 #include <string>
 #include <vector>
 
-#include "engine/OutputStage.h"
 #include "patch/Patch.h"
 #include "patch/PatchEngine.h"
+#include "patch/PatchPlayer.h"
 #include "patch/PatchValidator.h"
 
 //==============================================================================
 /**
-    VibeSynthAudioProcessor, Milestone 5 (SPEC section 13, M5).
+    VibeSynthAudioProcessor, Milestone 6 (SPEC section 13, M6).
 
     - 8 automatable float parameters "Macro 1".."Macro 8" (0..1, default 0.5)
       exposed via AudioProcessorValueTreeState, smoothed per sample by
@@ -30,16 +30,20 @@
       SPSC queue and the worker frees them (SPEC 3, 7.3). A swap fades out
       over 5 ms, swaps, and fades in over 5 ms; held notes restart on their
       new voices.
-    - Voice slot state (note, gate, steal fade) lives here, so it survives
-      a swap. At most 8 voices sound at once; the 2 spares let a stolen
-      voice fade out over 2 ms while the new note starts immediately.
+    - M6: voices, MIDI, the master VM, the runtime guard and the output
+      stage live in vibesynth::PatchPlayer (shared with vibesynth_cli
+      --render). Its voice slot state (note, gate, steal fade) survives a
+      swap. At most 8 voices sound at once; the 2 spares let a stolen voice
+      fade out over 2 ms while the new note starts immediately.
     - Runtime guard (SPEC 7.2): a voice that outputs a non-finite sample is
       zeroed, reset (rack + VM variables + mem[]) and muted for 20 ms; the
       master gets the same treatment. Output chain: trim -> DC block ->
       limiter (-0.3 dBFS) -> clip -> final non-finite check.
     - State (SPEC 9.3): the APVTS tree plus the patch JSON as a property.
       Restoring recompiles the saved code (no offline matrix).
-    - The built-in presets are the host programs.
+    - The built-in presets are the host programs. Selecting one compiles it
+      with its stored trim (no matrix, SPEC 9.4); CI's --selftest checks
+      that every stored trim matches the computed one.
 */
 class VibeSynthAudioProcessor final : public juce::AudioProcessor,
                                       public juce::ChangeBroadcaster,
@@ -83,8 +87,9 @@ public:
 
     //==============================================================================
     // Patch loading (message thread; the editor and the host program API).
-    // Loads run the full compile + offline test on the worker; a rejected
-    // patch leaves the current sound playing and the reason in the status.
+    // A file load runs the full compile + offline test on the worker; a
+    // built-in only compiles (stored trim). A rejected patch leaves the
+    // current sound playing and the reason in the status.
     void loadBuiltin (int index);
     void loadPatchFile (const juce::File& file);
     // The active patch as .pulsar text (for Save...).
@@ -98,10 +103,7 @@ public:
 
     //==============================================================================
     static constexpr int numMacros = vibesynth::MacroSmoother::kNumMacros;
-    static constexpr int maxSoundingVoices = 8;  // SPEC 9.1 polyphony
-    static constexpr int numVoiceObjects = vibesynth::PatchProgram::kNumVoices; // + 2 spares
     static constexpr double swapFadeSeconds = 0.005;   // SPEC 7.3
-    static constexpr double guardMuteSeconds = 0.020;  // SPEC 7.2
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -141,7 +143,10 @@ private:
     // finished programs to the audio thread and frees retired ones.
     struct LoadJob
     {
-        enum class Kind { Load, Restore };
+        // Load: parse + offline matrix + compile (files). Builtin: parse +
+        // compile with the stored trim, sets macro defaults. Restore: parse
+        // + compile, keeps macros, falls back to the default patch.
+        enum class Kind { Load, Builtin, Restore };
         Kind kind = Kind::Load;
         std::string text;
         juce::String source;     // shown in the status line
@@ -153,7 +158,7 @@ private:
         bool ok = false;
         juce::String message;
         vibesynth::Patch patch;  // labels/defaults for the UI when ok
-        bool setMacros = false;  // a Load (not a restore) sets macros to the patch defaults
+        bool setMacros = false;  // a Load or Builtin (not a restore) sets macros to the patch defaults
         uint64_t generation = 0;
     };
 
@@ -177,47 +182,6 @@ private:
     void postResult (LoadResult result);
     void handleAsyncUpdate() override;
 
-    //==============================================================================
-    // Voice slots (audio thread). Active = playing (gate held or
-    // releasing); Fading = stolen, in its 2 ms fade, optionally with a note
-    // queued to start in place when the fade ends (hard steal).
-    struct VoiceSlot
-    {
-        enum class State { Free, Active, Fading };
-
-        int index = 0;                // voice object in the current program
-        State state = State::Free;
-        vibesynth::VoiceLifetime lifetime;
-        int note = -1;
-        double freq = 0.0;
-        double vel = 0.0;
-        uint64_t startOrder = 0;      // note-on order: smaller = older
-        bool renderedSinceNoteOn = false;
-        bool releasePending = false;  // note-off before the note-on sample
-        bool hasPending = false;
-        int pendingNote = -1;
-        double pendingVel = 0.0;
-        bool pendingReleased = false;
-        int muteSamples = 0;          // runtime guard: silent, not rendered
-    };
-
-    vibesynth::EelVoice& voiceOf (const VoiceSlot& v) noexcept { return program->voice (v.index); }
-    void handleMidi (const juce::uint8* data, int numBytes) noexcept;
-    void startNote (int note, double velocity) noexcept;
-    void stopNote (int note) noexcept;
-    void allNotesOff() noexcept;
-    void allSoundOff() noexcept;
-    void beginNote (VoiceSlot& v, int note, double velocity) noexcept;
-    void beginFade (VoiceSlot& v) noexcept;
-    VoiceSlot* findFree() noexcept;
-    // Oldest slot (smallest startOrder) matching a captureless predicate.
-    VoiceSlot* oldestWhere (bool (*pred) (const VoiceSlot&)) noexcept;
-    // Steal victim among Active voices: the oldest released one, else the
-    // oldest held one.
-    VoiceSlot* stealVictim() noexcept;
-    void renderVoices (int start, int end) noexcept;
-    void tripVoice (VoiceSlot& v) noexcept;
-
     // Swap protocol (audio thread).
     void pollSwapQueue() noexcept;
     void swapPrograms() noexcept;
@@ -225,30 +189,18 @@ private:
     void flushRetireStash() noexcept;
     int samplesUntilSilent() const noexcept;
 
-    void resetVoiceSlots() noexcept;
-
     //==============================================================================
     // Audio-thread state. prepareToPlay and the destructor also touch it,
     // which is safe because the host never runs them concurrently with
-    // processBlock.
-    std::array<VoiceSlot, numVoiceObjects> voices;
-    PatchProgram* program = nullptr;   // current sound
+    // processBlock. The player's program is the current sound (owned here).
+    vibesynth::PatchPlayer player;
     PatchProgram* incoming = nullptr;  // received, waiting for the fade-out
     enum class Fade { None, Out, In };
     Fade fade = Fade::None;
     float fadeGain = 1.0f;
     float fadeStep = 1.0f;
-    int masterMuteSamples = 0;
     std::array<PatchProgram*, 8> retireStash {};  // retire queue full (rare)
-    vibesynth::MacroSmoother smoother;
-    vibesynth::OutputStage outputStage;
     std::array<std::atomic<float>*, numMacros> macroParams {};
-    std::vector<float> voiceSum;     // mono voice mix for one chunk
-    std::vector<double> macroBlock;  // smoothed macros, numMacros per sample
-    int chunkCapacity = 0;
-    int guardMuteLength = 960;
-    double currentSampleRate = 48000.0;
-    uint64_t noteCounter = 0;
 
     // Worker -> audio, audio -> worker (SPEC 3: ownership moves only here).
     ProgramQueue<16> swapQueue;

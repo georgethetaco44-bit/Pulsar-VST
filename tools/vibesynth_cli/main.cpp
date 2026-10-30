@@ -2,18 +2,30 @@
 // (links vibesynth_engine and compiles the same Patch.cpp; M5 made it a
 // juce_core console app for juce::JSON), so CI tests exactly the code the
 // plugin runs. Modes:
-//   --smoketest  gating in CI, exit 1 on any failure: the M3 sine checks
-//                (440 Hz zero crossings, an isolated 220 Hz second voice,
-//                JIT mode), trig semantics, the steal fade, the max error of
-//                the tanh/sin approximations, chaos/crush sanity, every
-//                bench case compiling and rendering finite, the default
-//                preset (Reese) held 2 s then released, and M5: the 1024
-//                loop cap (loop and while), the runtime-guard VM reset, the
-//                output stage, .pulsar round trips, every built-in preset
-//                passing the offline test, and every tests/patches file
-//                rejected with its expected reason.
+//   --smoketest  engine + safety gate in CI, exit 1 on any failure: the M3
+//                sine checks (440 Hz zero crossings, an isolated 220 Hz
+//                second voice, JIT mode), trig semantics, the steal fade,
+//                the max error of the tanh/sin approximations, chaos/crush
+//                sanity, every bench case compiling and rendering finite,
+//                the default preset (Reese) held 2 s then released, and M5:
+//                the 1024 loop cap (loop and while), the runtime-guard VM
+//                reset, the output stage, and every tests/patches/broken_*
+//                file rejected with its expected reason. M6: the
+//                loop-nesting check (cases + tests/patches/ok_nested), a
+//                worker thread validating broken_slow stopping promptly,
+//                the master's own VoiceRack, bpm/beat, and the selftest's
+//                trim tolerance and CPU budgets.
+//   --selftest   the preset gate in CI (M6, exit 1 on any failure): every
+//                built-in parses, round-trips, passes the offline test with
+//                its stored trim within 1 dB of the computed one, builds a
+//                PatchProgram, and has labelled macros and a prompt. Its CPU
+//                cost (voice 300 ns poly / 1,200 ns mono, master 2 µs) is
+//                reported; only --selftest --strict-cpu (the Deck, never CI)
+//                fails a preset over budget (SPEC §4.2.1).
 //   --bench      report-only (always exit 0); see Bench.cpp.
 //   --validate   parse + offline-test one .pulsar file (exit 1 if rejected).
+//   --render     play the test phrase through PatchPlayer into a WAV; see
+//                Render.cpp.
 
 #include <cstdarg>
 #include <cstddef>
@@ -31,11 +43,16 @@
 #include <sys/sysctl.h>
 #endif
 
+#include <juce_core/juce_core.h>
+
 #include "Bench.h"
 #include "PulsarTestPatches.h"
+#include "Render.h"
 #include "engine/OutputStage.h"
+#include "patch/LoopNesting.h"
 #include "patch/Patch.h"
 #include "patch/PatchEngine.h"
+#include "patch/PatchPlayer.h"
 #include "patch/PatchValidator.h"
 
 namespace {
@@ -578,57 +595,151 @@ bool smokeOutputStage()
 }
 
 // ---------------------------------------------------------------------------
-// M5 patch system: built-ins parse, round-trip exactly, compile into a
-// PatchProgram and pass the offline matrix (wall time printed); every
-// tests/patches/broken_<reason>.pulsar is rejected with <reason>.
+// M6 --selftest, the preset gate: every built-in parses, round-trips
+// exactly, passes the offline matrix, has its stored trim within 1 dB of
+// the computed one (the plugin selects built-ins compile-only, SPEC 9.4),
+// reports its CPU cost against its budget by voice mode (failing on it only
+// with --strict-cpu, SPEC 4.2.1), builds a PatchProgram, and follows the authoring rules the few-shot
+// examples rely on (a prompt, 4-8 macros, every macro labelled, and the
+// code reads exactly the macros it labels).
 
-bool smokeBuiltinPresets()
+bool isIdentChar (char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+        || c == '_' || c == '.';
+}
+
+// Bit i set when the code reads m<i+1> (comments skipped).
+unsigned macrosRead (const std::string& code)
+{
+    unsigned used = 0;
+    for (size_t i = 0; i < code.size(); ++i)
+    {
+        if (code.compare (i, 2, "//") == 0)
+        {
+            i = code.find ('\n', i);
+            if (i == std::string::npos)
+                break;
+        }
+        else if (code.compare (i, 2, "/*") == 0)
+        {
+            i = code.find ("*/", i + 2);
+            if (i == std::string::npos)
+                break;
+            ++i;
+        }
+        else if ((code[i] == 'm' || code[i] == 'M') && (i == 0 || ! isIdentChar (code[i - 1]))
+                 && i + 1 < code.size() && code[i + 1] >= '1' && code[i + 1] <= '8'
+                 && (i + 2 >= code.size() || ! isIdentChar (code[i + 2])))
+        {
+            used |= 1u << (code[i + 1] - '1');
+        }
+    }
+    return used;
+}
+
+// SPEC 9.4: a stored trim may differ from the computed one by up to 1 dB
+// (FMA on arm64 and chaotic or crushed signals move the exact peak).
+constexpr double kTrimToleranceDb = 1.0;
+
+double trimDifferenceDb (double stored, double computed)
+{
+    return std::fabs (20.0 * std::log10 (stored / computed));
+}
+
+bool trimMatches (double stored, double computed)
+{
+    return trimDifferenceDb (stored, computed) <= kTrimToleranceDb;
+}
+
+// Selftest CPU check: median of 3 x 0.5 s (bench uses 7 x 1 s).
+constexpr int kSelftestCostRuns = 3;
+constexpr int kSelftestCostSamples = kOneSecond / 2;
+
+bool selftestPreset (int index, bool strictCpu)
+{
+    using namespace vibesynth;
+    const char* file = builtinPresetFile (index);
+    const ParseResult pr = parsePatch (builtinPresetText (index));
+    if (! check (pr.ok(), "%s parses%s%s", file, pr.ok() ? "" : ": ", pr.error.c_str()))
+        return false;
+    const Patch& patch = pr.patch;
+
+    const std::string text = serializePatch (patch);
+    const ParseResult again = parsePatch (text);
+    bool ok = check (again.ok() && again.patch == patch && serializePatch (again.patch) == text,
+                     "%s round-trips through serialize/parse", file);
+
+    bool labelled = ! patch.macros.empty();
+    for (const MacroSpec& m : patch.macros)
+        labelled = labelled && ! m.label.empty();
+    const int numMacros = static_cast<int> (patch.macros.size());
+    ok = check (! patch.prompt.empty() && numMacros >= 4 && numMacros <= 8 && labelled,
+                "%s has a prompt and %d labelled macros (want 4-8)", file, numMacros) && ok;
+    const unsigned read = macrosRead (patch.init) | macrosRead (patch.voice) | macrosRead (patch.master);
+    const unsigned listed = (1u << numMacros) - 1u;
+    ok = check (read == listed, "%s reads exactly its labelled macros m1-m%d (read mask 0x%02x)",
+                file, numMacros, read) && ok;
+
+    const ValidationResult vr = validatePatch (patch, kSampleRate, nullptr, validatorCpuScale());
+    if (! check (vr.ok(), "%s passes the offline test%s%s", file, vr.ok() ? "" : ": ",
+                 vr.error.c_str()))
+        return false;
+    std::printf ("       %-16s peak %+5.1f dBFS, trim %+5.1f dB, worst config %.1f%% of real time, "
+                 "matrix %3.0f ms (target < %.0f, report-only)\n",
+                 patch.name.c_str(), 20.0 * std::log10 (vr.peak), 20.0 * std::log10 (vr.trim),
+                 100.0 * vr.configCpu, vr.wallMs, patch.voiceMode == "mono" ? 600.0 : 300.0);
+
+    ok = check (trimMatches (patch.trim, vr.trim),
+                "%s stored trim %.6f matches the computed %.6f (%.3f dB apart, max %.0f)",
+                file, patch.trim, vr.trim, trimDifferenceDb (patch.trim, vr.trim),
+                kTrimToleranceDb) && ok;
+
+    const double scale = validatorCpuScale();
+    const vibesynth_cli::PresetCost cost = vibesynth_cli::measurePresetCost (patch, kSelftestCostRuns,
+                                                                             kSelftestCostSamples);
+    const bool fits = cost.ok && cost.voiceNs <= patch.voiceBudgetNs() * scale
+                      && cost.masterNs <= Patch::kMasterBudgetNs * scale;
+    if (strictCpu)
+        ok = check (fits, "%s fits its CPU budget: voice %.0f ns (%s, max %.0f), master %.0f ns (max %.0f)",
+                    file, cost.voiceNs, patch.voiceMode.c_str(), patch.voiceBudgetNs() * scale,
+                    cost.masterNs, Patch::kMasterBudgetNs * scale) && ok;
+    else
+        std::printf ("[INFO] %s CPU: voice %.0f ns (%s, budget %.0f), master %.0f ns (budget %.0f)%s\n",
+                     file, cost.voiceNs, patch.voiceMode.c_str(), patch.voiceBudgetNs() * scale,
+                     cost.masterNs, Patch::kMasterBudgetNs * scale,
+                     ! cost.ok ? " - not measured" : fits ? "" : " - OVER (gates only with --strict-cpu)");
+
+    // The plugin's built-in path: compile only, with the stored trim.
+    std::string error;
+    const auto prog = PatchProgram::build (patch, kSampleRate, error);
+    ok = check (prog != nullptr, "%s builds a PatchProgram (10 voices + master)%s%s",
+                file, prog != nullptr ? "" : ": ", error.c_str()) && ok;
+    return ok;
+}
+
+int runSelftest (bool strictCpu)
 {
     using namespace vibesynth;
     if (runningUnderRosetta())
         std::printf ("[NOTE] running under Rosetta: validator CPU limit and deadline x%.0f\n",
                      validatorCpuScale());
-    bool ok = check (numBuiltinPresets() >= 3, "%d built-in presets", numBuiltinPresets());
+    std::printf (strictCpu ? "[NOTE] --strict-cpu: a preset over its CPU budget fails\n"
+                           : "[NOTE] CPU budgets are report-only (gate with --strict-cpu)\n");
+    vibesynth_cli::warmUp();
+    bool ok = check (numBuiltinPresets() >= 15, "%d built-in presets (want >= 15)", numBuiltinPresets());
+    int passed = 0;
     for (int i = 0; i < numBuiltinPresets(); ++i)
     {
-        const char* file = builtinPresetFile (i);
-        const ParseResult pr = parsePatch (builtinPresetText (i));
-        if (! check (pr.ok(), "%s parses%s%s", file, pr.ok() ? "" : ": ", pr.error.c_str()))
-        {
+        if (selftestPreset (i, strictCpu))
+            ++passed;
+        else
             ok = false;
-            continue;
-        }
-        const std::string text = serializePatch (pr.patch);
-        const ParseResult again = parsePatch (text);
-        ok = check (again.ok() && again.patch == pr.patch && serializePatch (again.patch) == text,
-                    "%s round-trips through serialize/parse", file) && ok;
-
-        const ValidationResult vr = validatePatch (pr.patch, kSampleRate, nullptr, validatorCpuScale());
-        if (! check (vr.ok(), "%s passes the offline test%s%s", file, vr.ok() ? "" : ": ",
-                     vr.error.c_str()))
-        {
-            ok = false;
-            continue;
-        }
-        std::printf ("       %s: peak %+.1f dBFS, trim %+.1f dB, voice CPU %.2f%%, "
-                     "matrix wall time %.0f ms (target < 300)\n",
-                     pr.patch.name.c_str(), 20.0 * std::log10 (vr.peak),
-                     20.0 * std::log10 (vr.trim), 100.0 * vr.voiceCpu, vr.wallMs);
-
-        // The stored trim lets the plugin start without running the matrix;
-        // 0.1 dB tolerance covers float differences between platforms.
-        const double trimDiffDb = std::fabs (20.0 * std::log10 (pr.patch.trim / vr.trim));
-        ok = check (trimDiffDb < 0.1, "%s stored trim %.6f matches the computed %.6f (%.3f dB apart)",
-                    file, pr.patch.trim, vr.trim, trimDiffDb) && ok;
-
-        Patch trimmed = pr.patch;
-        trimmed.trim = vr.trim;
-        std::string error;
-        const auto prog = PatchProgram::build (trimmed, kSampleRate, error);
-        ok = check (prog != nullptr, "%s builds a PatchProgram (10 voices + master)%s%s",
-                    file, prog != nullptr ? "" : ": ", error.c_str()) && ok;
     }
-    return ok;
+    ok = check (passed == numBuiltinPresets(), "%d/%d built-in presets pass", passed,
+                numBuiltinPresets()) && ok;
+    std::printf (ok ? "SELFTEST PASS\n" : "SELFTEST FAIL\n");
+    return ok ? 0 : 1;
 }
 
 bool smokeBrokenPatches()
@@ -669,8 +780,18 @@ bool smokeBrokenPatches()
             ++rejected;
         ok = check (good, "%s rejected as %s (want %s) in %.0f ms: \"%s\"", file.c_str(),
                     patchStatusName (status), want.c_str(), wallMs, reason.c_str()) && ok;
+        // SPEC 7.1: broken_slow is stopped by the 500 ms per-configuration
+        // deadline in its first configuration, within a few samples of it.
+        if (want == "slow")
+        {
+            const double deadlineMs = 500.0 * validatorCpuScale();
+            ok = check (reason.rfind ("too slow: over", 0) == 0 && wallMs >= deadlineMs
+                            && wallMs < deadlineMs + 100.0 * validatorCpuScale(),
+                        "broken_slow stopped by the deadline after %.0f ms (want %.0f to %.0f)",
+                        wallMs, deadlineMs, deadlineMs + 100.0 * validatorCpuScale()) && ok;
+        }
     }
-    ok = check (rejected == 9, "%d/9 broken test patches rejected", rejected) && ok;
+    ok = check (rejected == 10, "%d/10 broken test patches rejected", rejected) && ok;
 
     // Limits that need no file: total size and macro count.
     const ParseResult huge = parsePatch (std::string (Patch::kMaxFileBytes + 1, ' '));
@@ -690,6 +811,290 @@ bool smokeBrokenPatches()
     return ok;
 }
 
+// ---------------------------------------------------------------------------
+// M6 loop-nesting check (SPEC §7.1): depth per case, functions counted at
+// their call sites, comments/strings ignored; a nested patch is refused by
+// PatchProgram::build too (restore/built-in path), and the two-level
+// tests/patches/ok_nested.pulsar passes the whole offline test.
+
+std::string testPatchText (const char* file)
+{
+    for (int i = 0; i < PulsarTestPatches::namedResourceListSize; ++i)
+        if (std::strcmp (PulsarTestPatches::originalFilenames[i], file) == 0)
+        {
+            int size = 0;
+            const char* data = PulsarTestPatches::getNamedResource (PulsarTestPatches::namedResourceList[i], size);
+            return data != nullptr ? std::string (data, (size_t) size) : std::string();
+        }
+    return {};
+}
+
+bool smokeLoopNesting()
+{
+    using namespace vibesynth;
+    struct Case { const char* code; int want; };
+    const Case cases[] = {
+        { "x = 1;", 0 },
+        { "loop(4, x += 1);", 1 },
+        { "loop(4, loop(4, x += 1));", 2 },
+        { "loop(4, loop(4, loop(4, x += 1)));", 3 },
+        { "while(loop(2, while(x < 1)); x < 2);", 3 },
+        { "LOOP (2, Loop (2, lOOp (2, 0)));", 3 },
+        { "while (x < 3) ( loop(2, loop(2, 0)); x += 1; );", 3 },
+        { "// loop(1, loop(1, loop(1, 0)))\nloop(2, 0);", 1 },
+        { "/* loop( loop( */ loop(2, 0); /* ) */", 1 },
+        { "s = \"loop(loop(loop(\"; c = 'w('; loop(2, 0);", 1 },
+        { "myloop(1); while_x = loop_n; x = loops(2);", 0 },
+        { "function f() ( loop(2, x += 1) ); loop(2, f());", 2 },
+        { "function f() ( loop(2, x += 1) ); loop(2, loop(2, f()));", 3 },
+        { "function g() ( loop(2, 0) ); function f() ( loop(2, g()) ); loop(2, f());", 3 },
+        { "function f() local(i) instance(j) ( loop(2, 0) ); loop(2, this.f());", 2 },
+        { "function f() ( loop(2, loop(2, loop(2, 0))) ); x = 1;", 3 },
+        { "function f() ( f() ); x = 1;", 99 },
+    };
+    bool ok = true;
+    int passed = 0;
+    for (const Case& c : cases)
+    {
+        const int got = loopNestingDepth (c.code);
+        if (got == c.want)
+            ++passed;
+        else
+            ok = check (false, "nesting depth %d (want %d): %s", got, c.want, c.code);
+    }
+    ok = check (ok, "loop-nesting check: %d/%d cases", passed, (int) (sizeof (cases) / sizeof (cases[0]))) && ok;
+
+    const ParseResult nested = parsePatch (testPatchText ("broken_nested.pulsar"));
+    std::string error;
+    const auto prog = nested.ok() ? PatchProgram::build (nested.patch, kSampleRate, error) : nullptr;
+    ok = check (nested.ok() && prog == nullptr && error.find ("nested too deep") != std::string::npos,
+                "PatchProgram::build refuses broken_nested (restore/built-in path): \"%s\"",
+                error.c_str()) && ok;
+
+    const ParseResult two = parsePatch (testPatchText ("ok_nested.pulsar"));
+    const ValidationResult vr = two.ok() ? validatePatch (two.patch, kSampleRate, nullptr, validatorCpuScale())
+                                         : ValidationResult();
+    ok = check (two.ok() && vr.ok() && vr.peak > 0.0,
+                "ok_nested.pulsar (two levels, one inside a function) passes in %.0f ms%s%s",
+                vr.wallMs, vr.ok() ? "" : ": ", (two.ok() ? vr.error : two.error).c_str()) && ok;
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// M6: the processor's shutdown path (SPEC 6.6, 7.1). A juce::Thread
+// validates broken_slow; after 30 ms the main thread raises the cancel flag
+// and calls stopThread(), as ~VibeSynthAudioProcessor does. The per-sample
+// cancel check must let it return within one sample (a few ms), well
+// before the 500 ms deadline would.
+
+class ValidateThread final : public juce::Thread
+{
+public:
+    ValidateThread (const vibesynth::Patch& p, std::atomic<bool>& c)
+        : juce::Thread ("Pulsar validate test"), patch (p), cancel (c) {}
+
+    void run() override { result = vibesynth::validatePatch (patch, kSampleRate, &cancel, validatorCpuScale()); }
+
+    vibesynth::ValidationResult result;
+
+private:
+    const vibesynth::Patch& patch;
+    std::atomic<bool>& cancel;
+};
+
+bool smokeStopThread()
+{
+    using namespace vibesynth;
+    const ParseResult pr = parsePatch (testPatchText ("broken_slow.pulsar"));
+    if (! check (pr.ok(), "broken_slow parses"))
+        return false;
+    std::atomic<bool> cancel { false };
+    ValidateThread thread (pr.patch, cancel);
+    thread.startThread();
+    juce::Thread::sleep (30);
+    const bool stillRunning = thread.isThreadRunning();
+    const double t0 = juce::Time::getMillisecondCounterHiRes();
+    cancel = true;
+    thread.signalThreadShouldExit();
+    const bool stopped = thread.stopThread (10000);
+    const double stopMs = juce::Time::getMillisecondCounterHiRes() - t0;
+    const double limitMs = 50.0 * validatorCpuScale();
+    return check (stillRunning && stopped && thread.result.cancelled && stopMs < limitMs,
+                  "stopThread returns %.1f ms after cancel while broken_slow validates "
+                  "(want < %.0f ms; cancelled %d)", stopMs, limitMs, thread.result.cancelled ? 1 : 0);
+}
+
+// ---------------------------------------------------------------------------
+// M6 master VoiceRack (SPEC 5.2): voice functions run in master with their
+// own slots, bus_* still work there and bus_mono_low still returns 0 in a
+// voice (bus_sat is stateless and allowed anywhere), and
+// resetRacks()/resetState() reset both racks (the second run after a reset
+// matches the first exactly).
+
+bool smokeMasterRack()
+{
+    const PatchStrings ps = { "0;", "out = bus_mono_low(1, 1) + bus_mono_low_r();",
+                              "x = osc_saw(0, 220) * 0.5; y = flt_lp(0, x, 0.4, 0.3);"
+                              "c = chaos_lorenz(0, 0.6, 0);"
+                              "outl = bus_sat(y + inl, 0.2); outr = y + c * 0.01;" };
+    const auto v = std::make_unique<EelVoice> (ps, kSampleRate, 3u);
+    const auto m = std::make_unique<EelMaster> (ps, kSampleRate);
+    if (! check (v->isValid() && m->isValid(), "master program with voice functions compiles: %s",
+                 m->compileError().c_str()))
+        return false;
+    double macros[MacroSmoother::kNumMacros] = {};
+    fillMacros (macros, 0.5);
+
+    auto run = [&] (std::vector<float>& l, std::vector<float>& r)
+    {
+        l.assign (4800, 0.0f);
+        r.assign (4800, 0.0f);
+        for (int i = 0; i < 4800; ++i)
+            m->renderSample (0.0f, 0.0f, l[(size_t) i], r[(size_t) i], macros);
+    };
+    std::vector<float> l1, r1, l2, r2, l3, r3;
+    run (l1, r1);
+    m->resetRacks();
+    run (l2, r2);
+    m->resetState();
+    run (l3, r3);
+
+    bool ok = check (peakOf (r1, 0, r1.size()) > 0.05 && positiveZeroCrossings (r1) >= 15,
+                     "osc_saw -> flt_lp runs in master (peak %.3f, %d crossings in 0.1 s at 220 Hz)",
+                     peakOf (r1, 0, r1.size()), positiveZeroCrossings (r1));
+    ok = check (peakOf (l1, 0, l1.size()) > 0.05, "bus_sat still works in master (peak %.3f)",
+                peakOf (l1, 0, l1.size())) && ok;
+    ok = check (l1 == l2 && r1 == r2 && l1 == l3 && r1 == r3,
+                "resetRacks and resetState restart both master racks (osc, filter, chaos, bus)") && ok;
+    const std::vector<float> vOut = renderHeld (*v, 110.0, 16);
+    ok = check (v->isValid() && peakOf (vOut, 0, vOut.size()) == 0.0,
+                "bus_mono_low returns 0 in a voice VM") && ok;
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// M6 bpm/beat (SPEC 4.3): both VMs read the Transport they are given (120
+// bpm, beat 0 by default); PatchPlayer advances beat per sample, follows
+// the host's PPQ only while playing, runs on when stopped, and passes the
+// per-sample beat to voices and master.
+
+bool smokeTransport()
+{
+    using namespace vibesynth;
+    bool ok = true;
+    double macros[MacroSmoother::kNumMacros] = {};
+    fillMacros (macros, 0.5);
+
+    {
+        const PatchStrings ps = { "ib = beat;", "out = bpm + beat * 1000 + ib * 10000;",
+                                  "outl = bpm; outr = beat;" };
+        EelVoice v (ps, kSampleRate, 1u);
+        EelMaster m (ps, kSampleRate);
+        if (! check (v.isValid() && m.isValid(), "bpm/beat programs compile: %s %s",
+                     v.compileError().c_str(), m.compileError().c_str()))
+            return false;
+        const float fresh = v.renderSample (110.0, 1.0, 45.0, 0.9, macros);
+        Transport t;
+        t.bpm = 140.0;
+        t.beat = 2.5;
+        v.noteOn (110.0, 45.0, 0.9, t);
+        t.beat = 3.0;
+        const float played = v.renderSample (110.0, 1.0, 45.0, 0.9, macros, t);
+        float l = 0.0f, r = 0.0f;
+        m.renderSample (0.0f, 0.0f, l, r, macros, t);
+        ok = check (fresh == 120.0f && played == 140.0f + 3000.0f + 25000.0f && l == 140.0f && r == 3.0f,
+                    "voice and master read bpm/beat (default %.0f; voice %.0f want 28140; "
+                    "master %.0f, %.1f)", static_cast<double> (fresh), static_cast<double> (played),
+                    static_cast<double> (l), static_cast<double> (r)) && ok;
+    }
+
+    Patch patch;
+    patch.name = "transport test";
+    patch.voice = "out = 0;";
+    std::string error;
+    const auto prog = PatchProgram::build (patch, kSampleRate, error);
+    if (! check (prog != nullptr, "transport test program builds %s", error.c_str()))
+        return false;
+    PatchPlayer player;
+    float targets[PatchPlayer::kNumMacros] = {};
+    player.setProgram (prog.get());
+    player.prepare (kSampleRate, 512, targets);
+
+    struct Ev { int samplePosition; const uint8_t* data; int numBytes; };
+    std::vector<Ev> none;
+    auto render = [&] (int total)
+    {
+        for (int done = 0; done < total; done += 512)
+        {
+            auto it = none.cbegin();
+            player.renderChunk (std::min (512, total - done), targets, it, none.cend(), 0);
+        }
+    };
+    player.setHostTransport (0.0, false, false, 0.0);
+    render (kOneSecond);
+    const Transport a = player.transport();
+    player.setHostTransport (140.0, true, true, 16.0);
+    render (4800);
+    const Transport b = player.transport();
+    player.setHostTransport (140.0, false, true, 99.0);
+    render (4800);
+    const Transport c = player.transport();
+    ok = check (a.bpm == 120.0 && std::fabs (a.beat - 2.0) < 1e-9
+                    && b.bpm == 140.0 && std::fabs (b.beat - (16.0 + 140.0 / 600.0)) < 1e-9
+                    && std::fabs (c.beat - (16.0 + 2.0 * 140.0 / 600.0)) < 1e-9,
+                "PatchPlayer beat: no host 120 bpm -> %.6f after 1 s (want 2); host plays from "
+                "16 at 140 bpm -> %.6f after 0.1 s; stopped, runs on -> %.6f",
+                a.beat, b.beat, c.beat) && ok;
+
+    // Per-sample beat through the player: a held voice and the master each
+    // step to 0.1 at beat 1 (sample 24000 at 120 bpm, from beat 0).
+    for (int section = 0; section < 2; ++section)
+    {
+        Patch p;
+        p.name = "beat step";
+        p.voice = section == 0 ? "out = beat >= 1 ? 0.1 : 0;" : "out = 0;";
+        p.master = section == 0 ? "" : "outl = outr = beat >= 1 ? 0.1 : 0;";
+        const auto pr = PatchProgram::build (p, kSampleRate, error);
+        if (! check (pr != nullptr, "beat step program builds %s", error.c_str()))
+            return false;
+        PatchPlayer pl;
+        pl.setProgram (pr.get());
+        pl.prepare (kSampleRate, 512, targets);
+        const uint8_t noteOn[3] = { 0x90, 45, 100 };
+        std::vector<Ev> events = { { 0, noteOn, 3 } };
+        auto it = events.cbegin();
+        int stepAt = -1;
+        for (int start = 0; start < kOneSecond && stepAt < 0; start += 512)
+        {
+            pl.renderChunk (512, targets, it, events.cend(), start);
+            for (int i = 0; i < 512 && stepAt < 0; ++i)
+                if (pl.outL()[i] > 0.05f)
+                    stepAt = start + i;
+        }
+        // 24000 * (120 / 2880000) rounds just below 1, so 24001 is exact too.
+        ok = check (stepAt == 24000 || stepAt == 24001,
+                    "%s sees beat 1 at sample %d (want 24000 at 120 bpm, +1 for rounding)",
+                    section == 0 ? "voice" : "master", stepAt) && ok;
+    }
+    return ok;
+}
+
+// M6 selftest rules: the 1 dB trim tolerance (SPEC 9.4) and the CPU budget
+// by voice mode (SPEC 4.2.1).
+bool smokeSelftestRules()
+{
+    using namespace vibesynth;
+    bool ok = check (trimMatches (1.0, 0.9) && trimMatches (0.5, 0.56) && ! trimMatches (1.0, 0.88)
+                         && ! trimMatches (0.5, 0.57),
+                     "trim tolerance 1 dB: 0.92 and 0.98 dB apart match, 1.11 and 1.12 dB don't");
+    Patch poly, mono;
+    mono.voiceMode = "mono";
+    ok = check (poly.voiceBudgetNs() == 300.0 && mono.voiceBudgetNs() == 1200.0,
+                "voice budget by mode: poly %.0f ns, mono %.0f ns (want 300, 1200)",
+                poly.voiceBudgetNs(), mono.voiceBudgetNs()) && ok;
+    return ok;
+}
+
 int runSmoketest()
 {
     bool ok = true;
@@ -703,8 +1108,12 @@ int runSmoketest()
     ok = smokeLoopCap() && ok;
     ok = smokeVoiceReset() && ok;
     ok = smokeOutputStage() && ok;
-    ok = smokeBuiltinPresets() && ok;
     ok = smokeBrokenPatches() && ok;
+    ok = smokeLoopNesting() && ok;
+    ok = smokeStopThread() && ok;
+    ok = smokeMasterRack() && ok;
+    ok = smokeTransport() && ok;
+    ok = smokeSelftestRules() && ok;
     std::printf (ok ? "SMOKETEST PASS\n" : "SMOKETEST FAIL\n");
     return ok ? 0 : 1;
 }
@@ -742,6 +1151,18 @@ int runValidate (const char* path)
                      vr.error.c_str(), vr.wallMs);
         return 1;
     }
+    // Peak (dBFS before trim) and DC per configuration, for balancing
+    // macro ranges and seeing how close a patch is to a limit.
+    std::printf ("    peak dBFS / DC  macros all 0    defaults       all 1\n");
+    const int notes[] = { 28, 40, 55 };
+    for (int n = 0; n < 3; ++n)
+    {
+        std::printf ("    note %d     ", notes[n]);
+        for (int set = 0; set < 3; ++set)
+            std::printf ("  %+5.1f / %.3f", 20.0 * std::log10 (std::fmax (vr.configPeak[n * 3 + set], 1e-9)),
+                         vr.configDc[n * 3 + set]);
+        std::printf ("\n");
+    }
     std::printf ("PASS %s: peak %+.1f dBFS, trim %+.1f dB (%.6f), voice CPU %.2f%%, %.0f ms\n",
                  pr.patch.name.c_str(), 20.0 * std::log10 (vr.peak), 20.0 * std::log10 (vr.trim),
                  vr.trim, 100.0 * vr.voiceCpu, vr.wallMs);
@@ -751,11 +1172,16 @@ int runValidate (const char* path)
 int main (int argc, char** argv)
 {
     const bool smoke = argc == 2 && std::strcmp (argv[1], "--smoketest") == 0;
+    const bool self = (argc == 2 || (argc == 3 && std::strcmp (argv[2], "--strict-cpu") == 0))
+                      && std::strcmp (argv[1], "--selftest") == 0;
     const bool bench = argc == 2 && std::strcmp (argv[1], "--bench") == 0;
     const bool validate = argc == 3 && std::strcmp (argv[1], "--validate") == 0;
-    if (! smoke && ! bench && ! validate)
+    const bool render = argc >= 4 && std::strcmp (argv[1], "--render") == 0;
+    if (! smoke && ! self && ! bench && ! validate && ! render)
     {
-        std::printf ("usage: vibesynth_cli (--smoketest | --bench | --validate file.pulsar)\n");
+        std::printf ("usage: vibesynth_cli (--smoketest | --selftest [--strict-cpu] | --bench | --validate file.pulsar\n"
+                     "                     | --render <patch.pulsar | built-in> out.wav\n"
+                     "                       [--sr HZ] [--seconds-tail S] [--bpm BPM] [--macro N=V]...)\n");
         return 2;
     }
 
@@ -777,14 +1203,16 @@ int main (int argc, char** argv)
     }
     if (validate)
         return jitOk ? runValidate (argv[2]) : 2;
+    if (render)
+        return jitOk ? vibesynth_cli::runRender (argc - 2, argv + 2, validatorCpuScale()) : 2;
 
     bool ok = check (jit, "execution mode is %s", mode);
     ok = check (initOk, "NSEEL_init") && ok;
     ok = check (jitOk, "JIT probe: executable pages available") && ok;
     if (! ok)
     {
-        std::printf ("SMOKETEST FAIL\n");
+        std::printf (self ? "SELFTEST FAIL\n" : "SMOKETEST FAIL\n");
         return 1;
     }
-    return runSmoketest();
+    return self ? runSelftest (argc == 3) : runSmoketest();
 }

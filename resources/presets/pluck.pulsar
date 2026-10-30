@@ -51,8 +51,8 @@
   },
   "code": {
     "init": "",
-    "voice": "env = env_adsr(0, gate, 0, 0.55 + m2 * 0.15, 0, 0.45);\nfenv = env_adsr(1, gate, 0, 0.45 + m2 * 0.15, 0, 0.4);\nx = osc_saw(0, freq) * 0.6 + osc_square(0, freq * 1.005, 0.5) * 0.4;\ny = flt_lp(0, x, 0.15 + m1 * 0.35 + fenv * 0.45, m3 * 0.8);\nout = y * env * vel;",
-    "master": "outl = bus_chorus(inl, inr, 0.3, m4 * 0.5);\noutr = bus_chorus_r();"
+    "voice": "// amp and filter envelopes, both zero-sustain\nenv = env_adsr(0, gate, 0, 0.55 + m2 * 0.15, 0, 0.45);\nfenv = env_adsr(1, gate, 0, 0.45 + m2 * 0.15, 0, 0.4);\n// saw + slightly detuned square\nx = osc_saw(0, freq) * 0.6 + osc_square(0, freq * 1.005, 0.5) * 0.4;\n// the filter envelope does the pluck\ny = flt_lp(0, x, 0.15 + m1 * 0.35 + fenv * 0.45, m3 * 0.8);\nout = y * env * vel;",
+    "master": "// chorus for width\noutl = bus_chorus(inl, inr, 0.3, m4 * 0.5);\noutr = bus_chorus_r();"
   },
   "trim": 0.620685
 }
