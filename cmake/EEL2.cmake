@@ -80,6 +80,10 @@ else()
     target_compile_options(eel2 PUBLIC -fsigned-char)
 endif()
 
+# wdltypes.h includes <windows.h>; keep the min/max macros out of EEL2's
+# own TUs too (vibesynth_engine sets NOMINMAX PUBLIC for everything else).
+target_compile_definitions(eel2 PRIVATE $<$<PLATFORM_ID:Windows>:NOMINMAX>)
+
 # Never fast-math on this target: bit-pattern NaN/Inf checks (SPEC §11)
 # must survive compiler flags anywhere EEL2 output is validated.
 target_compile_options(eel2 PRIVATE $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>>:-fno-fast-math>)

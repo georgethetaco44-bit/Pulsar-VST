@@ -197,6 +197,13 @@ target_include_directories(vibesynth_engine PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/WDL/WDL")
 target_link_libraries(vibesynth_engine PUBLIC eel2 daisysp_mit)
+# WDL's wdltypes.h includes <windows.h> without NOMINMAX, so every TU that
+# includes PatchEngine.h (via the EEL2 headers) would get the min/max
+# macros and break std::min/std::max. PUBLIC: reaches VibeSynthVST and
+# vibesynth_cli too. No global WIN32_LEAN_AND_MEAN (JUCE manages its own
+# Windows includes).
+target_compile_definitions(vibesynth_engine PUBLIC
+    $<$<PLATFORM_ID:Windows>:NOMINMAX>)
 # Linked into the VST3 shared module, so it must be position independent
 # (same as eel2 and daisysp_mit).
 set_target_properties(vibesynth_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
