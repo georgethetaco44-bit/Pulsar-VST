@@ -40,10 +40,6 @@
         "osc_saw:0"
       ],
       [
-        "spring",
-        "osc_sine:0"
-      ],
-      [
         "osc_square:0",
         "flt_lp:0"
       ],
@@ -52,15 +48,7 @@
         "flt_lp:0"
       ],
       [
-        "spring",
-        "flt_lp:0"
-      ],
-      [
         "flt_lp:0",
-        "fx_sat"
-      ],
-      [
-        "fx_sat",
         "flt_hp:0"
       ],
       [
@@ -74,17 +62,13 @@
       [
         "osc_sine:0",
         "out"
-      ],
-      [
-        "env_adsr:0",
-        "out"
       ]
     ]
   },
   "code": {
     "init": "// each note kicks the spring: the pitch starts below the note and springs past it\nkick = 4 + m1 * 14; sx = -kick; sv = 0;",
-    "voice": "// damped mass-spring in semitones, semi-implicit Euler per sample\nw = 2 * $pi * (3 + m1 * 11);\nz = 0.04 + m2 * 0.5;\nsv += (-w * w * sx - 2 * z * w * sv) / srate;\nsx += sv / srate;\nf = freq * exp(sx * 0.0577623);\n// squelch opens with the spring's speed\nsq = min(1, abs(sv) / (w * kick + 1) * 1.5);\nfe = env_adsr(1, gate, 0.001, 0.15, 0.2, 0.05);\nx = osc_square(0, f, 0.5 - m4 * 0.35) * 0.6 + osc_saw(0, f * 1.005) * 0.45;\ny = flt_lp(0, x, min(0.95, 0.28 + m3 * 0.15 + sq * m3 * 0.45 + fe * 0.2), 0.55 + m3 * 0.35);\ny = fx_sat(y * 2, 0.5);\ny = fx_ott(0, flt_hp(0, y, 0.247, 0), 0.7);\n// the sub boings too, but it is still a clean sine\nenv = env_adsr(0, gate, 0.001, 0.3, 0.8, 0.04);\nout = (osc_sine(0, f) * m5 * 0.9 + y * 0.85) * env;",
-    "master": "!ready ? (\n  ready = 1; hd = 0; dn = floor(srate * 0.0011);\n  // LR4 crossover at 150 Hz: two Butterworth biquads per side\n  w0 = 2 * $pi * 150 / srate; cw = cos(w0); al = sin(w0) / 1.41421356; a0 = 1 + al;\n  lb0 = (1 - cw) / 2 / a0; lb1 = (1 - cw) / a0;\n  hb0 = (1 + cw) / 2 / a0; hb1 = -(1 + cw) / a0;\n  c1 = -2 * cw / a0; c2 = (1 - al) / a0;\n);\n// split-brain: lo (the clean sub) passes untouched and mono\nl1 = lb0 * inl + z1; z1 = lb1 * inl - c1 * l1 + z2; z2 = lb0 * inl - c2 * l1;\nlo = lb0 * l1 + z3; z3 = lb1 * l1 - c1 * lo + z4; z4 = lb0 * l1 - c2 * lo;\nh1 = hb0 * inl + z5; z5 = hb1 * inl - c1 * h1 + z6; z6 = hb0 * inl - c2 * h1;\nhi = hb0 * h1 + z7; z7 = hb1 * h1 - c1 * hi + z8; z8 = hb0 * h1 - c2 * hi;\nwg = 0.45;\n// width on the mid/high band only: a mid/side comb (L + R stays mono-safe)\nhd[hw] = hi; hw = (hw + 1) % 4096;\ndly = hd[(hw - dn + 4096) % 4096] * wg;\nhl = hi + dly; hr = hi - dly;\n// resample-style: drive and squash the mid/high band\nhl = fx_ott(0, bus_sat(hl, 0.35), m6);\nhr = fx_ott(1, bus_sat(hr, 0.35), m6);\n// then clip it into the headroom the sub leaves at this sample, so the sum\n// stays under 1 while the sub itself is never touched\nhm = max(0.15, 1 - abs(lo));\nyl = hm * bus_sat(hl * 1.6 / hm, 0); yr = hm * bus_sat(hr * 1.6 / hm, 0);\n// ~10 Hz DC trap: clipping an asymmetric wave leaves an offset\ndl += (yl - dl) * 60 / srate; dr += (yr - dr) * 60 / srate;\noutl = yl - dl + lo;\noutr = yr - dr + lo;"
+    "voice": "// damped mass-spring in semitones, semi-implicit Euler per sample\nw = 2 * $pi * (3 + m1 * 11);\nz = 0.04 + m2 * 0.5;\nsv += (-w * w * sx - 2 * z * w * sv) / srate;\nsx += sv / srate;\nf = freq * exp(sx * 0.0577623);\n// squelch opens with the spring's speed\nsq = min(1, abs(sv) / (w * kick + 1) * 1.5);\nfe = env_adsr(1, gate, 0.001, 0.15, 0.2, 0.05);\nx = osc_square(0, f, 0.5 - m4 * 0.35) * 0.6 + osc_saw(0, f * 1.005) * 0.45;\ny = flt_lp(0, x, min(0.95, 0.28 + m3 * 0.15 + sq * m3 * 0.45 + fe * 0.2), 0.55 + m3 * 0.35);\n// mid band only: drive, clear the low mids, OTT after the drive, fixed ceiling\ny = flt_hp(1, fx_sat(y * 2, 0.5), 0.27, 0);\ny = fx_sat(fx_ott(0, y, m6 * 0.8), 0.4);\n// the sub boings too, but it stays a clean sine added last\nenv = env_adsr(0, gate, 0.001, 0.3, 0.8, 0.35);\nout = (osc_sine(0, f) * m5 * 0.5 + y * 0.6) * env;",
+    "master": "// width: a delayed copy of the band above 100 Hz goes to the sides only\n// (L = in + d, R = in - d). The mono sum is the voice untouched (no band\n// split on the main path), and the low end stays mono.\nlo = util_xover_lo(0, inl);\nhi = util_xover_hi(0);\n!ready ? (ready = 1; dn = floor(srate * 0.0011));\nmem[hw] = hi; hw = (hw + 1) % 4096;\nd = mem[(hw - dn + 4096) % 4096] * 0.3;\noutl = inl + d;\noutr = inl - d;"
   },
-  "trim": 0.660085
+  "trim": 0.657787
 }

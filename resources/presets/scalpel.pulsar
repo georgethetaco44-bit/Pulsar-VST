@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "Scalpel Neuro",
-  "prompt": "surgical neuro mid-bass for 174 drum and bass: an FM and saw core folded, then a comb whose pitch steps every 1/16 note, squashed with multiband OTT over a clean mono sine sub; Morph goes from clean to snarling",
+  "prompt": "surgical neuro mid-bass for 174 drum and bass: an FM and saw core driven and folded, then a comb whose pitch steps every 1/16 note (peaks or notches), squashed after the drive over a clean mono sine sub; Morph goes from clean to snarling",
   "macros": [
     {
       "label": "Morph",
@@ -17,7 +17,7 @@
     },
     {
       "label": "Squash",
-      "default": 0.7
+      "default": 0.6
     },
     {
       "label": "Sub",
@@ -30,11 +30,19 @@
     {
       "label": "Tone",
       "default": 0.6
+    },
+    {
+      "label": "Notch",
+      "default": 0.0
     }
   ],
   "voiceMode": "mono",
   "graph": {
     "edges": [
+      [
+        "fm_core",
+        "fx_fold"
+      ],
       [
         "osc_saw:0",
         "fx_fold"
@@ -49,14 +57,10 @@
       ],
       [
         "flt_lp:0",
-        "fx_sat"
+        "flt_hp:1"
       ],
       [
-        "fx_sat",
-        "flt_hp:0"
-      ],
-      [
-        "flt_hp:0",
+        "flt_hp:1",
         "fx_ott:0"
       ],
       [
@@ -66,17 +70,13 @@
       [
         "osc_sine:0",
         "out"
-      ],
-      [
-        "env_adsr:0",
-        "out"
       ]
     ]
   },
   "code": {
-    "init": "// each note: the comb starts on the note, ~1.5 ms glides between steps\ncr = 1; sl = 1 - exp(-1 / (0.0015 * srate));",
-    "voice": "env = env_adsr(0, gate, 0.002, 0.4, 0.85, 0.06);\nfe = env_adsr(1, gate, 0.001, 0.12, 0, 0.05);\n// core: 2-op FM (modulator at 2x) plus a saw a hair sharp\nph += freq / srate; ph -= floor(ph);\nx = sin(2 * $pi * ph + sin(4 * $pi * ph) * (0.4 + m3 * 2.6)) * 0.6 + osc_saw(0, freq * 1.003) * 0.5;\n// Morph: more gain into a deeper fold\nx = fx_fold(x * (1 + m1 * 2.5), 0.08 + m1 * 0.62);\n// the comb's pitch steps every 1/16 (ratios to the note); Comb Steps scales the jumps\nst = floor(beat * 4) % 8;\ntg = st == 0 ? 2 : st == 1 ? 4 : st == 2 ? 3 : st == 3 ? 6 : st == 4 ? 2 : st == 5 ? 8 : st == 6 ? 1.5 : 5;\ntg = 2 + (tg - 2) * m2;\ncr += (tg - cr) * sl;\nx = x * 0.55 + fx_comb(0, x, freq * cr, 0.35 + m1 * 0.55) * (0.35 + m1 * 0.65);\n// tone, drive, keep it off the sub, squash\nx = flt_lp(0, x, min(0.97, 0.45 + m7 * 0.4 + fe * 0.15), 0.25);\nx = fx_sat(x * 1.5, 0.4 + m1 * 0.4);\nx = fx_ott(0, flt_hp(0, x, 0.247, 0), m4);\n// clean mono sub: a plain sine, never processed\nout = (osc_sine(0, freq) * m5 * 0.9 + x * 0.8) * env;",
-    "master": "!ready ? (\n  ready = 1; hd = 0; dn = floor(srate * 0.0009);\n  // LR4 crossover at 150 Hz: two Butterworth biquads per side\n  w0 = 2 * $pi * 150 / srate; cw = cos(w0); al = sin(w0) / 1.41421356; a0 = 1 + al;\n  lb0 = (1 - cw) / 2 / a0; lb1 = (1 - cw) / a0;\n  hb0 = (1 + cw) / 2 / a0; hb1 = -(1 + cw) / a0;\n  c1 = -2 * cw / a0; c2 = (1 - al) / a0;\n);\n// split-brain: lo (the clean sub) passes untouched and mono\nl1 = lb0 * inl + z1; z1 = lb1 * inl - c1 * l1 + z2; z2 = lb0 * inl - c2 * l1;\nlo = lb0 * l1 + z3; z3 = lb1 * l1 - c1 * lo + z4; z4 = lb0 * l1 - c2 * lo;\nh1 = hb0 * inl + z5; z5 = hb1 * inl - c1 * h1 + z6; z6 = hb0 * inl - c2 * h1;\nhi = hb0 * h1 + z7; z7 = hb1 * h1 - c1 * hi + z8; z8 = hb0 * h1 - c2 * hi;\nwg = m6 * 0.7;\n// width on the mid/high band only: a mid/side comb (L + R stays mono-safe)\nhd[hw] = hi; hw = (hw + 1) % 4096;\ndly = hd[(hw - dn + 4096) % 4096] * wg;\nhl = hi + dly; hr = hi - dly;\n// resample-style: drive and squash the mid/high band\nhl = fx_ott(0, bus_sat(hl, 0.35), m4);\nhr = fx_ott(1, bus_sat(hr, 0.35), m4);\n// then clip it into the headroom the sub leaves at this sample, so the sum\n// stays under 1 while the sub itself is never touched\nhm = max(0.15, 1 - abs(lo));\nyl = hm * bus_sat(hl * 1.6 / hm, 0); yr = hm * bus_sat(hr * 1.6 / hm, 0);\n// ~10 Hz DC trap: clipping an asymmetric wave leaves an offset\ndl += (yl - dl) * 60 / srate; dr += (yr - dr) * 60 / srate;\noutl = yl - dl + lo;\noutr = yr - dr + lo;"
+    "init": "// each note: the comb starts an octave up, ~1.5 ms glides between steps\ncr = 2; sl = 1 - exp(-1 / (0.0015 * srate));",
+    "voice": "env = env_adsr(0, gate, 0.002, 0.4, 0.85, 0.3);\nfe = env_adsr(1, gate, 0.001, 0.12, 0, 0.05);\n// core: 2-op FM (modulator at 2x) plus a saw a hair sharp\nph += freq / srate; ph -= floor(ph);\nx = sin(2 * $pi * ph + sin(4 * $pi * ph) * (0.4 + m3 * 2.6)) * 0.6 + osc_saw(0, freq * 1.003) * 0.5;\n// stage 1, Morph: drive, then fold the driven signal\nx = fx_fold(fx_sat(x, 0.2 + m1 * 0.6), 0.05 + m1 * 0.5);\n// stage 2: the comb's pitch steps every 1/16 (ratios to the note); Notch flips peaks to notches\nst = floor(beat * 4) % 8;\ntg = st == 0 ? 2 : st == 1 ? 4 : st == 2 ? 3 : st == 3 ? 6 : st == 4 ? 2 : st == 5 ? 8 : st == 6 ? 1.5 : 5;\ncr += (2 + (tg - 2) * m2 - cr) * sl;\nx = x + fx_comb(0, x, freq * cr, 0.35 + m1 * 0.5) * (0.6 - m8 * 1.2);\n// tone, clear the low mids, OTT after the drive, fixed ceiling\nx = flt_lp(0, x, min(0.97, 0.45 + m7 * 0.4 + fe * 0.15), 0.25);\nx = fx_sat(fx_ott(0, flt_hp(1, x, 0.27, 0), m4), 0.45);\n// the clean sub joins last, at a fixed level\nout = (osc_sine(0, freq) * m5 * 0.5 + x * 0.6) * env;",
+    "master": "// width: a delayed copy of the band above 100 Hz goes to the sides only\n// (L = in + d, R = in - d). The mono sum is the voice untouched (no band\n// split on the main path), and the low end stays mono.\nlo = util_xover_lo(0, inl);\nhi = util_xover_hi(0);\n!ready ? (ready = 1; dn = floor(srate * 0.0009));\nmem[hw] = hi; hw = (hw + 1) % 4096;\nd = mem[(hw - dn + 4096) % 4096] * m6 * 0.4;\noutl = inl + d;\noutr = inl - d;"
   },
-  "trim": 0.647487
+  "trim": 0.589645
 }

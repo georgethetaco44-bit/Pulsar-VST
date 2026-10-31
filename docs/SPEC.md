@@ -348,7 +348,7 @@ reasoning model: requests send `reasoning_effort: "low"` (settings file only)
 and `max_tokens: 8192`; a reply that spends the whole cap reasoning is its own
 failure reason ("hit the token limit while reasoning") and is retried, as are
 empty, garbled or timed-out replies. Measured in M8: ~13 s per generation
-(max 25.8 s), ~5.1k prompt + ~2.4k completion tokens. Timeout is **60 s**.
+(max 25.8 s), ~5.1k prompt + ~2.4k completion tokens (5.4k prompt after Sound pass batch 1). Timeout is **60 s**.
 The UI shows progress, never blocks.
 
 ### 6.4 Self-heal
@@ -491,17 +491,10 @@ ex = osc_supersaw(0, freq * 1.01, m1, 0.5) * 0.3;
 out = phys_resonator(0, ex, freq, m2, m3, m4);
 ```
 
-**Wave-surgery (zero-crossing splicing).** Switch engines on zero-crossings of a
-reference oscillator for click-free splicing. Run every engine every sample so
-their phases stay continuous.
-```
-ref = osc_sine(0, freq);
-(prev <= 0 && ref > 0) ? flip = !flip;
-prev = ref;
-a = osc_saw(1, freq);
-b = phys_string(0, a * 0.2, freq, m1, m2);
-out = flip ? a : b;
-```
+**Glitch micro-edits.** Hashed per-1/16 decisions (repeat, reverse-ish
+re-trigger, pitch jump, mute), each switch smoothed with a ~0.3 ms slew so
+edits never click. Applied to the mid band only. (Replaces the M6
+wave-surgery recipe.)
 
 **Piece-wise transfer functions & chaos modulation.** Custom shapers inline;
 chaos at LFO rate (`rate` near 0) or audio rate (near 1).
@@ -511,16 +504,25 @@ x = osc_saw(0, freq * (1 + c * m6 * 0.05));
 out = x > 0 ? sin(x * (1 + m1 * 8)) : floor(x * 4) / 4;
 ```
 
-**Split-brain sub bass.** Clean, phase-stable sub below 100 Hz; surgery above.
+**Mix-clean rules (Sound pass batch 1).** These hold for every recipe and are
+in the system prompt:
+- The sub is a clean sine added **last**, summed to mono. Nothing distorts it,
+  and no gain is ever computed from the low band (the old
+  `max(0.15, 1 - abs(lo))` ducking caused sub-driven mid-band clipping; the
+  coupling check measured it at −11 to −15 dB).
+- The mid band is built on its own, staged (drive → filter → fold → OTT →
+  fixed ceiling), and high-passed at ~130 Hz.
+- OTT goes after distortion, at most 0.3 deep on decaying sounds.
+- One strong idea over many layers; releases 15–40 ms; every macro audible and
+  m1 transforms.
+- `bus_sat` never runs on a signal that contains the sub.
 ```
-src = osc_saw(0, freq);
-lo = util_xover_lo(0, src);
-hi = util_xover_hi(0);
-hi = fx_fold(flt_bp(0, hi, m1, m2), m3);
-out = lo * 0.9 + hi * m4;
+mid = fx_fold(flt_lp(0, fx_sat(osc_saw(0, freq), 2 + m1 * 6), m2, m3), m4);
+mid = flt_hp(1, mid, 0.27, 0);   // 0.27 ≈ 130 Hz
+out = (fx_ott(0, mid, m5 * 0.5) * 0.7 + osc_sine(0, freq) * 0.5) * env_adsr(0, gate, 0.002, 0.2, 0.9, 0.02);
 ```
-In `master`: `outl = bus_mono_low(inl, inr); outr = bus_mono_low_r();` then
-`bus_sat` both channels.
+(Illustrative only; the recipes in `resources/prompts/recipes/` are the
+rendered, checked versions.)
 
 ---
 
@@ -599,7 +601,14 @@ Loading a patch file runs the same compile + offline test as a generated patch.
 - Prompt box, **Generate** button, status/progress line, error display.
 - 8 macro knobs with dynamic labels.
 - Preset browser (built-ins + user-saved patches).
-- Settings panel: API key, model IDs.
+- Settings panel: API key, model IDs, and a **Test key** button (one tiny
+  request; an HTTP 200 that parses as chat JSON counts as "Key works", even
+  with an empty message).
+- **First run:** with no key, the prompt row becomes a card ("Add your Meta
+  API key to generate sounds" + [Add key], which opens Settings on the key
+  field). Saving a key restores Generate immediately.
+- Unused macros (never read by the code, per `macrosRead`) are dimmed with no
+  label or value; tooltip "Unused by this patch".
 - Code viewer (read-only text) showing the active patch.
 
 ### 9.6 Node visualizer **[MVP, read-only]**
@@ -607,6 +616,10 @@ Loading a patch file runs the same compile + offline test as a generated patch.
   during the offline test.
 - **Edges** come from the LLM's `graph.edges`, filtered to nodes that really
   exist. They are labelled as descriptive.
+- **Stateless shapers** (`fx_fold`, `fx_sat`, `util_bytebeat`, `bus_sat`) have
+  no slot, so each call is numbered by its order within the sample
+  ("fx_sat #0", "#1", …; the 4th and later calls share #3). Under branches
+  this numbering is descriptive only.
 - Each node pulses with its own `rack->meters` peak (read atomically at 30 fps).
 - **[LATER]** editable graph. That requires making the graph the source of truth
   (the plugin generates code from the graph, and the LLM writes graph +
@@ -808,6 +821,11 @@ Each milestone has an exit test. Don't start the next until it passes.
    "Macro N 0.50" and should read as unused; (3) the output meter reads as a
    menu icon; (4) 16 compiler warnings in Generator.cpp, Filters.h and
    PluginEditor.cpp (`userArea` deprecated).**
+   **UI round (branch `ui-fixes`): all four items fixed, plus first-run key
+   onboarding and Test key (§9.5). Shapers are nodes (§9.6); probe ==
+   validator node list for 15/15; filter output bit-identical; zero warnings
+   in src/ and tools/. Still open: long node names (`util_safe_fb`,
+   `osc_supersaw`) are truncated in their pills.**
 9b. **Sound pass.** With M7's DSP (2×, own ladder/SVF, glide) and the M9 UI in
    place, redo the 15 presets against the user's references (modern DnB,
    dubstep, halftime, glitch), adding any core DSP they need first. Work

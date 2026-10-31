@@ -9,7 +9,7 @@ Patches are EEL2 code (JSFX syntax): `x = expr;`, `a ? b : c`, `(cond) ? (stmt1;
 After master, Pulsar always applies trim, DC block, a limiter and a clip at ±1.
 
 ## Variables
-Voice: `freq` (Hz, incl. glide and pitch bend), `note` (MIDI number), `vel` (0-1), `gate` (1 held, 0 released), `trig` (1 on the note-on sample only), `srate` (voice sample rate), `m1`..`m8` (macros 0-1, smoothed), `mw` (mod wheel 0-1), `bpm` (host tempo, 120 if none), `beat` (position in quarter notes; `sin(beat * 2 * $pi * 2)` = 1/8-note LFO), `out` (write). `fb1`, `fb2`, `prev` are plain variables by convention for one-sample feedback and zero-crossing detection.
+Voice: `freq` (Hz, incl. glide and pitch bend), `note` (MIDI number), `vel` (0-1), `gate` (1 held, 0 released), `trig` (1 on the note-on sample only), `srate` (voice sample rate), `m1`..`m8` (macros 0-1, smoothed), `mw` (mod wheel 0-1), `bpm` (host tempo, 120 if none), `beat` (position in quarter notes; `sin(beat * 2 * $pi * 2)` = 1/8-note LFO), `out` (write).
 Master: `inl`, `inr` (the voice sum; mono, so inl == inr), `outl`, `outr`, `m1`..`m8`, `mw`, `srate`, `bpm`, `beat`. `freq`, `note`, `gate` are not set in master.
 
 ## Functions

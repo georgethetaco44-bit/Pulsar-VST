@@ -1,0 +1,13 @@
+# Sound pass A/B set (SPEC §13, 9b): 9 bass-music prompts + 3 bread and butter, from batch30.txt.
+screechy fm neuro bass with feedback that gets nasty on the first knob
+140 halftime wub bass, slow 1/4 wobble, dirty mids but keep the sub clean
+huge nasal foghorn dubstep bass
+metallic neuro stab bass with a comb filter that steps every 16th
+cartoon boing bass that bounces in pitch on every note
+glitchy stutter bass that chops itself up on the beat
+tearout growl that sounds like its talking, vowel sweep
+rolling dnb reese, two saws beating against each other, dark and subtle
+tape stop bass that slows down to a halt on the main knob
+soft electric piano keys, a bit like a rhodes
+warm analog pad with a slow attack and some chorus
+plucky marimba with a short decay
