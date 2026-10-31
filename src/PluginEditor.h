@@ -9,6 +9,7 @@
 #include "ui/AuditionStrip.h"
 #include "ui/CodeView.h"
 #include "ui/MacroPanel.h"
+#include "ui/ModStrip.h"
 #include "ui/NodeInspector.h"
 #include "ui/NodeView.h"
 #include "ui/PresetBrowser.h"
@@ -49,6 +50,7 @@ namespace vibesynth::ui { class SnapshotDriver; }
     PNGs and quits: see ui/Snapshot.h.
 */
 class VibeSynthAudioProcessorEditor final : public juce::AudioProcessorEditor,
+                                            public juce::DragAndDropContainer,
                                             private juce::ChangeListener,
                                             private juce::Timer
 {
@@ -73,6 +75,11 @@ public:
     void showSettingsForSnapshot (const juce::String& fakeKey, const VibeSynthAudioProcessor::KeyTest& result);
     void closeSettings() { settings.close(); }
     vibesynth::ui::NodeView& nodeView() noexcept { return nodes; }
+    vibesynth::ui::MacroPanel& macroPanel() noexcept { return macros; }
+    vibesynth::ui::ModStrip& getModStrip() noexcept { return modStrip; }
+    vibesynth::ui::ModPopover& getModPopover() noexcept { return modPopover; }
+    void openModPopover (vibesynth::ModSource source);
+    void closeModPopover();
     // M10 node inspector (SPEC §9.6): opens over the page area (the audition
     // strip's place; only one of the two is open). `focusChange`: a
     // right-click, the "Change this node" box gets the keyboard focus.
@@ -108,6 +115,8 @@ private:
     juce::Component content;
     vibesynth::ui::PromptPanel header;
     vibesynth::ui::MacroPanel macros;
+    vibesynth::ui::ModStrip modStrip;          // M13
+    vibesynth::ui::ModPopover modPopover;      // M13
     vibesynth::ui::NodeView nodes;
     std::array<juce::TextButton, numPages> tabs;
     vibesynth::ui::PresetBrowser presets;

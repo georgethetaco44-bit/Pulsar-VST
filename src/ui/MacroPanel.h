@@ -8,14 +8,20 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <array>
+#include <functional>
 #include <memory>
 
+#include "engine/NodeOverrides.h"
 #include "patch/Patch.h"
+#include "ui/ModStrip.h"
 #include "ui/Theme.h"
+
+class VibeSynthAudioProcessor;
 
 namespace vibesynth::ui {
 
-class MacroKnob final : public juce::Component
+class MacroKnob final : public juce::Component,
+                        public juce::DragAndDropTarget
 {
 public:
     MacroKnob (juce::AudioProcessorValueTreeState& state, int index);
@@ -27,16 +33,34 @@ public:
     // Cutoff"); a mapped macro the code doesn't read counts as used.
     void setPatchMacro (const juce::String& label, double defaultValue, bool used = true,
                         const juce::String& drives = {}, bool codeReads = true);
+    void setModAssignment (const ModAssignment* mod, double liveValue);
+    void setLiveModValue (double liveValue);
+    void showModMenu();
+
+    std::function<void (ModSource, double)> onAssignMod;
+    std::function<void()> onRemoveMod;
+
+    // DragAndDropTarget (dropping a tile from ModStrip).
+    bool isInterestedInDragSource (const SourceDetails& dragSourceDetails) override;
+    void itemDragEnter (const SourceDetails&) override;
+    void itemDragExit (const SourceDetails&) override;
+    void itemDropped (const SourceDetails& dragSourceDetails) override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
 
-    juce::Slider slider;
+    ModAwareSlider slider;
 
 private:
     const int index;
     juce::String label;
     bool used = true;
+    bool dragHover = false;
+    bool hasMod = false;
+    ModSource modSource = ModSource::Lfo1;
+    double modDepth = 0.0;
+    double liveMod = 0.5;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
 };
 
@@ -62,7 +86,8 @@ private:
 class MacroPanel final : public juce::Component
 {
 public:
-    explicit MacroPanel (juce::AudioProcessorValueTreeState& state);
+    explicit MacroPanel (juce::AudioProcessorValueTreeState& state,
+                         VibeSynthAudioProcessor* processor = nullptr);
 
     // A new patch: name, voice mode, the 8 labels + defaults and which
     // macros the code reads (bit i = m<i+1>, see macrosRead in LexiconLint.h).
@@ -74,6 +99,8 @@ public:
     // after the mapped argument; one the code reads keeps its label and its
     // tooltip says what else it drives.
     void showPatch (const vibesynth::Patch& patch);
+    void tick (const OverrideTable& overrides);
+    MacroKnob& macroKnob (int index) noexcept { return *knobs[(size_t) index]; }
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -85,6 +112,7 @@ private:
     void updateGlide();
 
     juce::AudioProcessorValueTreeState& state;
+    VibeSynthAudioProcessor* processor = nullptr;
     std::array<std::unique_ptr<MacroKnob>, 8> knobs;
     VoiceModeControl voiceMode;
     juce::Slider glide;

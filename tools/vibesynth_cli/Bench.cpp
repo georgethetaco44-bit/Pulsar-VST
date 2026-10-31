@@ -19,9 +19,12 @@
 #include <string>
 #include <vector>
 
+#include "engine/Modulators.h"
+#include "engine/NodeOverrides.h"
 #include "engine/Oversampler.h"
 #include "patch/Patch.h"
 #include "patch/PatchEngine.h"
+#include "patch/PatchTweaks.h"
 
 namespace vibesynth_cli {
 
@@ -115,6 +118,82 @@ double timeVoice (vibesynth::EelVoice& v, double freq, double note,
         if (r >= 0)
             times.push_back (nsPerSample (t0, t1, samples));
     }
+    return median (times);
+}
+
+// M13: median of `runs` x `samples` of voice rendering with 2 LFOs, 2 ADSR
+// envelopes and 4 active modulation assignments (2 macros + 2 node knobs).
+double timeVoiceWithMods (vibesynth::EelVoice& v, const vibesynth::Patch& basePatch,
+                          double freq, double note,
+                          const double macros[vibesynth::MacroSmoother::kNumMacros],
+                          double voiceRate, int runs = kRuns, int samples = kSamples)
+{
+    using namespace vibesynth;
+    Patch modPatch = basePatch;
+    setPatchMacroMod (modPatch, ModSource::Lfo1, 1, 0.35);
+    setPatchMacroMod (modPatch, ModSource::Env1, 2, 0.40);
+    setPatchArgMod (modPatch, ModSource::Lfo2, "flt_lp:0", "cutoff", 0.30);
+    setPatchArgMod (modPatch, ModSource::Env2, "flt_lp:0", "res", -0.25);
+
+    auto table = std::make_unique<OverrideTable>();
+    applyPatchTweaks (modPatch, *table);
+    v.rack().overrides = table.get();
+    v.rackContext().hooked = true;
+
+    VoiceModPack pack;
+    pack.prepare (voiceRate, 9);
+    std::array<ModLfoSpec, kNumModLfos> lfoSpecs { table->getLfoSpec (0), table->getLfoSpec (1) };
+    std::array<ModEnvSpec, kNumModEnvs> envSpecs { table->getEnvSpec (0), table->getEnvSpec (1) };
+    uint8_t macroMask[MacroSmoother::kNumMacros] = {};
+    double macroDepth[MacroSmoother::kNumMacros][kNumModSources] = {};
+    for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
+    {
+        macroMask[m] = table->macroModMask[m].load (std::memory_order_acquire);
+        for (int src = 0; src < kNumModSources; ++src)
+            macroDepth[m][src] = table->macroModDepth[m][src].load (std::memory_order_relaxed);
+    }
+
+    volatile float sink = 0.0f;
+    std::vector<double> times;
+    Transport t;
+    const double step = t.beatStep (voiceRate);
+    v.noteOn (freq, note, 0.9, t);
+    pack.noteOn ((int) note);
+    for (int r = -1; r < runs; ++r)
+    {
+        float acc = 0.0f;
+        const auto t0 = Clock::now();
+        for (int i = 0; i < samples; ++i)
+        {
+            t.beat += step;
+            pack.stepAll (lfoSpecs, envSpecs, t.bpm, t.beat, 1.0);
+            auto& vr = v.rack();
+            for (int src = 0; src < kNumModSources; ++src)
+                vr.modValues[src] = pack.values[(size_t) src];
+            double voiceMacros[MacroSmoother::kNumMacros];
+            for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
+            {
+                double vm = macros[m];
+                const uint8_t mMask = macroMask[m];
+                if (mMask != 0u)
+                {
+                    double delta = 0.0;
+                    for (int src = 0; src < kNumModSources; ++src)
+                        if ((mMask & (1u << src)) != 0u)
+                            delta += macroDepth[m][src] * pack.values[(size_t) src];
+                    vm = std::clamp (vm + delta, 0.0, 1.0);
+                }
+                voiceMacros[m] = vm;
+            }
+            acc += v.renderSample (freq, 1.0, note, 0.9, voiceMacros, t);
+        }
+        const auto t1 = Clock::now();
+        sink = sink + acc;
+        if (r >= 0)
+            times.push_back (nsPerSample (t0, t1, samples));
+    }
+    v.rack().overrides = nullptr;
+    v.rackContext().hooked = false;
     return median (times);
 }
 
@@ -372,6 +451,12 @@ int runBench (int oversampling)
         const std::string vName = patch.name + " voice";
         const std::string mName = patch.name + " master";
         printRow (vName.c_str(), vNs, voiceBase, patch.voiceBudgetNs());
+        if (pi == 0)
+        {
+            const double modNs = timeVoiceWithMods (*pvPtr, patch, 55.0, 33.0, presetMacros, voiceRate);
+            printRow ("Reese voice + 2 LFOs + 2 envs, 4 assignments", modNs, voiceBase, patch.voiceBudgetNs());
+            std::printf ("  mod overhead vs plain Reese: %+.1f ns per voice-sample\n", modNs - vNs);
+        }
         printRow (mName.c_str(), mNs, masterBase, kMasterBudgetNs);
         if (pi == 0)
         {

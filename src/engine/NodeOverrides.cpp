@@ -54,6 +54,27 @@ double overrideArg (const LexiconArg& arg, ArgMode mode, double applied, double 
     return x;
 }
 
+double modulateArg (const LexiconArg& arg, double val, double modDelta) noexcept
+{
+    if (! isFiniteBitsD (val))
+        val = arg.lo;
+    if (! isFiniteBitsD (modDelta))
+        modDelta = 0.0;
+    double v = val;
+    if (arg.kind == ArgKind::Hz)
+    {
+        v = val * std::exp2 (modDelta * (kHzModSemitoneRange / 12.0));
+    }
+    else
+    {
+        v = val + modDelta * (arg.hi - arg.lo);
+    }
+    v = v < arg.lo ? arg.lo : (v > arg.hi ? arg.hi : v);
+    if (arg.kind == ArgKind::Choice)
+        v = std::rint (v);
+    return v;
+}
+
 //==============================================================================
 OverrideTable::OverrideTable() noexcept
 {
@@ -78,11 +99,32 @@ void OverrideTable::clear() noexcept
                     a.applied.store (0.0, std::memory_order_relaxed);
                     a.mapLo.store (0.0, std::memory_order_relaxed);
                     a.mapHi.store (1.0, std::memory_order_relaxed);
+                    a.modMask.store (0, std::memory_order_relaxed);
+                    for (int src = 0; src < kNumModSources; ++src)
+                        a.modDepth[src].store (0.0, std::memory_order_relaxed);
                 }
             }
         }
         anyActive[r].store (0u, std::memory_order_release);
     }
+    for (int i = 0; i < kNumModLfos; ++i)
+        setLfoSpec (i, ModLfoSpec {});
+    for (int i = 0; i < kNumModEnvs; ++i)
+        setEnvSpec (i, ModEnvSpec {});
+    for (int m = 0; m < 8; ++m)
+    {
+        macroModMask[m].store (0, std::memory_order_relaxed);
+        for (int src = 0; src < kNumModSources; ++src)
+            macroModDepth[m][src].store (0.0, std::memory_order_relaxed);
+        liveMacroValue[m].store (0.5f, std::memory_order_relaxed);
+    }
+    for (int src = 0; src < kNumModSources; ++src)
+    {
+        liveModPhase[src].store (0.0f, std::memory_order_relaxed);
+        liveModValue[src].store (0.0f, std::memory_order_relaxed);
+    }
+    liveVoiceActive.store (false, std::memory_order_relaxed);
+    anyModActive.store (0u, std::memory_order_release);
 }
 
 void OverrideTable::refresh (int r, int m, int s) noexcept
@@ -90,7 +132,8 @@ void OverrideTable::refresh (int r, int m, int s) noexcept
     const auto& n = nodes[r][m][s];
     bool on = n.bypass.load (std::memory_order_relaxed) != 0;
     for (const auto& a : n.args)
-        on = on || a.mode.load (std::memory_order_relaxed) != 0;
+        on = on || a.mode.load (std::memory_order_relaxed) != 0
+                || a.modMask.load (std::memory_order_relaxed) != 0;
     const uint32_t bit = 1u << s;
     const uint32_t was = active[r][m].load (std::memory_order_relaxed);
     const uint32_t now = on ? (was | bit) : (was & ~bit);
@@ -99,6 +142,140 @@ void OverrideTable::refresh (int r, int m, int s) noexcept
     active[r][m].store (now, std::memory_order_release);
     const uint32_t count = anyActive[r].load (std::memory_order_relaxed);
     anyActive[r].store (on ? count + 1u : (count > 0u ? count - 1u : 0u), std::memory_order_release);
+}
+
+void OverrideTable::refreshAnyMods() noexcept
+{
+    uint32_t count = 0;
+    for (int m = 0; m < 8; ++m)
+        if (macroModMask[m].load (std::memory_order_relaxed) != 0)
+            ++count;
+    for (int r = 0; r < kNumRackKinds; ++r)
+        for (int m = 0; m < kNumModules; ++m)
+            for (int s = 0; s < kMaxSlotsPerModule; ++s)
+                for (const auto& a : nodes[r][m][s].args)
+                    if (a.modMask.load (std::memory_order_relaxed) != 0)
+                        ++count;
+    anyModActive.store (count, std::memory_order_release);
+}
+
+void OverrideTable::setLfoSpec (int index, const ModLfoSpec& spec) noexcept
+{
+    if (index < 0 || index >= kNumModLfos)
+        return;
+    auto& l = lfos[index];
+    l.shape.store (static_cast<int> (spec.shape), std::memory_order_relaxed);
+    l.sync.store (spec.sync, std::memory_order_relaxed);
+    l.rateHz.store (isFiniteBitsD (spec.rateHz) ? spec.rateHz : 2.0, std::memory_order_relaxed);
+    l.syncDiv.store (static_cast<int> (spec.syncDiv), std::memory_order_relaxed);
+    l.retrigger.store (spec.retrigger, std::memory_order_release);
+}
+
+ModLfoSpec OverrideTable::getLfoSpec (int index) const noexcept
+{
+    ModLfoSpec spec;
+    if (index < 0 || index >= kNumModLfos)
+        return spec;
+    const auto& l = lfos[index];
+    spec.shape = static_cast<LfoShape> (l.shape.load (std::memory_order_relaxed));
+    spec.sync = l.sync.load (std::memory_order_relaxed);
+    spec.rateHz = l.rateHz.load (std::memory_order_relaxed);
+    spec.syncDiv = static_cast<LfoSyncDiv> (l.syncDiv.load (std::memory_order_relaxed));
+    spec.retrigger = l.retrigger.load (std::memory_order_acquire);
+    return spec;
+}
+
+void OverrideTable::setEnvSpec (int index, const ModEnvSpec& spec) noexcept
+{
+    if (index < 0 || index >= kNumModEnvs)
+        return;
+    auto& e = envs[index];
+    e.attack.store (isFiniteBitsD (spec.attack) ? spec.attack : 0.01, std::memory_order_relaxed);
+    e.decay.store (isFiniteBitsD (spec.decay) ? spec.decay : 0.2, std::memory_order_relaxed);
+    e.sustain.store (isFiniteBitsD (spec.sustain) ? spec.sustain : 0.7, std::memory_order_relaxed);
+    e.release.store (isFiniteBitsD (spec.release) ? spec.release : 0.3, std::memory_order_release);
+}
+
+ModEnvSpec OverrideTable::getEnvSpec (int index) const noexcept
+{
+    ModEnvSpec spec;
+    if (index < 0 || index >= kNumModEnvs)
+        return spec;
+    const auto& e = envs[index];
+    spec.attack = e.attack.load (std::memory_order_relaxed);
+    spec.decay = e.decay.load (std::memory_order_relaxed);
+    spec.sustain = e.sustain.load (std::memory_order_relaxed);
+    spec.release = e.release.load (std::memory_order_acquire);
+    return spec;
+}
+
+void OverrideTable::setMacroMod (int macroIndex, ModSource src, double depth) noexcept
+{
+    const int s = static_cast<int> (src);
+    if (macroIndex < 0 || macroIndex >= 8 || s < 0 || s >= kNumModSources)
+        return;
+    const double d = isFiniteBitsD (depth) ? std::clamp (depth, -1.0, 1.0) : 0.0;
+    const bool activeMod = std::abs (d) >= 1.0e-6;
+    macroModDepth[macroIndex][s].store (activeMod ? d : 0.0, std::memory_order_relaxed);
+    const uint8_t bit = static_cast<uint8_t> (1u << s);
+    const uint8_t was = macroModMask[macroIndex].load (std::memory_order_relaxed);
+    const uint8_t now = activeMod ? static_cast<uint8_t> (was | bit) : static_cast<uint8_t> (was & ~bit);
+    macroModMask[macroIndex].store (now, std::memory_order_release);
+    refreshAnyMods();
+}
+
+void OverrideTable::setArgMod (RackKind rack, ModuleId module, int slot, int arg, ModSource src, double depth) noexcept
+{
+    const int r = (int) rack, m = (int) module, s = static_cast<int> (src);
+    if (m < 0 || m >= kNumModules || slot < 0 || slot >= kMaxSlotsPerModule || arg < 0 || arg >= kMaxLexiconArgs
+        || s < 0 || s >= kNumModSources)
+        return;
+    const LexiconEntry* e = primaryLexiconEntry (m);
+    if (e == nullptr || arg >= e->numArgs || ! isEditableArg (e->args[arg].kind))
+        return;
+    auto& a = nodes[r][m][slot].args[arg];
+    const double d = isFiniteBitsD (depth) ? std::clamp (depth, -1.0, 1.0) : 0.0;
+    const bool activeMod = std::abs (d) >= 1.0e-6;
+    a.modDepth[s].store (activeMod ? d : 0.0, std::memory_order_relaxed);
+    const uint8_t bit = static_cast<uint8_t> (1u << s);
+    const uint8_t was = a.modMask.load (std::memory_order_relaxed);
+    const uint8_t now = activeMod ? static_cast<uint8_t> (was | bit) : static_cast<uint8_t> (was & ~bit);
+    a.modMask.store (now, std::memory_order_release);
+    refresh (r, m, slot);
+    refreshAnyMods();
+}
+
+void OverrideTable::clearMods() noexcept
+{
+    for (int i = 0; i < kNumModLfos; ++i)
+        setLfoSpec (i, ModLfoSpec {});
+    for (int i = 0; i < kNumModEnvs; ++i)
+        setEnvSpec (i, ModEnvSpec {});
+    for (int m = 0; m < 8; ++m)
+    {
+        macroModMask[m].store (0, std::memory_order_release);
+        for (int src = 0; src < kNumModSources; ++src)
+            macroModDepth[m][src].store (0.0, std::memory_order_relaxed);
+    }
+    for (int r = 0; r < kNumRackKinds; ++r)
+        for (int m = 0; m < kNumModules; ++m)
+            for (int s = 0; s < kMaxSlotsPerModule; ++s)
+            {
+                bool hadMod = false;
+                for (auto& a : nodes[r][m][s].args)
+                {
+                    if (a.modMask.load (std::memory_order_relaxed) != 0)
+                    {
+                        hadMod = true;
+                        a.modMask.store (0, std::memory_order_release);
+                        for (int src = 0; src < kNumModSources; ++src)
+                            a.modDepth[src].store (0.0, std::memory_order_relaxed);
+                    }
+                }
+                if (hadMod)
+                    refresh (r, m, s);
+            }
+    anyModActive.store (0u, std::memory_order_release);
 }
 
 void OverrideTable::setBypass (RackKind rack, ModuleId module, int slot, bool on) noexcept

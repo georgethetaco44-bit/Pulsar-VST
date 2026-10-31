@@ -46,6 +46,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "engine/Modulators.h"
 #include "engine/NodeMeters.h"
 #include "engine/NodeOverrides.h"
 #include "engine/OutputStage.h"
@@ -181,6 +182,8 @@ public:
     int slotNote (int slot) const noexcept;
     double slotFreq (int slot) const noexcept;
     bool slotGate (int slot) const noexcept;
+    double slotModValue (int slot, ModSource src) const noexcept;
+    double slotModulatedMacro (int slot, int macroIndex) const noexcept;
     int soundingVoices() const noexcept;
     double pitchBendRatio() const noexcept { return bendRatio_; }
 
@@ -209,6 +212,8 @@ private:
         double pendingVel = 0.0;
         bool pendingReleased = false;
         int muteSamples = 0;          // runtime guard: silent, not rendered (voice samples)
+        VoiceModPack mods;
+        double lastModMacros[kNumMacros] = { 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5 };
     };
 
     EelVoice& voiceOf (const VoiceSlot& v) noexcept { return program_->voice (v.index); }
@@ -286,6 +291,7 @@ private:
     // M10 hooks (not owned).
     const OverrideTable* overrides_ = nullptr;
     TraceBank* traces_ = nullptr;
+    VoiceModPack idleMods_;
 };
 
 } // namespace vibesynth

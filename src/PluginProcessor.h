@@ -187,6 +187,12 @@ public:
     void setNodeArg (const std::string& node, const std::string& arg, int mode, double value);  // mode 0 clears
     void setNodeMacroMap (const std::string& node, const std::string& arg, int macro, double min, double max);
     void clearNodeMacroMap (const std::string& node, const std::string& arg);
+    void setModLfo (int index, const vibesynth::ModLfoSpec& spec);
+    void setModEnv (int index, const vibesynth::ModEnvSpec& spec);
+    bool setMacroMod (vibesynth::ModSource source, int macro, double depth);
+    void clearMacroMod (int macro);
+    bool setNodeArgMod (vibesynth::ModSource source, const std::string& node, const std::string& arg, double depth);
+    void clearNodeArgMod (const std::string& node, const std::string& arg);
     int getTweaksVersion() const noexcept { return tweaksVersion; }
     // Live traces for the node pills and the inspector (written only while
     // an editor wants them).

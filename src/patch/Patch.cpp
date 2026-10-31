@@ -119,6 +119,67 @@ void readTweaks (const juce::var& root, Patch& p)
             if (mm.macro >= 1 && mm.macro <= Patch::kMaxMacros && ! mm.node.empty() && ! mm.arg.empty())
                 p.macroMaps.push_back (mm);
         }
+
+    // M13: optional "mods": {"lfos": [...], "envs": [...], "assignments": [...]}
+    const juce::var modsVar = root.getProperty ("mods", juce::var());
+    if (modsVar.isObject())
+    {
+        if (const auto* lfos = modsVar.getProperty ("lfos", juce::var()).getArray())
+        {
+            for (int i = 0; i < juce::jmin (kNumModLfos, lfos->size()); ++i)
+            {
+                const auto& l = (*lfos)[i];
+                if (! l.isObject())
+                    continue;
+                ModLfoSpec spec;
+                const std::string shapeStr = l.getProperty ("shape", "sine").toString().toStdString();
+                parseLfoShapeId (shapeStr, spec.shape);
+                spec.sync = static_cast<bool> (l.getProperty ("sync", true));
+                spec.rateHz = quantisePatchNumber (juce::jlimit (0.01, 50.0,
+                                                                 readNumber (l.getProperty ("rateHz", juce::var()), 2.0)));
+                const std::string divStr = l.getProperty ("syncDiv", "1/4").toString().toStdString();
+                parseLfoSyncDivId (divStr, spec.syncDiv);
+                spec.retrigger = static_cast<bool> (l.getProperty ("retrigger", false));
+                p.mods.lfos[(size_t) i] = spec;
+            }
+        }
+        if (const auto* envs = modsVar.getProperty ("envs", juce::var()).getArray())
+        {
+            for (int i = 0; i < juce::jmin (kNumModEnvs, envs->size()); ++i)
+            {
+                const auto& e = (*envs)[i];
+                if (! e.isObject())
+                    continue;
+                ModEnvSpec spec;
+                spec.attack  = quantisePatchNumber (juce::jlimit (0.001, 10.0, readNumber (e.getProperty ("attack",  juce::var()), 0.01)));
+                spec.decay   = quantisePatchNumber (juce::jlimit (0.001, 10.0, readNumber (e.getProperty ("decay",   juce::var()), 0.2)));
+                spec.sustain = quantisePatchNumber (juce::jlimit (0.0,   1.0,  readNumber (e.getProperty ("sustain", juce::var()), 0.7)));
+                spec.release = quantisePatchNumber (juce::jlimit (0.001, 10.0, readNumber (e.getProperty ("release", juce::var()), 0.3)));
+                p.mods.envs[(size_t) i] = spec;
+            }
+        }
+        if (const auto* assigns = modsVar.getProperty ("assignments", juce::var()).getArray())
+        {
+            for (const auto& a : *assigns)
+            {
+                if ((int) p.mods.assignments.size() >= kMaxModAssignments)
+                    break;
+                if (! a.isObject())
+                    continue;
+                ModAssignment ma;
+                const std::string srcStr = a.getProperty ("source", "").toString().toStdString();
+                if (! parseModSourceId (srcStr, ma.source))
+                    continue;
+                if (isNumber (a.getProperty ("macro", juce::var())))
+                    ma.macro = static_cast<int> (a.getProperty ("macro", 0));
+                ma.node = a.getProperty ("node", "").toString().toStdString();
+                ma.arg  = a.getProperty ("arg", "").toString().toStdString();
+                ma.depth = quantisePatchNumber (juce::jlimit (-1.0, 1.0, readNumber (a.getProperty ("depth", juce::var()), 0.0)));
+                if (ma.valid() && std::abs (ma.depth) >= 1.0e-6)
+                    p.mods.assignments.push_back (ma);
+            }
+        }
+    }
 }
 
 } // namespace
@@ -308,6 +369,61 @@ std::string serializePatch (const Patch& p)
             list.add (juce::var (o));
         }
         root->setProperty ("macroMaps", list);
+    }
+    if (! p.mods.empty())
+    {
+        auto* modsObj = new juce::DynamicObject();
+        juce::Array<juce::var> lfos;
+        for (int i = 0; i < kNumModLfos; ++i)
+        {
+            const auto& l = p.mods.lfos[(size_t) i];
+            auto* lo = new juce::DynamicObject();
+            lo->setProperty ("shape", juce::String (lfoShapeId (l.shape)));
+            lo->setProperty ("sync", l.sync);
+            lo->setProperty ("rateHz", l.rateHz);
+            lo->setProperty ("syncDiv", juce::String (lfoSyncDivId (l.syncDiv)));
+            lo->setProperty ("retrigger", l.retrigger);
+            lfos.add (juce::var (lo));
+        }
+        modsObj->setProperty ("lfos", lfos);
+
+        juce::Array<juce::var> envs;
+        for (int i = 0; i < kNumModEnvs; ++i)
+        {
+            const auto& e = p.mods.envs[(size_t) i];
+            auto* eo = new juce::DynamicObject();
+            eo->setProperty ("attack", e.attack);
+            eo->setProperty ("decay", e.decay);
+            eo->setProperty ("sustain", e.sustain);
+            eo->setProperty ("release", e.release);
+            envs.add (juce::var (eo));
+        }
+        modsObj->setProperty ("envs", envs);
+
+        if (! p.mods.assignments.empty())
+        {
+            juce::Array<juce::var> assigns;
+            for (const auto& a : p.mods.assignments)
+            {
+                if (! a.valid() || std::abs (a.depth) < 1.0e-6)
+                    continue;
+                auto* ao = new juce::DynamicObject();
+                ao->setProperty ("source", juce::String (modSourceId (a.source)));
+                if (a.isMacroTarget())
+                {
+                    ao->setProperty ("macro", a.macro);
+                }
+                else
+                {
+                    ao->setProperty ("node", juce::String (a.node));
+                    ao->setProperty ("arg", juce::String (a.arg));
+                }
+                ao->setProperty ("depth", a.depth);
+                assigns.add (juce::var (ao));
+            }
+            modsObj->setProperty ("assignments", assigns);
+        }
+        root->setProperty ("mods", juce::var (modsObj));
     }
 
     return juce::JSON::toString (rootVar, juce::JSON::FormatOptions{}

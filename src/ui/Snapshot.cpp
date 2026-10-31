@@ -7,6 +7,7 @@
 #include "PluginEditor.h"
 #include "ai/Generator.h"
 #include "ui/SnapshotM11.h"
+#include "ui/SnapshotM13.h"
 #include "ai/MetaClient.h"
 #include "patch/PatchPlayer.h"
 #include "patch/PatchTweaks.h"
@@ -290,6 +291,7 @@ void SnapshotDriver::runShots()
     editor.closeSettings();
 
     runM11Snapshots (editor, [this] (const juce::String& n) { shoot (n); }, [this] (double t) { playNote (t); });
+    runM13Snapshots (editor, [this] (const juce::String& n) { shoot (n); }, [this] (double t) { playNote (t); });
     checkNodeViews();
 }
 

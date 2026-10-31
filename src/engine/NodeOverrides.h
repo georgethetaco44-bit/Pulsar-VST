@@ -33,6 +33,7 @@
 
 #include "engine/Lexicon.h"
 #include "engine/LexiconTable.h"
+#include "engine/Modulators.h"
 
 namespace vibesynth {
 
@@ -52,6 +53,11 @@ double replaceApplied (const LexiconArg& arg, double user) noexcept;
 double overrideArg (const LexiconArg& arg, ArgMode mode, double applied, double mapLo, double mapHi,
                     double macro, double x) noexcept;
 
+// M13: applies bipolar modulation `modDelta` (sum of depth * modVal) to
+// `val` (the effective knob value after any M10 tweak) in the same
+// normalized/semitone space as M10's Offset, then clamps to [arg.lo, arg.hi].
+double modulateArg (const LexiconArg& arg, double val, double modDelta) noexcept;
+
 struct ArgOverride
 {
     std::atomic<uint8_t> mode { 0 };      // ArgMode
@@ -59,6 +65,8 @@ struct ArgOverride
     std::atomic<double> applied { 0.0 };  // see overrideArg
     std::atomic<double> mapLo { 0.0 };
     std::atomic<double> mapHi { 1.0 };
+    std::atomic<uint8_t> modMask { 0 };   // bit s: modDepth[s] != 0
+    std::atomic<double> modDepth[kNumModSources] {};
 };
 
 struct NodeOverride
@@ -67,17 +75,47 @@ struct NodeOverride
     ArgOverride args[kMaxLexiconArgs];
 };
 
+struct AtomicLfoSpec
+{
+    std::atomic<int> shape { static_cast<int> (LfoShape::Sine) };
+    std::atomic<bool> sync { true };
+    std::atomic<double> rateHz { 2.0 };
+    std::atomic<int> syncDiv { static_cast<int> (LfoSyncDiv::Div1_4) };
+    std::atomic<bool> retrigger { false };
+};
+
+struct AtomicEnvSpec
+{
+    std::atomic<double> attack { 0.01 };
+    std::atomic<double> decay { 0.2 };
+    std::atomic<double> sustain { 0.7 };
+    std::atomic<double> release { 0.3 };
+};
+
 struct OverrideTable
 {
     NodeOverride nodes[kNumRackKinds][kNumModules][kMaxSlotsPerModule];
     std::atomic<uint32_t> active[kNumRackKinds][kNumModules];  // bit s: node (m, s) has something set
     std::atomic<uint32_t> anyActive[kNumRackKinds];            // count of active nodes
 
+    // M13: modulator specs and macro modulation depths.
+    AtomicLfoSpec lfos[kNumModLfos];
+    AtomicEnvSpec envs[kNumModEnvs];
+    std::atomic<uint8_t> macroModMask[8] = {};
+    std::atomic<double> macroModDepth[8][kNumModSources] = {};
+    std::atomic<uint32_t> anyModActive { 0 };
+
+    // Live audio-thread telemetry for the UI (playheads, mod outputs, modulated macros).
+    mutable std::atomic<float> liveModPhase[kNumModSources] = {};
+    mutable std::atomic<float> liveModValue[kNumModSources] = {};
+    mutable std::atomic<float> liveMacroValue[8] = {};
+    mutable std::atomic<bool> liveVoiceActive { false };
+
     OverrideTable() noexcept;
     OverrideTable (const OverrideTable&) = delete;
     OverrideTable& operator= (const OverrideTable&) = delete;
 
-    // Message thread (the only writer).
+    // Message thread (the only writer for overrides/mods).
     void clear() noexcept;
     void setBypass (RackKind rack, ModuleId module, int slot, bool on) noexcept;
     // `user` is the persisted value (offset amount / replace value); for
@@ -85,6 +123,14 @@ struct OverrideTable
     void setArg (RackKind rack, ModuleId module, int slot, int arg, ArgMode mode, double user, int macro = 0,
                  double lo = 0.0, double hi = 1.0) noexcept;
     void clearArg (RackKind rack, ModuleId module, int slot, int arg) noexcept;
+
+    void setLfoSpec (int index, const ModLfoSpec& spec) noexcept;
+    ModLfoSpec getLfoSpec (int index) const noexcept;
+    void setEnvSpec (int index, const ModEnvSpec& spec) noexcept;
+    ModEnvSpec getEnvSpec (int index) const noexcept;
+    void setMacroMod (int macroIndex, ModSource src, double depth) noexcept;
+    void setArgMod (RackKind rack, ModuleId module, int slot, int arg, ModSource src, double depth) noexcept;
+    void clearMods() noexcept;
 
     // Audio thread: the node's overrides, or null when nothing is set.
     const NodeOverride* activeNode (int rack, int module, int slot) const noexcept
@@ -97,9 +143,14 @@ struct OverrideTable
     {
         return anyActive[(int) rack].load (std::memory_order_relaxed) != 0u;
     }
+    bool anyMods() const noexcept
+    {
+        return anyModActive.load (std::memory_order_relaxed) != 0u;
+    }
 
 private:
     void refresh (int rack, int module, int slot) noexcept;
+    void refreshAnyMods() noexcept;
 };
 
 // ---------------------------------------------------------------------------

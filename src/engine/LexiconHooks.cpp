@@ -65,19 +65,32 @@ EEL_F callHooked (const LexiconEntry& e, LexiconWrapperFn fn, void* ctx, INT_PTR
             {
                 const auto& ov = node->args[i];
                 const auto mode = static_cast<ArgMode> (ov.mode.load (std::memory_order_acquire));
-                if (mode == ArgMode::None || ! isEditableArg (e.args[i].kind))
+                const uint8_t mMask = ov.modMask.load (std::memory_order_acquire);
+                if ((mode == ArgMode::None && mMask == 0u) || ! isEditableArg (e.args[i].kind))
                     continue;
-                double macro = 0.0;
-                if (mode == ArgMode::Macro)
+                double v = static_cast<double> (vals[i]);
+                if (mode != ArgMode::None)
                 {
-                    const int mi = ov.macro.load (std::memory_order_relaxed) & 7;
-                    const double* mv = vr->macroVars[mi];
-                    macro = mv != nullptr ? *mv : 0.0;
+                    double macro = 0.0;
+                    if (mode == ArgMode::Macro)
+                    {
+                        const int mi = ov.macro.load (std::memory_order_relaxed) & 7;
+                        const double* mv = vr->macroVars[mi];
+                        macro = mv != nullptr ? *mv : 0.0;
+                    }
+                    v = overrideArg (e.args[i], mode, ov.applied.load (std::memory_order_relaxed),
+                                     ov.mapLo.load (std::memory_order_relaxed),
+                                     ov.mapHi.load (std::memory_order_relaxed), macro, v);
                 }
-                vals[i] = static_cast<EEL_F> (overrideArg (e.args[i], mode, ov.applied.load (std::memory_order_relaxed),
-                                                           ov.mapLo.load (std::memory_order_relaxed),
-                                                           ov.mapHi.load (std::memory_order_relaxed), macro,
-                                                           static_cast<double> (vals[i])));
+                if (mMask != 0u)
+                {
+                    double modDelta = 0.0;
+                    for (int src = 0; src < kNumModSources; ++src)
+                        if ((mMask & (1u << src)) != 0u)
+                            modDelta += ov.modDepth[src].load (std::memory_order_relaxed) * vr->modValues[src];
+                    v = modulateArg (e.args[i], v, modDelta);
+                }
+                vals[i] = static_cast<EEL_F> (v);
             }
     }
 

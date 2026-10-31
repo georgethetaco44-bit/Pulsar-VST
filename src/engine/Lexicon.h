@@ -197,6 +197,7 @@ struct VoiceRack
     const OverrideTable* overrides = nullptr;
     TraceSink* capture = nullptr;
     const double* macroVars[8] = {};
+    double modValues[4] = {}; // M13: current sample's LFO 1, LFO 2, Env 1, Env 2 outputs
 
 
     void init (double newSampleRate, uint32_t voiceSeed);
