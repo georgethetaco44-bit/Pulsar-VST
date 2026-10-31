@@ -112,6 +112,37 @@ PromptResources PromptResources::fromFiles (std::vector<std::pair<std::string, s
             r.apiReference = text.trim().toStdString();
             continue;
         }
+        if (file.rfind ("edit_", 0) == 0)
+        {
+            // M11 edit prompts: drop the "# Title" line.
+            const auto body = (text.trimStart().startsWith ("# ") ? text.fromFirstOccurrenceOf ("\n", false, false)
+                                                                   : text).trim();
+            if (file == "edit_change.md")
+                r.changeInstructions = body.toStdString();
+            else if (file == "edit_mutate.md")
+                r.mutateInstructions = body.toStdString();
+            else if (file == "edit_directions.md")
+            {
+                juce::StringArray lines;
+                lines.addLines (body);
+                for (const auto& l : lines)
+                {
+                    if (l.startsWith ("## "))
+                    {
+                        MutateDirection d;
+                        d.key = l.substring (3).upToFirstOccurrenceOf (":", false, false).trim().toStdString();
+                        d.label = l.fromFirstOccurrenceOf (":", false, false).trim().toStdString();
+                        r.mutateDirections.push_back (d);
+                    }
+                    else if (! r.mutateDirections.empty() && l.trim().isNotEmpty())
+                    {
+                        auto& t = r.mutateDirections.back().text;
+                        t += (t.empty() ? "" : " ") + l.trim().toStdString();
+                    }
+                }
+            }
+            continue;
+        }
         juce::StringArray lines;
         lines.addLines (text);
         if (lines.size() > 0 && lines[0].startsWith ("category:"))
@@ -224,6 +255,41 @@ BuiltPrompt PromptBuilder::build (const std::string& userPrompt, const RetryCont
         b.recipeFiles.push_back (res_.recipes[(size_t) i].file);
     }
     user += "\n\n" + patchRequest (userPrompt);
+    b.messages.push_back ({ "user", user });
+
+    if (retry != nullptr)
+    {
+        b.messages.push_back ({ "assistant", retry->previousReply });
+        b.messages.push_back ({ "user", "Pulsar rejected that patch: " + retry->reason
+                                            + "\nFix exactly this and reply with the complete patch again in the "
+                                              "same format (the ```json header, then the ```eel init, ```eel voice "
+                                              "and ```eel master blocks)." });
+    }
+    return b;
+}
+
+BuiltPrompt PromptBuilder::buildEdit (const EditPrompt& edit, const RetryContext* retry) const
+{
+    BuiltPrompt b;
+    b.messages.push_back ({ "system", res_.systemPrompt + "\n\n" + res_.apiReference });
+
+    const bool change = edit.kind == EditPrompt::Kind::Change;
+    std::vector<int> recipes = chooseRecipes (change ? edit.instruction : edit.direction);
+    if ((int) recipes.size() > kMaxEditRecipes)
+        recipes.resize ((size_t) kMaxEditRecipes);
+    std::string user = "Techniques that may help (adapt them, don't paste them):";
+    for (const int i : recipes)
+    {
+        user += "\n\n" + res_.recipes[(size_t) i].text;
+        b.recipeFiles.push_back (res_.recipes[(size_t) i].file);
+    }
+    user += "\n\nThe current patch:\n\n" + edit.patchText + "\n";
+
+    juce::String block (change ? res_.changeInstructions : res_.mutateInstructions);
+    block = block.replace ("{node}", juce::String (edit.node))
+                 .replace ("{instruction}", juce::String (edit.instruction))
+                 .replace ("{direction}", juce::String (edit.direction));
+    user += block.toStdString();
     b.messages.push_back ({ "user", user });
 
     if (retry != nullptr)

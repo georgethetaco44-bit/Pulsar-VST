@@ -1,0 +1,11 @@
+# M11 "Change this node" batch (vibesynth_cli --change-batch, SPEC §9.7).
+# One case per line: preset | node | instruction. Mostly the bass showcase
+# presets; nodes as the node view names them (flt_lp:0, fx_fold#0, ...).
+reese | flt_lp:0 | make this filter wobble at 1/4 notes
+scalpel | fx_comb:0 | add grit before this
+wonk_dive | flt_ladder:0 | make this darker
+scalpel | fx_fold#0 | make the fold scream on m1
+tape_stop | flt_lp:0 | add a 1/16 note rhythmic gate after this, depth on m2
+corroder | phys_resonator:0 | tune this a fifth up and let it ring longer
+reese | osc_supersaw:0 | swap this for a hollow detuned square stack
+pluck | flt_lp:0 | make this filter close faster for a snappier pluck

@@ -171,6 +171,10 @@ set(VIBESYNTH_AI_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/PromptBuilder.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/ResponseParser.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/Generator.cpp")
+# M11 (SPEC §9.7): node ids for "Change this node", and Mutate.
+list(APPEND VIBESYNTH_AI_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/NodeId.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/Mutator.cpp")
 
 # M8: prompt resources (SPEC §6.1), embedded for the plugin and the CLI.
 # BinaryData keeps only file names, so names must be unique across the
@@ -178,7 +182,8 @@ set(VIBESYNTH_AI_SOURCES
 file(GLOB VIBESYNTH_PROMPT_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/prompts/*.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/prompts/recipes/*.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/resources/prompts/examples/*.md")
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/prompts/examples/*.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/prompts/edit/*.md")
 juce_add_binary_data(PulsarPromptData
     HEADER_NAME PulsarPromptData.h
     NAMESPACE PulsarPromptData
@@ -237,6 +242,14 @@ target_sources(VibeSynthVST PRIVATE
     ${VIBESYNTH_UI_SOURCES}
     ${VIBESYNTH_PATCH_SOURCES}
     ${VIBESYNTH_AI_SOURCES})
+
+# M11 (SPEC §9.7): Mutate, Change this node and Undo in the processor and
+# the editor (audition strip, change popup, their review snapshots).
+target_sources(VibeSynthVST PRIVATE
+    src/ProcessorEdit.cpp
+    src/ui/AuditionStrip.cpp
+    src/ui/ChangeNodePopup.cpp
+    src/ui/SnapshotM11.cpp)
 
 target_include_directories(VibeSynthVST PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -323,6 +336,10 @@ target_sources(vibesynth_cli PRIVATE
     src/ui/NodeLayout.cpp
     ${VIBESYNTH_PATCH_SOURCES}
     ${VIBESYNTH_AI_SOURCES})
+# M11: --change, --mutate, --change-batch and the M11 smoketests.
+target_sources(vibesynth_cli PRIVATE
+    tools/vibesynth_cli/Edit.cpp
+    tools/vibesynth_cli/SmokeM11.cpp)
 # --render writes WAV only: keep JUCE's bundled FLAC/Ogg Vorbis codecs (and
 # the Windows Media reader) out of the CLI.
 target_compile_definitions(vibesynth_cli PRIVATE

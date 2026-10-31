@@ -309,4 +309,40 @@ ResponseParseResult parseResponse (const std::string& replyText)
     return r;
 }
 
+std::string formatPatchAsReply (const Patch& patch)
+{
+    // JSON-escape through juce::JSON so names and labels with quotes survive.
+    auto quoted = [] (const std::string& s)
+    {
+        return juce::JSON::toString (juce::var (juce::String::fromUTF8 (s.c_str())), true).toStdString();
+    };
+    // 0.35, 0.123457, 1: up to 6 decimals (the .pulsar precision), no
+    // trailing zeros, so the defaults read back exactly.
+    auto number = [] (double v)
+    {
+        auto t = juce::String (v, 6);
+        if (t.containsChar ('.'))
+            t = t.trimCharactersAtEnd ("0").trimCharactersAtEnd (".");
+        return t.toStdString();
+    };
+    std::string out = "```json\n{\n  \"name\": " + quoted (patch.name) + ",\n  \"voiceMode\": "
+                    + quoted (patch.voiceMode) + ",\n  \"macros\": [\n";
+    for (int i = 0; i < Patch::kMaxMacros; ++i)
+    {
+        const bool given = i < (int) patch.macros.size();
+        const std::string label = given ? patch.macros[(size_t) i].label : std::string();
+        out += "    {\"label\": " + quoted (label) + ", \"default\": "
+             + number (patch.macroDefault (i)) + "}"
+             + (i + 1 < Patch::kMaxMacros ? ",\n" : "\n");
+    }
+    out += "  ]";
+    if (! patch.graphJson.empty())
+        out += ",\n  \"graph\": " + patch.graphJson;
+    out += "\n}\n```\n";
+    out += "```eel init\n" + patch.init + (patch.init.empty() ? "" : "\n") + "```\n";
+    out += "```eel voice\n" + patch.voice + "\n```\n";
+    out += "```eel master\n" + patch.master + (patch.master.empty() ? "" : "\n") + "```\n";
+    return out;
+}
+
 } // namespace vibesynth

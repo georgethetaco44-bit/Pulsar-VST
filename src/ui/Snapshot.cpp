@@ -6,6 +6,7 @@
 
 #include "PluginEditor.h"
 #include "ai/Generator.h"
+#include "ui/SnapshotM11.h"
 #include "ai/MetaClient.h"
 #include "patch/PatchPlayer.h"
 #include "patch/PatchValidator.h"
@@ -239,6 +240,7 @@ void SnapshotDriver::runShots()
     shoot ("settings_key_error");
     editor.closeSettings();
 
+    runM11Snapshots (editor, [this] (const juce::String& n) { shoot (n); });  // M11
     checkNodeViews();
 }
 

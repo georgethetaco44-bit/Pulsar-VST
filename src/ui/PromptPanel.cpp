@@ -111,6 +111,23 @@ PromptPanel::PromptPanel()
     actionButton.onClick = [this] { actionClicked(); };
     addAndMakeVisible (actionButton);
 
+    // M11: Mutate and Undo.
+    setButtonStyle (mutateButton, ButtonStyle::Ghost);
+    mutateButton.onClick = [this]
+    {
+        if (onMutate)
+            onMutate();
+    };
+    addAndMakeVisible (mutateButton);
+    setButtonStyle (undoButton, ButtonStyle::Ghost);
+    undoButton.setTooltip ("Go back to the sound before the last change (patch and macro positions)");
+    undoButton.onClick = [this]
+    {
+        if (onUndo)
+            onUndo();
+    };
+    addAndMakeVisible (undoButton);
+
     setButtonStyle (addKeyButton, ButtonStyle::Primary);
     addKeyButton.setTooltip ("Open Settings on the API key field");
     addKeyButton.onClick = [this]
@@ -165,6 +182,14 @@ void PromptPanel::setState (const HeaderState& s)
     prompt.setVisible (! card);
     actionButton.setVisible (! card);
     addKeyButton.setVisible (card);
+    // M11
+    mutateButton.setVisible (! card);
+    mutateButton.setEnabled (s.canMutate);
+    mutateButton.setButtonText (s.mutating ? juce::String::fromUTF8 ("Mutating\xe2\x80\xa6") : juce::String ("Mutate"));
+    mutateButton.setTooltip (s.mutating ? "4 variations on their way: see the strip below"
+                                        : "4 variations of the current sound (darker, more movement, brighter, "
+                                          "weirder) to audition and keep");
+    undoButton.setEnabled (s.canUndo);
     repaint (keyCardArea);
     status.setState (s);
 }
@@ -222,11 +247,16 @@ void PromptPanel::resized()
     keyCardArea = top;
     addKeyButton.setBounds (juce::Rectangle<int> (grid * 12, grid * 5)
                                 .withCentre ({ top.getRight() - grid * 2 - grid * 6, top.getCentreY() }));
-    actionButton.setBounds (top.removeFromRight (grid * 16));
+    // M11: [prompt] [Generate] [Mutate], Undo under Mutate.
+    auto mutateArea = top.removeFromRight (grid * 12);
+    mutateButton.setBounds (mutateArea);
+    top.removeFromRight (grid);
+    actionButton.setBounds (top.removeFromRight (grid * 14));
     top.removeFromRight (grid * 2);
     prompt.setBounds (top);
     r.removeFromTop (grid);
     status.setBounds (r.withWidth (prompt.getWidth()).withHeight (grid * 3));
+    undoButton.setBounds (mutateArea.withY (r.getY()).withHeight (grid * 3));
 }
 
 //==============================================================================

@@ -13,6 +13,9 @@
 
 #include "ai/AiSettings.h"
 #include "ai/Generator.h"
+#include "ai/MutateView.h"
+#include "ai/Mutator.h"
+#include "ai/UndoStack.h"
 #include "engine/NodeMeters.h"
 #include "patch/Patch.h"
 #include "patch/PatchEngine.h"
@@ -205,6 +208,41 @@ public:
     const KeyTest& getKeyTest() const noexcept { return keyTest; }
 
     //==============================================================================
+    // M11 (SPEC §9.7), message thread; implemented in ProcessorEdit.cpp.
+    //
+    // Change this node: edits the active patch through the generation
+    // worker (Generate and Change share it; the newest request wins). The
+    // node id is "flt_lp:0", "master/bus_sat#1" or a node-view label. The
+    // result keeps the current macro values. Returns false (and sets the
+    // status) without a key, without an instruction, or for a node the
+    // active patch doesn't have.
+    bool requestNodeChange (const juce::String& nodeId, const juce::String& instruction);
+    bool isChangingNode() const noexcept { return changeRunning; }
+
+    // Mutate: 4 variations of the active patch, requested in parallel,
+    // land in the audition strip (getMutateView) as they finish.
+    // Mutating while a variation is auditioned keeps it first.
+    bool canMutate();                   // a key, and no Mutate running
+    void startMutate();
+    void cancelMutate();                // stops what is in flight; finished slots stay
+    void auditionMutation (int slot);   // swaps a ready slot in; -1 = the original
+    void keepMutation();                // the auditioned slot stays (Undo goes back to the original)
+    void discardMutation();             // back to the original (exact macros); closes the strip
+    const vibesynth::MutateView& getMutateView() const noexcept { return mutateView; }
+
+    // Undo: every swap (generate, change, Mutate Keep, preset or file
+    // load) pushes what played before it (patch, trim, macro values,
+    // source, nodes; M10's tweaks through captureSnapshot/applySnapshot).
+    // While the audition strip is open, Undo discards it.
+    bool canUndo() const noexcept { return undoStack.canUndo() || mutateView.open; }
+    void undo();
+    int getEditVersion() const noexcept { return editVersion; }  // bumps when Undo/Mutate state changes
+
+    // Snapshot tool: delivers posted results now (instead of waiting for
+    // the message loop).
+    void deliverPendingResults() { handleUpdateNowIfNeeded(); }
+
+    //==============================================================================
     static constexpr int numMacros = vibesynth::MacroSmoother::kNumMacros;
     static constexpr const char* voiceModeParamId = "voiceMode";  // M7
     static constexpr const char* glideParamId = "glide";          // M7
@@ -263,6 +301,13 @@ private:
         std::string text;
         juce::String source;     // shown in the status line
         uint64_t generation = 0;
+        // M11 (ProcessorEdit.cpp): Undo bookkeeping and how the result
+        // applies macros. A restore never pushes.
+        bool pushUndo = true;        // push what was playing (not auditions, Undo itself)
+        bool keepMacros = false;     // Change: keep the current macro values
+        bool hasMacroValues = false; // Undo, discard: these exact values
+        std::array<float, numMacros> macroValues {};
+        juce::String verb;           // status line instead of "Generated"
     };
 
     struct LoadResult
@@ -278,6 +323,10 @@ private:
         vibesynth::Patch patch;  // labels/defaults for the UI when ok
         bool setMacros = false;  // a Load or Builtin (not a restore) sets macros to the patch defaults
         uint64_t generation = 0;
+        // M11
+        bool pushUndo = false;
+        bool hasMacroValues = false;
+        std::array<float, numMacros> macroValues {};
     };
 
     class Worker final : public juce::Thread
@@ -319,6 +368,38 @@ private:
         vibesynth::AiConfig config;
         int id;
     };
+    // M11 Mutate: runs vibesynth::Mutator for one session, posting slot
+    // events to the message thread. Started by startMutate(), stopped by
+    // the destructor (or replaced by the next session once finished).
+    class MutateThread final : public juce::Thread
+    {
+    public:
+        MutateThread (VibeSynthAudioProcessor& p, vibesynth::MutateRequest r, int sessionId)
+            : juce::Thread ("Pulsar mutate"), owner (p), request (std::move (r)), session (sessionId) {}
+        void run() override;
+        std::atomic<bool> cancel { false };
+
+    private:
+        VibeSynthAudioProcessor& owner;
+        vibesynth::MutateRequest request;
+        int session;
+    };
+    struct MutateEvent
+    {
+        int session = 0;
+        int slot = -1;           // -1: the whole run finished
+        bool done = false;       // the slot's result is in `result`
+        vibesynth::GenerationProgress progress;
+        std::shared_ptr<vibesynth::GenerationResult> result;
+    };
+    void postMutateEvent (MutateEvent e);
+    void applyMutateEvents();          // message thread, from handleAsyncUpdate
+    void closeMutateSession();         // cancels what runs, hides the strip
+    vibesynth::PatchSnapshot captureSnapshot() const;  // what plays now (message thread)
+    void applySnapshot (const vibesynth::PatchSnapshot& s, const juce::String& verb);
+    void pushUndoForSwap();            // handleAsyncUpdate, before a swap is shown
+    void stopEditThreads();            // destructor
+
     void postKeyTest (int id, const KeyTest& result);
     void runGeneration (const vibesynth::GenerationRequest& request);
     void postGenerationStatus (StatusKind kind, const juce::String& text, const juce::String& detail = {});
@@ -423,6 +504,18 @@ private:
     std::array<std::atomic<float>, 2> outputPeak {};
     std::atomic<float> editorScale { 1.0f };
     std::atomic<int> historyVersion { 0 };  // bumped by the generation worker
+
+    // M11 (message thread unless noted).
+    vibesynth::UndoStack undoStack;
+    int editVersion = 0;
+    vibesynth::MutateView mutateView;
+    std::array<std::shared_ptr<vibesynth::GenerationResult>, vibesynth::MutateView::kSlots> mutateResults;
+    vibesynth::PatchSnapshot mutateOriginal;   // what played when Mutate was pressed
+    int mutateSession = 0;
+    std::unique_ptr<MutateThread> mutateThread;
+    std::vector<MutateEvent> mutateEvents;     // under resultMutex
+    std::atomic<bool> changeRunning { false };
+    vibesynth::GenerationKind runningKind = vibesynth::GenerationKind::Generate;  // generation worker
 
     Worker worker { *this };
     GenerationWorker generationWorker { *this };

@@ -35,4 +35,11 @@ struct ResponseParseResult
 
 ResponseParseResult parseResponse (const std::string& reply);
 
+// M11 (SPEC §9.7): `patch` in the same layout, as the model would have
+// written it (the ```json header with name, voiceMode, 8 macros and the
+// graph, then the init, voice and master blocks). Mutate and "Change this
+// node" send the active patch this way. parseResponse() reads it back to
+// the same name, voiceMode, macros (padded to 8), graph and code.
+std::string formatPatchAsReply (const Patch& patch);
+
 } // namespace vibesynth

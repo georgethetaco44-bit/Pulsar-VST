@@ -338,6 +338,10 @@ checks that pass rates hold.
   the budget allows; the examples must stay within the poly budget and be easy
   to imitate.
 - Files live in `resources/prompts/` and are embedded with JUCE BinaryData.
+- **Change and Mutate requests (M11)** send the active patch instead of the 2
+  few-shot examples, at most 2 recipes, and a short instruction block from
+  `resources/prompts/edit/`. The patch already shows the format; this saves
+  ~2.5k tokens per request.
 
 ### 6.2 Response format
 Ask the model for exactly this layout. Don't put code inside JSON strings; the
@@ -371,7 +375,8 @@ goes through the retry path.
 | Use | Model | Temperature |
 |---|---|---|
 | Generate | `muse-spark-1.3` | 0.8 |
-| Mutate / Breed | `muse-spark-1.3` | 0.9 |
+| Change this node | `muse-spark-1.3` | 0.8 |
+| Mutate | `muse-spark-1.3` | 0.9 |
 | Retry after compile/test failure | `muse-spark-1.3` | 0.15 |
 
 Model IDs and endpoint (`https://api.meta.ai/v1/chat/completions`,
@@ -380,7 +385,9 @@ reasoning model: requests send `reasoning_effort: "low"` (settings file only)
 and `max_tokens: 8192`; a reply that spends the whole cap reasoning is its own
 failure reason ("hit the token limit while reasoning") and is retried, as are
 empty, garbled or timed-out replies. Measured in M8: ~13 s per generation
-(max 25.8 s), ~5.1k prompt + ~2.4k completion tokens (5.4k prompt after Sound pass batch 1). Timeout is **60 s**.
+(max 25.8 s), ~5.1k prompt + ~2.4k completion tokens (5.4k prompt after Sound pass batch 1).
+M11: Change ~4.95k prompt + ~1.7k completion, 6.8 s; Mutate ~7.3k per request,
+4 variations in 15.7 s wall time. Timeout is **60 s**.
 The UI shows progress, never blocks.
 
 ### 6.4 Self-heal
@@ -706,10 +713,19 @@ read-only.
   selected node's id and the user's instruction ("make this wobble at 1/4",
   "add grit before this"). The model returns a full patch, told to change only
   what the instruction needs and keep everything else, including slot numbers.
-  Same validation path.
+  Same validation path. A change keeps the user's macro positions and reports
+  any node it removed; auditioning a variation sets that variation's macro
+  defaults. A node the patch doesn't use is refused before any request.
+- **Mutate details (M11):** HTTP runs in parallel, the offline test one at a
+  time. On HTTP 429 it backs off and retries; from the second 429 on requests
+  run one at a time; after 3 back-offs the slot fails. Discard (or Undo) with
+  the strip open restores the original exactly. Mutate while a variation is
+  playing keeps that variation first, then mutates it. Saving the project
+  mid-audition saves the playing variation.
 - **Undo:** every swap (generate, mutate, change, preset load) pushes the
   previous patch, tweaks and macro values onto a small undo stack (message
-  thread). An Undo button restores it. History keeps working as before.
+  thread, 20 deep). An Undo button restores it. Auditioning doesn't push;
+  Keep pushes the original. History keeps working as before.
 - **Breed** is cut for the hackathon.
 
 ### 9.8 MOD strip **[MVP stretch, M13]**
@@ -939,6 +955,9 @@ Each milestone has an exit test. Don't start the next until it passes.
 11. **Mutate & "Change this node"** (§9.7), plus Undo. Highest priority of
     M10–M13: this is the Meta-AI showcase. *Exit: both work end to end in the
     plugin; a batch of node-change instructions passes validation.*
+    **Done (Oct 31):** change8 8/8 first try; Mutate on Reese 4/4 in 15.7 s;
+    262 smoketests and 125 strict selftests pass. Until the M10 merge, the
+    way in is right-click on a node → "Change this node…".
 12. **DSP expansion** (§5.3). Starts after M10 is merged (both touch the
     lexicon table). *Exit: tier 1 in, all tests and budgets pass, the batch
     pass rate holds.*

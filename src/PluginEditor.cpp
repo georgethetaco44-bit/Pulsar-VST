@@ -42,6 +42,19 @@ VibeSynthAudioProcessorEditor::VibeSynthAudioProcessorEditor (VibeSynthAudioProc
     header.onAddKey = [this] { settings.open(); };
     errorDetail.onClose = [this] { setErrorDetailOpen (false); };
 
+    // M11 (SPEC §9.7): Mutate, Undo, the audition strip, Change this node.
+    header.onMutate = [this] { processor.startMutate(); };
+    header.onUndo = [this] { processor.undo(); };
+    strip.onAudition = [this] (int slot) { processor.auditionMutation (slot); };
+    strip.onKeep = [this] { processor.keepMutation(); };
+    strip.onDiscard = [this] { processor.discardMutation(); };
+    strip.onStop = [this] { processor.cancelMutate(); };
+    changePopup.onSubmit = [this] (const juce::String& id, const juce::String& text)
+    {
+        return processor.requestNodeChange (id, text);
+    };
+    nodes.addMouseListener (this, false);
+
     static const char* names[numPages] = { "Presets", "Code", "History" };
     static const char* tips[numPages] = { "Built-in and saved presets", "The active patch's code (read-only)",
                                           "Every successful generation, newest first" };
@@ -71,6 +84,8 @@ VibeSynthAudioProcessorEditor::VibeSynthAudioProcessorEditor (VibeSynthAudioProc
     content.addAndMakeVisible (meter);
     content.addAndMakeVisible (gear);
     content.addChildComponent (errorDetail);
+    content.addChildComponent (strip);        // M11
+    content.addChildComponent (changePopup);  // M11
     content.addChildComponent (settings);
     addAndMakeVisible (content);
 
@@ -106,6 +121,7 @@ VibeSynthAudioProcessorEditor::~VibeSynthAudioProcessorEditor()
 {
     snapshot.reset();
     stopTimer();
+    nodes.removeMouseListener (this);
     processor.removeChangeListener (this);
     setLookAndFeel (nullptr);
 }
@@ -150,6 +166,7 @@ void VibeSynthAudioProcessorEditor::layoutContent()
     presets.setBounds (pageArea);
     code.setBounds (pageArea);
     history.setBounds (pageArea);
+    strip.setBounds (pageArea);  // M11: over the pages while variations are open
 
     settings.setBounds (0, 0, Theme::baseWidth, Theme::baseHeight);
     placeErrorDetail();
@@ -220,6 +237,8 @@ bool VibeSynthAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
     {
         if (settings.isVisible())
             settings.close();
+        else if (changePopup.isVisible())  // M11
+            changePopup.close();
         else if (errorOpen)
             setErrorDetailOpen (false);
         else if (processor.isGenerating())
@@ -263,6 +282,10 @@ HeaderState VibeSynthAudioProcessorEditor::headerState() const
     s.kind = kindOf (st.kind);
     s.text = st.text;
     s.detail = st.detail;
+    // M11
+    s.canMutate = const_cast<VibeSynthAudioProcessor&> (processor).canMutate() && s.canGenerate;
+    s.mutating = processor.getMutateView().running;
+    s.canUndo = processor.canUndo();
     if (s.generating)
     {
         s.kind = HeaderState::Kind::Busy;
@@ -322,6 +345,74 @@ void VibeSynthAudioProcessorEditor::refresh()
     }
     history.refresh();
     settings.setKeyTest (processor.getKeyTest());
+
+    // M11: the audition strip over the pages while a Mutate session is open.
+    const auto& mv = mutateOverride.has_value() ? *mutateOverride : processor.getMutateView();
+    strip.setView (mv);
+    if (strip.isVisible() != mv.open)
+    {
+        strip.setVisible (mv.open);
+        if (mv.open)
+            strip.toFront (false);
+        changePopup.toFront (false);
+        settings.toFront (false);
+    }
+}
+
+void VibeSynthAudioProcessorEditor::setMutateOverride (std::optional<vibesynth::MutateView> view)
+{
+    mutateOverride = std::move (view);
+    refresh();
+    strip.tick (juce::Time::getMillisecondCounterHiRes());
+}
+
+void VibeSynthAudioProcessorEditor::openChangePopup (const juce::String& nodeId, const juce::String& text)
+{
+    // Anchor on the node's pill when the view shows it (a coarse hit scan;
+    // this path is for the snapshot tool and other programmatic opens).
+    juce::Rectangle<int> anchor = nodes.getBounds().withSizeKeepingCentre (8, 8);
+    bool found = false;
+    for (int y = 0; y < nodes.getHeight() && ! found; y += 4)
+        for (int x = 0; x < nodes.getWidth() && ! found; x += 4)
+        {
+            std::string hit;
+            juce::Rectangle<float> pill;
+            if (nodes.nodeAt ({ (float) x, (float) y }, hit, pill) && juce::String (hit) == nodeId)
+            {
+                anchor = pill.getSmallestIntegerContainer() + nodes.getPosition();
+                found = true;
+            }
+        }
+    const bool canChange = keyOverride.value_or (processor.canGenerate());
+    changePopup.open (nodeId, anchor, canChange);
+    changePopup.setText (text);
+    settings.toFront (false);
+}
+
+void VibeSynthAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
+{
+    // M11: right-click a node -> "Change this node..." (M10's inspector
+    // gets the same text box; both call requestNodeChange).
+    if (e.eventComponent != &nodes || ! e.mods.isPopupMenu())
+        return;
+    std::string id;
+    juce::Rectangle<float> pill;
+    if (! nodes.nodeAt (e.position, id, pill))
+        return;
+    const juce::String nodeId (id);
+    const bool canChange = processor.canGenerate();
+    juce::PopupMenu menu;
+    menu.addSectionHeader (nodeId);
+    menu.addItem (1, juce::String::fromUTF8 ("Change this node\xe2\x80\xa6"), canChange);
+    if (! canChange)
+        menu.addItem (2, "Needs an API key (Settings)", false);
+    const auto anchor = pill.getSmallestIntegerContainer() + nodes.getPosition();
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&nodes).withMousePosition(),
+                        [safe = juce::Component::SafePointer<VibeSynthAudioProcessorEditor> (this), nodeId, anchor] (int r)
+                        {
+                            if (r == 1 && safe != nullptr)
+                                safe->changePopup.open (nodeId, anchor, true);
+                        });
 }
 
 void VibeSynthAudioProcessorEditor::tickMeters()
@@ -334,6 +425,7 @@ void VibeSynthAudioProcessorEditor::tickMeters()
 void VibeSynthAudioProcessorEditor::timerCallback()
 {
     tickMeters();
+    strip.tick (juce::Time::getMillisecondCounterHiRes());  // M11: waiting cards' seconds
     // The elapsed seconds while generating (a change, ~4 times a second).
     if (++ticks % 8 == 0 && (processor.isGenerating() || shownHeader.generating))
         refresh();

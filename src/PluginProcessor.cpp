@@ -86,6 +86,7 @@ VibeSynthAudioProcessor::~VibeSynthAudioProcessor()
         keyTestThread->cancel = true;
         keyTestThread->stopThread (10000);
     }
+    stopEditThreads(); // M11: the Mutate thread
     cancelGenerationFlag = true;
     generationWorker.signalThreadShouldExit();
     generationWorker.notify();
@@ -320,6 +321,7 @@ void VibeSynthAudioProcessor::generate (const juce::String& prompt)
         nextGeneration = std::move (request);
         generationPending = true;
         cancelGenerationFlag = true;
+        changeRunning = false; // M11: a pending change is superseded
     }
     generationWorker.notify();
     generationStartMs = juce::Time::getMillisecondCounterHiRes();
@@ -408,10 +410,14 @@ void VibeSynthAudioProcessor::GenerationWorker::run()
                 owner.generating = true;
                 owner.generationPending = false;
                 owner.cancelGenerationFlag = false;
+                owner.changeRunning = request->kind == vibesynth::GenerationKind::Change;
             }
         }
         if (request != nullptr)
+        {
             owner.runGeneration (*request);
+            owner.changeRunning = false;
+        }
         else
             wait (100);
     }
@@ -442,18 +448,19 @@ void VibeSynthAudioProcessor::runGeneration (const vibesynth::GenerationRequest&
     };
     const auto res = vibesynth::Generator::run (request, &cancelGenerationFlag, onProgress);
     generating = false;
+    const bool isChange = request.kind == vibesynth::GenerationKind::Change;  // M11
 
     if (res.cancelled || generationPending.load())
     {
         // Superseded by a newer prompt (which reports itself), or cancelled.
         if (! generationPending.load())
-            postGenerationStatus (StatusKind::Info, "Generation cancelled");
+            postGenerationStatus (StatusKind::Info, isChange ? "Change cancelled" : "Generation cancelled");
         return;
     }
     if (! res.ok)
     {
         const juce::String reason (res.reason);
-        postGenerationStatus (StatusKind::Error, "Generation failed: " + reason,
+        postGenerationStatus (StatusKind::Error, (isChange ? "Change failed: " : "Generation failed: ") + reason,
                               reason + "\n\nThe current patch is still playing.");
         return;
     }
@@ -479,6 +486,16 @@ void VibeSynthAudioProcessor::runGeneration (const vibesynth::GenerationRequest&
         note << "\n" << juce::String (res.reason);
     if (historyError.isNotEmpty())
         note << "\nNot saved to the history: " << historyError;
+    if (isChange)
+    {
+        // M11: an edit keeps the user's macro positions; say what it dropped.
+        job.keepMacros = true;
+        job.verb = "Changed " + juce::String (request.node) + ":";
+        if (! res.lostNodes.empty())
+            note << "\nNo longer in the patch: " << juce::String (res.lostNodes);
+        for (const auto& l : res.labelChanges)
+            note << "\nMacro relabelled: " << juce::String (l);
+    }
     job.detail = note;
     postJob (std::move (job));
 }
@@ -676,7 +693,10 @@ void VibeSynthAudioProcessor::processJob (const LoadJob& job)
     LoadResult r;
     r.ok = true;
     r.patch = patch;
-    r.setMacros = ! isRestore;
+    r.setMacros = ! isRestore && ! job.keepMacros && ! job.hasMacroValues;
+    r.pushUndo = job.pushUndo && ! isRestore;      // M11
+    r.hasMacroValues = job.hasMacroValues;
+    r.macroValues = job.macroValues;
     r.generation = job.generation;
     r.sourceKey = restoreError.isNotEmpty() ? juce::String ("builtin:0") : job.sourceKey;
     r.hasNodes = hasNodes;
@@ -691,7 +711,8 @@ void VibeSynthAudioProcessor::processJob (const LoadJob& job)
     else if (isGenerated)
     {
         r.kind = StatusKind::Success;
-        r.message = "Generated '" + juce::String (patch.name) + "'" + dot + "trim " + formatDb (patch.trim);
+        r.message = (job.verb.isNotEmpty() ? job.verb : juce::String ("Generated")) + " '" + juce::String (patch.name)
+                  + "'" + dot + "trim " + formatDb (patch.trim);
         r.detail = job.detail;
     }
     else
@@ -739,6 +760,8 @@ void VibeSynthAudioProcessor::handleAsyncUpdate()
         genStatus = generationStatus;
         generationStatusPending = false;
     }
+    applyMutateEvents(); // M11: audition strip progress and results
+
     if (genStatusChanged)
     {
         if (genStatus.kind == StatusKind::Busy)
@@ -781,6 +804,8 @@ void VibeSynthAudioProcessor::handleAsyncUpdate()
             }
             continue;
         }
+        if (r.pushUndo)
+            pushUndoForSwap(); // M11: before uiPatch, the macros and the source change
         uiPatch = r.patch;
         ++patchVersion;
         if (r.sourceKey.isNotEmpty())
@@ -800,6 +825,11 @@ void VibeSynthAudioProcessor::handleAsyncUpdate()
             for (int i = 0; i < numMacros; ++i)
                 if (auto* param = apvts.getParameter ("macro" + juce::String (i + 1)))
                     param->setValueNotifyingHost ((float) r.patch.macroDefault (i));
+        // M11: Undo and discard restore the exact values they captured.
+        if (r.hasMacroValues && r.generation == generation.load())
+            for (int i = 0; i < numMacros; ++i)
+                if (auto* param = apvts.getParameter ("macro" + juce::String (i + 1)))
+                    param->setValueNotifyingHost (r.macroValues[(size_t) i]);
     }
     if (anyLoad)
     {

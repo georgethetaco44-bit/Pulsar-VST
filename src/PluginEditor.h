@@ -6,6 +6,8 @@
 #include <optional>
 
 #include "PluginProcessor.h"
+#include "ui/AuditionStrip.h"
+#include "ui/ChangeNodePopup.h"
 #include "ui/CodeView.h"
 #include "ui/MacroPanel.h"
 #include "ui/NodeView.h"
@@ -52,6 +54,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
+    void mouseDown (const juce::MouseEvent&) override;  // M11: right-click on a node
 
     // Snapshot tool hooks.
     VibeSynthAudioProcessor& getProcessor() noexcept { return processor; }
@@ -67,6 +70,11 @@ public:
     void closeSettings() { settings.close(); }
     vibesynth::ui::NodeView& nodeView() noexcept { return nodes; }
     void tickMeters();          // one meter frame now
+    // M11 snapshot hooks: a faked audition strip (nullopt: the real one),
+    // and the change popup opened on a node with some text.
+    void setMutateOverride (std::optional<vibesynth::MutateView> view);
+    void openChangePopup (const juce::String& nodeId, const juce::String& text = {});
+    void closeChangePopup() { changePopup.close(); }
 
     static constexpr int numPages = 3;
 
@@ -94,6 +102,8 @@ private:
     vibesynth::ui::OutputMeter meter;
     vibesynth::ui::GearButton gear;
     vibesynth::ui::ErrorDetail errorDetail;
+    vibesynth::ui::AuditionStrip strip;        // M11
+    vibesynth::ui::ChangeNodePopup changePopup; // M11
     vibesynth::ui::SettingsPanel settings;
     juce::TooltipWindow tooltips { this, 600 };
 
@@ -106,6 +116,7 @@ private:
     vibesynth::ui::HeaderState shownHeader;
     std::optional<vibesynth::ui::HeaderState> headerOverride;
     std::optional<bool> keyOverride;
+    std::optional<vibesynth::MutateView> mutateOverride;  // M11
     int ticks = 0;
 
     std::unique_ptr<vibesynth::ui::SnapshotDriver> snapshot;

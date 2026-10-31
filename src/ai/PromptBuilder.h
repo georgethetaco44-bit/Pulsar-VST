@@ -45,12 +45,26 @@ struct PromptExample
     std::string reply;                 // the SPEC §6.2 response
 };
 
+// M11 (SPEC §9.7): one Mutate direction (edit/edit_directions.md).
+struct MutateDirection
+{
+    std::string key;    // "darker"
+    std::string label;  // "Darker" (the audition slot's caption)
+    std::string text;   // what the model is told
+};
+
 struct PromptResources
 {
     std::string systemPrompt;
     std::string apiReference;
     std::vector<PromptRecipe> recipes;   // in file-name order
     std::vector<PromptExample> examples; // in file-name order
+    // M11: edit/edit_change.md and edit/edit_mutate.md (their "# Title"
+    // line dropped; {node}, {instruction}, {direction} filled in by
+    // buildEdit), and the 4 Mutate directions in file order.
+    std::string changeInstructions;
+    std::string mutateInstructions;
+    std::vector<MutateDirection> mutateDirections;
 
     // The embedded files (parsed once, then shared).
     static const PromptResources& embedded();
@@ -65,6 +79,19 @@ struct RetryContext
 {
     std::string previousReply;  // the model's last output, verbatim
     std::string reason;         // "compile error in voice: ..." / "too heavy: ..."
+};
+
+// M11 (SPEC §9.7): an edit of an existing patch. Change: `node` (a
+// describeNodeForPrompt line) + `instruction`; Mutate: `direction` (a
+// MutateDirection's text). `patchText` is formatPatchAsReply(active patch).
+struct EditPrompt
+{
+    enum class Kind { Change, Mutate };
+    Kind kind = Kind::Change;
+    std::string patchText;
+    std::string node;
+    std::string instruction;
+    std::string direction;
 };
 
 struct BuiltPrompt
@@ -86,6 +113,15 @@ public:
 
     // `retry` null for the first attempt.
     BuiltPrompt build (const std::string& userPrompt, const RetryContext* retry = nullptr) const;
+
+    // M11: the same system message as build() (so the service can reuse
+    // its prefix), no few-shot pairs (the current patch shows the format),
+    // then one user message: up to kMaxEditRecipes recipes picked by
+    // keyword from the instruction or direction (at least one), "The
+    // current patch:" + the patch, and the change or mutate block. A retry
+    // appends the reply and reason exactly like build().
+    static constexpr int kMaxEditRecipes = 2;
+    BuiltPrompt buildEdit (const EditPrompt& edit, const RetryContext* retry = nullptr) const;
 
     // Keyword choices on their own (deterministic for a given prompt).
     std::vector<int> chooseRecipes (const std::string& userPrompt) const;

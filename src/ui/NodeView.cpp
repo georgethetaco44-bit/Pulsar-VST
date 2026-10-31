@@ -4,6 +4,8 @@
 
 #include <cmath>
 
+#include "ai/NodeId.h"
+
 namespace vibesynth::ui {
 
 namespace {
@@ -128,6 +130,19 @@ std::vector<std::string> NodeView::placementProblems() const
                                     + NodeGraphLayout::label (layout.nodes[j]));
     }
     return problems;
+}
+
+bool NodeView::nodeAt (juce::Point<float> pos, std::string& id, juce::Rectangle<float>& pill) const
+{
+    for (size_t i = 0; i < boxes.size() && i < layout.nodes.size(); ++i)
+        if (boxes[i].contains (pos))
+        {
+            const auto& n = layout.nodes[i];
+            id = nodeIdString ({ n.master, n.module, n.slot });  // M11
+            pill = boxes[i];
+            return true;
+        }
+    return false;
 }
 
 void NodeView::resized()

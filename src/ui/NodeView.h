@@ -50,6 +50,9 @@ public:
     // all is well. pillFont() is the label size in use.
     std::vector<std::string> placementProblems() const;
     float pillFont() const noexcept { return pillFontSize; }
+    // M11: the node under `pos` (its id for "Change this node", e.g.
+    // "flt_lp:0" or "master/bus_sat#1", and its pill); false if none.
+    bool nodeAt (juce::Point<float> pos, std::string& id, juce::Rectangle<float>& pill) const;
 
 private:
     void place();

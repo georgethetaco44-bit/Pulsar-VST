@@ -7,6 +7,10 @@
 // reason is in the tooltip and opens below on click. With no API key the
 // prompt row is an inline card instead ("Add your Meta API key to generate
 // sounds" and an [Add key] button that opens Settings on the key field).
+//
+// M11 (SPEC §9.7): Mutate next to Generate (4 variations of the active
+// patch into the audition strip; needs a key, disabled while one runs) and
+// Undo under the buttons (back to what played before the last swap).
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -28,11 +32,15 @@ struct HeaderState
     juce::String detail;         // full error text (tooltip + expanded view)
     juce::String stage;          // generating: "Waiting for model"
     int seconds = 0;             // generating: elapsed
+    bool canMutate = false;      // M11: a key and no Mutate running
+    bool mutating = false;       // M11: Mutate requests in flight
+    bool canUndo = false;        // M11: the undo stack (or the strip) has something
 
     bool operator== (const HeaderState& o) const
     {
         return generating == o.generating && canGenerate == o.canGenerate && kind == o.kind && text == o.text
-            && detail == o.detail && stage == o.stage && seconds == o.seconds;
+            && detail == o.detail && stage == o.stage && seconds == o.seconds && canMutate == o.canMutate
+            && mutating == o.mutating && canUndo == o.canUndo;
     }
     bool operator!= (const HeaderState& o) const { return ! (*this == o); }
 };
@@ -77,9 +85,13 @@ public:
     std::function<void()> onCancel;
     std::function<void()> onToggleDetail;
     std::function<void()> onAddKey;
+    std::function<void()> onMutate;   // M11
+    std::function<void()> onUndo;     // M11
 
     PromptEditor prompt;
     juce::TextButton actionButton;
+    juce::TextButton mutateButton { "Mutate" };
+    juce::TextButton undoButton { "Undo" };
     juce::TextButton addKeyButton { "Add key" };
     StatusLine status;
 

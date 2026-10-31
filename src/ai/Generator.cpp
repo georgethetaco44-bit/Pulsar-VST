@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "ai/MetaClient.h"
+#include "ai/NodeId.h"
 #include "ai/PromptBuilder.h"
 #include "ai/ResponseParser.h"
 #include "patch/PatchValidator.h"
@@ -34,6 +35,27 @@ const char* stageOf (PatchStatus s) noexcept
         case PatchStatus::TooSlow:      break;
     }
     return "test";
+}
+
+bool isBlank (const std::string& s)
+{
+    return s.find_first_not_of (" \t\r\n") == std::string::npos;
+}
+
+// M11: what an accepted edit dropped or relabelled (report only).
+void describeEdit (const Patch& base, const TouchedNodes& baseNodes, GenerationResult& res)
+{
+    res.lostNodes = lostNodes (baseNodes, res.touched);
+    res.labelChanges.clear();
+    for (int i = 0; i < Patch::kMaxMacros; ++i)
+    {
+        const std::string before = i < (int) base.macros.size() ? base.macros[(size_t) i].label : std::string();
+        const std::string after = i < (int) res.patch.macros.size() ? res.patch.macros[(size_t) i].label
+                                                                    : std::string();
+        if (before != after)
+            res.labelChanges.push_back ("m" + std::to_string (i + 1) + " " + (before.empty() ? "(none)" : before)
+                                        + " -> " + (after.empty() ? "(none)" : after));
+    }
 }
 
 } // namespace
@@ -122,6 +144,56 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
     };
 
     const PromptBuilder builder;
+    const bool isEdit = request.kind != GenerationKind::Generate;
+    const bool isMutate = request.kind == GenerationKind::Mutate;
+    // M11 edits: the prompt pieces, the base's nodes, and what the result
+    // is labelled with.
+    EditPrompt edit;
+    TouchedNodes baseNodes = request.baseNodes;
+    std::string resultPrompt = request.prompt;
+    if (isEdit)
+    {
+        edit.kind = isMutate ? EditPrompt::Kind::Mutate : EditPrompt::Kind::Change;
+        edit.patchText = formatPatchAsReply (request.base);
+        edit.instruction = request.instruction;
+        edit.direction = request.direction.text;
+        if (! request.baseNodesKnown)
+            baseNodes = probeTouchedNodes (request.base, request.sampleRate, cancel);
+        if (cancelled())
+        {
+            res.cancelled = true;
+            res.reason = "cancelled";
+            return finish (res);
+        }
+        if (! isMutate)
+        {
+            NodeRef node;
+            std::string error;
+            if (! parseNodeId (request.node, node, error))
+            {
+                res.reason = error;
+                return finish (res);
+            }
+            if (! nodeIsTouched (baseNodes, node))
+            {
+                res.reason = "node " + nodeIdString (node) + " isn't in this patch";
+                return finish (res);
+            }
+            if (isBlank (request.instruction))
+            {
+                res.reason = "say what to change";
+                return finish (res);
+            }
+            edit.node = describeNodeForPrompt (node);
+        }
+        if (resultPrompt.empty())
+        {
+            resultPrompt = request.base.prompt;
+            const std::string what = isMutate ? "mutate: " + request.direction.label
+                                              : "change " + request.node + ": " + request.instruction;
+            resultPrompt += (resultPrompt.empty() ? "" : "\n") + what;
+        }
+    }
     RetryContext retry;
     bool haveRetry = false;
     bool weightHintUsed = false;
@@ -139,11 +211,14 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
             return finish (res);
         }
         progress (GenerationStage::Building, n);
-        const BuiltPrompt bp = builder.build (request.prompt, haveRetry ? &retry : nullptr);
+        const BuiltPrompt bp = isEdit ? builder.buildEdit (edit, haveRetry ? &retry : nullptr)
+                                      : builder.build (request.prompt, haveRetry ? &retry : nullptr);
         ChatRequest cr;
         cr.endpoint = request.config.endpoint;
-        cr.model = n == 0 ? request.config.generateModel : request.config.retryModel;
-        cr.temperature = n == 0 ? request.config.generateTemperature : request.config.retryTemperature;
+        cr.model = n > 0 ? request.config.retryModel
+                 : isMutate ? request.config.mutateModel : request.config.generateModel;
+        cr.temperature = n > 0 ? request.config.retryTemperature
+                       : isMutate ? request.config.mutateTemperature : request.config.generateTemperature;
         cr.reasoningEffort = request.config.reasoningEffort;
         cr.messages = bp.messages;
 
@@ -197,8 +272,12 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
         }
 
         Patch patch = pr.patch;
-        patch.prompt = request.prompt;
+        patch.prompt = resultPrompt;
         progress (GenerationStage::Testing, n);
+        // Parallel runs take turns here (the CPU measurement must be alone).
+        std::unique_lock<std::mutex> gate;
+        if (request.validationGate != nullptr)
+            gate = std::unique_lock<std::mutex> (*request.validationGate);
         const ValidationResult vr = validatePatch (patch, request.sampleRate, cancel);
         if (vr.cancelled)
         {
@@ -220,6 +299,8 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
         patch.trim = vr.trim;
         const double voiceNs = request.measureVoice ? request.measureVoice (patch)
                                                     : measureVoiceNs (patch, request.sampleRate);
+        if (gate.owns_lock())
+            gate.unlock();
         a.voiceNs = voiceNs;
         const double budget = patch.voiceBudgetNs();
 
@@ -250,6 +331,8 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
         res.voiceBudgetNs = budget;
         res.touched = vr.touched;
         res.reason.clear();
+        if (isEdit)
+            describeEdit (request.base, baseNodes, res);
         return finish (res);
     }
 
@@ -262,6 +345,8 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
         res.voiceBudgetNs = heavy.voiceBudgetNs();
         res.touched = heavyTouched;
         res.reason = "kept the heavier version (the lighter retry failed: " + res.reason + ")";
+        if (isEdit)
+            describeEdit (request.base, baseNodes, res);
     }
     return finish (res);
 }

@@ -22,19 +22,40 @@
 
 #include <atomic>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
 #include "ai/AiSettings.h"
 #include "ai/MetaClient.h"
+#include "ai/PromptBuilder.h"
 #include "engine/NodeMeters.h"
 #include "patch/Patch.h"
 
 namespace vibesynth {
 
+// M11 (SPEC §9.7): Generate writes a new patch from `prompt`; Change and
+// Mutate edit `base` and run the same parse -> lint -> compile -> test ->
+// self-heal path. Change sends the node id and the instruction (the node
+// must be one `base` really touches, else nothing is sent); Mutate sends a
+// direction and uses the mutate model and temperature. `prompt` may be
+// left empty for an edit: the result's prompt is then the base prompt plus
+// a line saying what was changed.
+enum class GenerationKind { Generate, Change, Mutate };
+
 struct GenerationRequest
 {
+    GenerationKind kind = GenerationKind::Generate;
     std::string prompt;
+    Patch base;                     // Change, Mutate: the active patch (trim set)
+    TouchedNodes baseNodes;         // its node list, if known (else probed here)
+    bool baseNodesKnown = false;
+    std::string node;               // Change: "flt_lp:0", "master/bus_sat#1", "fx_sat #1"
+    std::string instruction;        // Change: what to do
+    MutateDirection direction;      // Mutate
+    // Parallel runs (Mutate) share one gate so only one offline test runs
+    // at a time: concurrent tests skew the CPU measurement (SPEC §7.1).
+    std::mutex* validationGate = nullptr;
     AiConfig config;
     std::string apiKey;           // held in memory only
     double sampleRate = 48000.0;  // the validator's rate
@@ -96,6 +117,10 @@ struct GenerationResult
     double voiceBudgetNs = 0.0;
     double seconds = 0.0;
     TouchedNodes touched;       // ok: the offline test's node list (M9, SPEC §9.6)
+    // M11 edits, when ok: base nodes the new patch no longer has ("" = all
+    // kept), and base macro labels it changed ("m2 Cutoff -> Wobble").
+    std::string lostNodes;
+    std::vector<std::string> labelChanges;
 
     int promptTokens() const noexcept;
     int completionTokens() const noexcept;
