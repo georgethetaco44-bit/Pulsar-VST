@@ -126,7 +126,7 @@ struct SvfState
     float process (float in, double cutoffIn, double resIn, const FilterRate& fr, int tap) noexcept
     {
         cut = smoothTowards (cut, clamp01 (cutoffIn), fr.smooth);
-        if (resIn != rawRes)
+        if (! sameBitsD (resIn, rawRes))
         {
             rawRes = resIn;
             const double r = clamp01 (resIn);
@@ -134,7 +134,7 @@ struct SvfState
             kTarget = kk > kSvfMinDamping ? kk : kSvfMinDamping;
         }
         k = smoothTowards (k, kTarget, fr.smooth);
-        if (cut != cacheCut || k != cacheK)
+        if (! sameBitsD (cut, cacheCut) || ! sameBitsD (k, cacheK))
         {
             cacheCut = cut;
             cacheK = k;
@@ -174,13 +174,13 @@ struct LadderState
     float process (float in, double cutoffIn, double resIn, const FilterRate& fr) noexcept
     {
         cut = smoothTowards (cut, clamp01 (cutoffIn), fr.smooth);
-        if (resIn != rawRes)
+        if (! sameBitsD (resIn, rawRes))
         {
             rawRes = resIn;
             kTarget = kLadderMaxFeedback * clamp01 (resIn);
         }
         k = smoothTowards (k, kTarget, fr.smooth);
-        if (cut != cacheCut || k != cacheK)
+        if (! sameBitsD (cut, cacheCut) || ! sameBitsD (k, cacheK))
         {
             cacheCut = cut;
             cacheK = k;

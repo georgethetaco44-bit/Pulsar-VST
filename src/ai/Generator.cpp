@@ -23,11 +23,47 @@ const char* stageOf (PatchStatus s) noexcept
         case PatchStatus::NestedLoops:
         case PatchStatus::CompileError:
         case PatchStatus::TooLarge:     return "compile";
-        default:                        return "test";
+        case PatchStatus::Ok:
+        case PatchStatus::BadJson:
+        case PatchStatus::BadField:
+        case PatchStatus::MissingVoice:
+        case PatchStatus::NonFinite:
+        case PatchStatus::TooLoud:
+        case PatchStatus::DcOffset:
+        case PatchStatus::Silent:
+        case PatchStatus::TooSlow:      break;
     }
+    return "test";
 }
 
 } // namespace
+
+ChatReply testApiKey (const AiConfig& config, const std::string& apiKey, const std::atomic<bool>* cancel)
+{
+    ChatRequest request;
+    request.endpoint = config.endpoint;
+    request.model = config.generateModel;
+    request.temperature = config.retryTemperature;
+    request.maxTokens = 16;
+    request.reasoningEffort = config.reasoningEffort;
+    request.messages = { { "user", "Reply with: ok" } };
+    return MetaClient::send (request, apiKey, cancel);
+}
+
+bool keyTestPassed (const ChatReply& reply) noexcept
+{
+    // finishReason is only set once a choice was parsed, so a 200 that is
+    // not the chat-completions JSON (a captive portal, a wrong endpoint)
+    // still fails.
+    return reply.ok() || (reply.error == ChatError::BadReply && reply.httpStatus == 200 && ! reply.finishReason.empty());
+}
+
+std::string keyTestMessage (const ChatReply& reply)
+{
+    if (reply.error == ChatError::Auth)
+        return "Key rejected (HTTP " + std::to_string (reply.httpStatus) + "). Check that it was copied in full.";
+    return keyTestPassed (reply) ? "Key works" : reply.message;
+}
 
 std::string describeProgress (const GenerationProgress& p)
 {

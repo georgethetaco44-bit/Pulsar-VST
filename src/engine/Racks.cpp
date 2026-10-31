@@ -22,6 +22,17 @@ void VoiceRack::recordMeter (ModuleId module, int slot, float out) noexcept
         touched[m].fetch_or (bit, std::memory_order_relaxed);
 }
 
+void VoiceRack::recordStateless (ModuleId module, float out) noexcept
+{
+    const int m = static_cast<int> (module);
+    if (m < 0 || m >= kNumModules)
+        return;
+    const int n = statelessCalls[m];
+    if (n < kMaxSlotsPerModule - 1)
+        statelessCalls[m] = static_cast<uint8_t> (n + 1);
+    recordMeter (module, n, out);
+}
+
 // One-time setup (off the audio thread): sample rate, oscillator
 // waveforms, buffers, precomputed coefficients and per-voice seeds. All
 // module state is then cleared by reset().
@@ -164,6 +175,7 @@ void VoiceRack::reset() noexcept
             meters[m][s].store (0.0f, std::memory_order_relaxed);
         touched[m].store (0u, std::memory_order_relaxed);
     }
+    beginSample();
 }
 
 } // namespace vibesynth

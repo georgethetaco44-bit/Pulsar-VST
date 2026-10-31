@@ -355,7 +355,10 @@ void EelVoice::noteOn (double freq, double note, double vel,
     if (gate_ != nullptr) *gate_ = 1.0;
     if (trig_ != nullptr) *trig_ = 1.0;
     if (initCode_ != nullptr)
+    {
+        rackStorage_.beginSample();
         NSEEL_code_execute (initCode_);
+    }
     if (trig_ != nullptr) *trig_ = 1.0; // even if init wrote it
     if (gate_ != nullptr) *gate_ = 1.0;
 }
@@ -396,6 +399,7 @@ float EelVoice::renderSample (double freq, double gate, double note, double vel,
     for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
         if (macro_[i] != nullptr)
             *macro_[i] = macros[i];
+    rackStorage_.beginSample(); // stateless shapers meter by call index (M9)
     NSEEL_code_execute (voiceCode_);
     if (trig_ != nullptr) *trig_ = 0.0;
     return rawOutput (*out_);
@@ -510,6 +514,7 @@ void EelMaster::renderSample (float inL, float inR, float& outL, float& outR,
             *macro_[i] = macros[i];
     if (outl_ != nullptr) *outl_ = inL;
     if (outr_ != nullptr) *outr_ = inR;
+    voiceRackStorage_.beginSample();
     NSEEL_code_execute (masterCode_);
     outL = rawOutput (*outl_);
     outR = (outr_ != nullptr) ? rawOutput (*outr_) : outL;

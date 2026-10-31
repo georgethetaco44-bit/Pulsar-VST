@@ -49,19 +49,6 @@ juce::String section (const juce::String& doc, const juce::String& heading)
     return end >= 0 ? from.substring (0, end) : from;
 }
 
-// Bit i set when the code reads m<i+1> (comments and strings skipped).
-unsigned macrosRead (const std::string& codeIn)
-{
-    const std::string code = blankCommentsAndStrings (codeIn);
-    auto ident = [] (char c) { return std::isalnum ((unsigned char) c) || c == '_' || c == '.'; };
-    unsigned used = 0;
-    for (size_t i = 0; i + 1 < code.size(); ++i)
-        if ((code[i] == 'm' || code[i] == 'M') && (i == 0 || ! ident (code[i - 1]))
-            && code[i + 1] >= '1' && code[i + 1] <= '8' && (i + 2 >= code.size() || ! ident (code[i + 2])))
-            used |= 1u << (code[i + 1] - '1');
-    return used;
-}
-
 bool lintHas (const LintResult& r, const char* needle)
 {
     return r.message().find (needle) != std::string::npos;

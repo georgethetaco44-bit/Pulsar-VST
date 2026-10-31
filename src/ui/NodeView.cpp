@@ -10,7 +10,10 @@ namespace {
 constexpr float kFloorDb = -48.0f;
 constexpr double kDecaySeconds = 0.150;   // visual decay time constant
 constexpr float kVisible = 0.01f;         // below this a node draws no glow
-constexpr float kMaxPillW = 132.0f;
+constexpr float kPillPad = 7.0f;       // label to pill edge
+constexpr float kPillGap = 12.0f;      // least space between columns (the arrows)
+constexpr float kMaxPillFont = 11.0f;  // labels step down from here to fit
+constexpr float kMinPillFont = 8.0f;
 constexpr float kPillH = 26.0f;
 
 std::vector<std::pair<std::string, std::string>> parseEdges (const std::string& graphJson)
@@ -50,7 +53,9 @@ float meterLevel (float peak) noexcept
 NodeView::NodeView()
 {
     setTooltip ("Nodes: the module slots the patch's code really runs (found by the offline test). "
-                "They glow with their live level. Lines: the model's own description of the signal flow.");
+                "They glow with their live level. Shapers without a slot are numbered by call order "
+                "(fx_sat #1 is the second fx_sat in a sample). Lines: the model's own description of the "
+                "signal flow.");
     setInterceptsMouseClicks (true, false);
 }
 
@@ -95,6 +100,36 @@ void NodeView::tick (NodeMeterBank& bank, double nowMs)
     glowing = any;
 }
 
+std::vector<std::string> NodeView::placementProblems() const
+{
+    std::vector<std::string> problems;
+    const auto f = Theme::mono (pillFontSize);
+    const auto bounds = getLocalBounds().toFloat();
+    for (size_t i = 0; i < boxes.size(); ++i)
+    {
+        const juce::String name (NodeGraphLayout::label (layout.nodes[i]));
+        const float need = juce::GlyphArrangement::getStringWidth (f, name);
+        if (boxes[i].getWidth() - 6.0f < need)
+            problems.push_back (name.toStdString() + " is cut off");
+        if (! bounds.contains (boxes[i]))
+            problems.push_back (name.toStdString() + " is outside the view");
+        else
+        {
+            // Inside its region, below the VOICE / MASTER label.
+            auto region = (layout.nodes[i].master ? masterArea : voiceArea).toFloat();
+            region.setTop ((float) graphArea.getY() + (float) Theme::grid * 3.0f);
+            region.setBottom ((float) graphArea.getBottom());
+            if (! region.expanded (1.0f).contains (boxes[i]))
+                problems.push_back (name.toStdString() + " leaves its region");
+        }
+        for (size_t j = i + 1; j < boxes.size(); ++j)
+            if (boxes[i].intersects (boxes[j]))
+                problems.push_back (name.toStdString() + " overlaps "
+                                    + NodeGraphLayout::label (layout.nodes[j]));
+    }
+    return problems;
+}
+
 void NodeView::resized()
 {
     using namespace Theme;
@@ -115,13 +150,57 @@ void NodeView::place()
     int voiceCount = 0, masterCount = 0;
     for (const auto& n : layout.nodes)
         (n.master ? masterCount : voiceCount)++;
+
+    // Pills are as wide as their label. The font steps down from 11 pt
+    // only when the two regions can't hold the full names.
+    const float total = (float) (graphArea.getWidth() - grid * 2);
+    float needs[2] = {};
+    std::vector<float> widths (layout.nodes.size(), 0.0f);
+    std::vector<std::vector<float>> colW[2];
+    auto measure = [&] (float size)
+    {
+        const auto f = mono (size);
+        for (size_t i = 0; i < layout.nodes.size(); ++i)
+            widths[i] = juce::GlyphArrangement::getStringWidth (f, juce::String (NodeGraphLayout::label (layout.nodes[i])))
+                      + kPillPad * 2.0f;
+        for (int region = 0; region < 2; ++region)
+        {
+            std::vector<float> layerW ((size_t) juce::jmax (0, layout.layers[region]), 0.0f);
+            float widest = 0.0f;
+            for (size_t i = 0; i < layout.nodes.size(); ++i)
+            {
+                const auto& n = layout.nodes[i];
+                if ((n.master ? 1 : 0) != region)
+                    continue;
+                widest = juce::jmax (widest, widths[i]);
+                if (! n.loose && n.layer < (int) layerW.size())
+                    layerW[(size_t) n.layer] = juce::jmax (layerW[(size_t) n.layer], widths[i]);
+            }
+            float layered = 0.0f;
+            for (const float w : layerW)
+                layered += w;
+            layered += kPillGap * (float) juce::jmax (0, (int) layerW.size() - 1);
+            needs[region] = juce::jmax (layered, widest);
+            colW[region] = { layerW };
+        }
+    };
+    pillFontSize = kMaxPillFont;
+    measure (pillFontSize);
+    while (needs[0] + needs[1] > total && pillFontSize > kMinPillFont)
+    {
+        pillFontSize -= 0.5f;
+        measure (pillFontSize);
+    }
+
     const float vw = (float) juce::jmax (1, layout.layers[0]);
     const float mw = (float) juce::jmax (1, layout.layers[1]);
     float share = masterCount == 0 ? 0.76f : juce::jlimit (0.42f, 0.78f, vw / (vw + mw));
     if (voiceCount == 0)
         share = 0.3f;
+    float voiceW = total * share;
+    voiceW = juce::jmax (needs[0], juce::jmin (voiceW, total - needs[1]));
     auto area = graphArea;
-    voiceArea = area.removeFromLeft (juce::roundToInt ((float) area.getWidth() * share));
+    voiceArea = area.removeFromLeft (juce::roundToInt (voiceW));
     dividerX = (float) voiceArea.getRight() + (float) grid;
     area.removeFromLeft (grid * 2);
     masterArea = area;
@@ -130,53 +209,86 @@ void NodeView::place()
     {
         auto r = (region == 0 ? voiceArea : masterArea);
         r.removeFromTop (grid * 3);  // region label
-        const int looseCount = layout.loose[region];
         const int numLayers = layout.layers[region];
         const int numRows = layout.rows[region];
 
-        // Loose nodes: rows of pills at the bottom, wrapping as needed.
-        const float looseW = juce::jmin (kMaxPillW, (float) r.getWidth());
-        const int perRow = juce::jmax (1, (int) ((r.getWidth() + grid) / (int) (looseW * 0.8f + grid)));
-        const int looseRows = looseCount > 0 ? (looseCount + perRow - 1) / perRow : 0;
+        // Loose nodes: rows of pills at the bottom, wrapped by width.
+        std::vector<std::vector<size_t>> looseRows;
+        {
+            float used = 0.0f;
+            for (size_t i = 0; i < layout.nodes.size(); ++i)
+            {
+                const auto& n = layout.nodes[i];
+                if ((n.master ? 1 : 0) != region || ! n.loose)
+                    continue;
+                if (looseRows.empty() || used + (float) grid + widths[i] > (float) r.getWidth())
+                {
+                    looseRows.emplace_back();
+                    used = -(float) grid;
+                }
+                looseRows.back().push_back (i);
+                used += (float) grid + widths[i];
+            }
+        }
+        const int numLooseRows = (int) looseRows.size();
+        // Rows are kPillH + 8 apart, closer (and the pills lower) when that
+        // wouldn't fit: a master with many bus_sat calls stacks up.
+        const int looseAvail = numLayers > 0 ? r.getHeight() / 2 : r.getHeight();
+        int pitch = (int) kPillH + grid;
+        if (numLooseRows > 0 && (numLooseRows - 1) * pitch + (int) kPillH > looseAvail)
+            pitch = juce::jmax (18, (looseAvail - (int) kPillH) / juce::jmax (1, numLooseRows - 1));
+        const float loosePillH = juce::jmin (kPillH, (float) pitch - 4.0f);
         // Below the layered nodes, or centred when there are none.
-        const int looseH = looseRows * (int) (kPillH + grid) - (looseRows > 0 ? grid : 0);
+        const int looseH = numLooseRows > 0 ? (numLooseRows - 1) * pitch + (int) loosePillH : 0;
         auto looseArea = numLayers > 0 ? r.removeFromBottom (looseH) : r.withSizeKeepingCentre (r.getWidth(), looseH);
-        if (looseRows > 0 && numLayers > 0)
+        if (numLooseRows > 0 && numLayers > 0)
             r.removeFromBottom (grid);
 
-        const float colW = numLayers > 0 ? (float) r.getWidth() / (float) numLayers : 0.0f;
+        for (int row = 0; row < numLooseRows; ++row)
+        {
+            float rowW = (float) grid * (float) ((int) looseRows[(size_t) row].size() - 1);
+            for (const size_t i : looseRows[(size_t) row])
+                rowW += widths[i];
+            float x = (float) looseArea.getX() + ((float) looseArea.getWidth() - rowW) * 0.5f;
+            for (const size_t i : looseRows[(size_t) row])
+            {
+                boxes[i] = { x, (float) looseArea.getY() + (float) (row * pitch), widths[i], loosePillH };
+                x += widths[i] + (float) grid;
+            }
+        }
+
+        // Layered nodes: a column per layer as wide as its widest pill, the
+        // spare width shared out as gaps (a single layer is centred).
+        const auto& layerW = colW[region].empty() ? std::vector<float>() : colW[region][0];
+        float layerSum = 0.0f;
+        for (const float w : layerW)
+            layerSum += w;
+        const float gap = numLayers > 1 ? juce::jmax (kPillGap, ((float) r.getWidth() - layerSum) / (float) (numLayers - 1))
+                                        : 0.0f;
+        std::vector<float> colX ((size_t) juce::jmax (0, numLayers), 0.0f);
+        float x = numLayers > 1 ? (float) r.getX() : (float) r.getCentreX() - (layerSum * 0.5f);
+        for (int l = 0; l < numLayers; ++l)
+        {
+            colX[(size_t) l] = x;
+            x += layerW[(size_t) l] + gap;
+        }
         const float rowH = numRows > 0 ? (float) r.getHeight() / (float) numRows : 0.0f;
-        const float pillW = juce::jmin (kMaxPillW, colW - (float) grid * 2.0f);
         const float pillH = juce::jmin (kPillH, rowH - (float) grid);
 
-        int looseIndex = 0;
         for (size_t i = 0; i < layout.nodes.size(); ++i)
         {
             const auto& n = layout.nodes[i];
-            if ((n.master ? 1 : 0) != region)
+            if ((n.master ? 1 : 0) != region || n.loose)
                 continue;
-            if (n.loose)
-            {
-                const int row = looseIndex / perRow, col = looseIndex % perRow;
-                const int inRow = juce::jmin (perRow, looseCount - row * perRow);
-                const float w = juce::jmin (kMaxPillW, ((float) looseArea.getWidth() - (float) grid * (float) (inRow - 1))
-                                                           / (float) inRow);
-                const float totalW = w * (float) inRow + (float) grid * (float) (inRow - 1);
-                const float x0 = (float) looseArea.getX() + ((float) looseArea.getWidth() - totalW) * 0.5f;
-                boxes[i] = { x0 + (float) col * (w + (float) grid),
-                             (float) looseArea.getY() + (float) row * (kPillH + (float) grid), w, kPillH };
-                ++looseIndex;
-                continue;
-            }
             // Centre the layer's rows vertically.
             int inLayer = 0;
             for (const auto& o : layout.nodes)
                 if (o.master == n.master && ! o.loose && o.layer == n.layer)
                     ++inLayer;
             const float layerTop = (float) r.getY() + ((float) numRows - (float) inLayer) * rowH * 0.5f;
-            const float cx = (float) r.getX() + colW * ((float) n.layer + 0.5f);
+            const float cx = colX[(size_t) n.layer] + layerW[(size_t) n.layer] * 0.5f;
             const float cy = layerTop + rowH * ((float) n.row + 0.5f);
-            boxes[i] = juce::Rectangle<float> (pillW, pillH).withCentre ({ cx, cy });
+            boxes[i] = juce::Rectangle<float> (widths[i], pillH).withCentre ({ cx, cy });
         }
     }
 }
@@ -275,7 +387,7 @@ void NodeView::paint (juce::Graphics& g)
     }
 
     // Nodes, with their glow.
-    const auto labelFont = mono (11.0f);
+    const auto labelFont = mono (pillFontSize);
     for (size_t i = 0; i < layout.nodes.size(); ++i)
     {
         const auto& box = boxes[i];
@@ -297,7 +409,7 @@ void NodeView::paint (juce::Graphics& g)
         g.drawRoundedRectangle (box.reduced (0.5f), box.getHeight() * 0.5f, level > 0.0f ? 1.5f : hairline);
         g.setColour (text.withAlpha (0.78f + 0.22f * level));
         g.setFont (labelFont);
-        g.drawFittedText (juce::String (NodeGraphLayout::label (layout.nodes[i])), box.toNearestInt().reduced (6, 0),
+        g.drawFittedText (juce::String (NodeGraphLayout::label (layout.nodes[i])), box.toNearestInt().reduced (3, 0),
                           juce::Justification::centred, 1, 0.8f);
     }
 }
@@ -305,8 +417,15 @@ void NodeView::paint (juce::Graphics& g)
 //==============================================================================
 OutputMeter::OutputMeter()
 {
-    setTooltip ("Output level, left and right (-48 to 0 dBFS; amber above -0.5 dBFS)");
+    setTooltip ("Output peak, left and right (-48 to 0 dBFS). The bright mark holds the recent peak; "
+                "amber at -0.5 dBFS and above.");
 }
+
+namespace {
+constexpr float kHotPeak = 0.944f;       // -0.5 dBFS
+constexpr double kHoldMs = 1500.0;       // peak-hold time before the mark falls
+constexpr float kTickDb[] = { -36.0f, -24.0f, -12.0f, -6.0f };
+} // namespace
 
 void OutputMeter::tick (float peakL, float peakR, double nowMs)
 {
@@ -316,12 +435,33 @@ void OutputMeter::tick (float peakL, float peakR, double nowMs)
     const float in[2] = { peakL, peakR };
     for (int c = 0; c < 2; ++c)
     {
-        float level = juce::jmax (meterLevel (in[c]), levels[c] * decay);
+        const float fresh = meterLevel (in[c]);
+        float level = juce::jmax (fresh, levels[c] * decay);
         if (level < kVisible)
             level = 0.0f;
         changed = changed || std::abs (level - levels[c]) > 1.0e-4f;
         levels[c] = level;
-        peaks[c] = juce::jmax (in[c], peaks[c] * decay);
+
+        // Peak hold: raised at once, kept for kHoldMs, then falls with the
+        // same decay as the bar.
+        float hold = holds[c];
+        if (fresh > 0.0f && fresh >= hold)
+        {
+            hold = fresh;
+            holdSetMs[c] = nowMs;
+            hot[c] = in[c] > kHotPeak;
+        }
+        else if (nowMs - holdSetMs[c] > kHoldMs)
+        {
+            hold *= decay;
+            if (hold < kVisible)
+            {
+                hold = 0.0f;
+                hot[c] = false;
+            }
+        }
+        changed = changed || std::abs (hold - holds[c]) > 1.0e-4f;
+        holds[c] = hold;
     }
     if (changed)
         repaint();
@@ -330,22 +470,47 @@ void OutputMeter::tick (float peakL, float peakR, double nowMs)
 void OutputMeter::paint (juce::Graphics& g)
 {
     using namespace Theme;
-    auto r = getLocalBounds().toFloat();
-    const float barH = 4.0f;
-    const float gap = 4.0f;
-    float y = r.getCentreY() - barH - gap * 0.5f;
+    const auto frame = getLocalBounds().toFloat();
+    g.setColour (background);
+    g.fillRoundedRectangle (frame, 4.0f);
+    g.setColour (border.brighter (0.25f));
+    g.drawRoundedRectangle (frame.reduced (0.5f), 4.0f, hairline);
+
+    auto inner = frame.reduced (5.0f, 4.0f);
+    auto captions = inner.removeFromLeft (10.0f);
+    inner.removeFromLeft (3.0f);
+    const float barH = (inner.getHeight() - 2.0f) * 0.5f;
+    const juce::Rectangle<float> tracks[2] = { inner.withHeight (barH),
+                                               inner.withTrimmedTop (barH + 2.0f).withHeight (barH) };
+
+    g.setFont (font (9.0f, Weight::SemiBold));
     for (int c = 0; c < 2; ++c)
     {
-        const auto track = juce::Rectangle<float> (r.getX(), y, r.getWidth(), barH);
+        const auto& track = tracks[c];
+        g.setColour (dimText);
+        g.drawText (c == 0 ? "L" : "R", captions.withY (track.getY() - 1.0f).withHeight (barH + 2.0f),
+                    juce::Justification::centred);
+
+        // A dim full-length track (the -inf side of the scale), then the level.
         g.setColour (border);
-        g.fillRoundedRectangle (track, 2.0f);
+        g.fillRoundedRectangle (track, 1.5f);
         if (levels[c] > 0.0f)
         {
-            const bool hot = peaks[c] > 0.944f; // -0.5 dBFS
-            g.setColour (hot ? warning : accent);
-            g.fillRoundedRectangle (track.withWidth (track.getWidth() * levels[c]), 2.0f);
+            g.setColour (hot[c] && levels[c] > 0.9f ? warning : accent);
+            g.fillRoundedRectangle (track.withWidth (track.getWidth() * levels[c]), 1.5f);
         }
-        y += barH + gap;
+        // Scale: ticks at -36/-24/-12/-6 dBFS; 0 dBFS is the right end.
+        g.setColour (background.withAlpha (0.7f));
+        for (const float db : kTickDb)
+            g.fillRect (track.getX() + track.getWidth() * (db - kFloorDb) / -kFloorDb - 0.5f, track.getY(), 1.0f,
+                        track.getHeight());
+        // The held peak.
+        if (holds[c] > 0.0f)
+        {
+            g.setColour (hot[c] ? warning : text);
+            g.fillRect (track.getX() + juce::jmax (0.0f, track.getWidth() * holds[c] - 2.0f), track.getY() - 0.5f, 2.0f,
+                        track.getHeight() + 1.0f);
+        }
     }
 }
 

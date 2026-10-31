@@ -30,9 +30,13 @@ namespace vibesynth {
 // as `module` (util_xover_lo/hi share "util_xover"). Empty for Count.
 const char* moduleShortName (ModuleId module) noexcept;
 
+// fx_fold, fx_sat, util_bytebeat, bus_sat: no slot argument; their "slot"
+// is the call index within a sample (VoiceRack::recordStateless).
+bool isStatelessModule (ModuleId module) noexcept;
+
 // The module a graph-edge name refers to: "flt_lp", and also the aliases
 // "util_xover_lo"/"util_xover_hi" and the "_r" companions of bus_*.
-// Case-insensitive. False for names that don't meter (fx_fold, noise, ...).
+// Case-insensitive. False for names that don't meter (noise, out, ...).
 bool moduleFromName (const std::string& name, ModuleId& module) noexcept;
 
 struct TouchedNodes

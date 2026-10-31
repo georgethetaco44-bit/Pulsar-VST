@@ -188,6 +188,22 @@ public:
     // The settings (read from disk on first use, never in the constructor).
     vibesynth::AiSettings& aiSettings();
 
+    // M9 onboarding: the settings panel's "Test key" (message thread). One
+    // tiny request on a helper thread (never in a constructor or
+    // prepareToPlay); the result arrives through ChangeBroadcaster. A newer
+    // test or clearKeyTest() makes an older reply stale.
+    struct KeyTest
+    {
+        enum class State { Idle, Running, Ok, Failed };
+        State state = State::Idle;
+        juce::String text;   // "Key works" or the mapped error
+        bool operator== (const KeyTest& o) const { return state == o.state && text == o.text; }
+        bool operator!= (const KeyTest& o) const { return ! (*this == o); }
+    };
+    void testApiKey (const std::string& key, const vibesynth::AiConfig& config);
+    void clearKeyTest();
+    const KeyTest& getKeyTest() const noexcept { return keyTest; }
+
     //==============================================================================
     static constexpr int numMacros = vibesynth::MacroSmoother::kNumMacros;
     static constexpr const char* voiceModeParamId = "voiceMode";  // M7
@@ -287,6 +303,23 @@ private:
     private:
         VibeSynthAudioProcessor& owner;
     };
+    // One test at a time; started by testApiKey(), joined by the next test
+    // or the destructor.
+    class KeyTestThread final : public juce::Thread
+    {
+    public:
+        KeyTestThread (VibeSynthAudioProcessor& p, std::string k, vibesynth::AiConfig c, int testId)
+            : juce::Thread ("Pulsar key test"), owner (p), key (std::move (k)), config (std::move (c)), id (testId) {}
+        void run() override;
+        std::atomic<bool> cancel { false };
+
+    private:
+        VibeSynthAudioProcessor& owner;
+        std::string key;
+        vibesynth::AiConfig config;
+        int id;
+    };
+    void postKeyTest (int id, const KeyTest& result);
     void runGeneration (const vibesynth::GenerationRequest& request);
     void postGenerationStatus (StatusKind kind, const juce::String& text, const juce::String& detail = {});
     void probeActivePatch();  // load worker, when idle and probeRequested
@@ -356,6 +389,15 @@ private:
     std::atomic<bool> generationPending { false };
     std::atomic<bool> generating { false };
     std::atomic<bool> cancelGenerationFlag { false };
+
+    // Key test: the running thread (message thread), the posted result
+    // (under resultMutex) and what the UI shows (message thread).
+    std::unique_ptr<KeyTestThread> keyTestThread;
+    int keyTestId = 0;
+    bool keyTestPosted = false;
+    int postedKeyTestId = 0;
+    KeyTest postedKeyTest;
+    KeyTest keyTest;
 
     // What is (or is about to be) playing: saved by getStateInformation.
     mutable std::mutex patchMutex;

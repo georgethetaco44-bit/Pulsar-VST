@@ -81,6 +81,11 @@ VibeSynthAudioProcessor::~VibeSynthAudioProcessor()
     // within about a second, a validation after its current sample), then
     // the load worker it posts to, then free everything they or the audio
     // thread owned.
+    if (keyTestThread != nullptr)
+    {
+        keyTestThread->cancel = true;
+        keyTestThread->stopThread (10000);
+    }
     cancelGenerationFlag = true;
     generationWorker.signalThreadShouldExit();
     generationWorker.notify();
@@ -320,6 +325,55 @@ void VibeSynthAudioProcessor::generate (const juce::String& prompt)
     generationStartMs = juce::Time::getMillisecondCounterHiRes();
     generationStage = "Starting";
     setStatus ("Generating: starting", StatusKind::Busy);
+}
+
+void VibeSynthAudioProcessor::testApiKey (const std::string& key, const vibesynth::AiConfig& config)
+{
+    if (keyTestThread != nullptr)
+    {
+        keyTestThread->cancel = true;   // the request polls this every 100 ms
+        keyTestThread->stopThread (5000);
+        keyTestThread.reset();
+    }
+    const int id = ++keyTestId;
+    if (juce::String (key).trim().isEmpty())
+    {
+        keyTest = { KeyTest::State::Failed, "Enter a key first (or set VIBESYNTH_API_KEY)" };
+        sendChangeMessage();
+        return;
+    }
+    keyTest = { KeyTest::State::Running, "Testing the key..." };
+    keyTestThread = std::make_unique<KeyTestThread> (*this, key, config, id);
+    keyTestThread->startThread();
+    sendChangeMessage();
+}
+
+void VibeSynthAudioProcessor::clearKeyTest()
+{
+    ++keyTestId;   // a reply still on its way is stale
+    keyTest = {};
+}
+
+// Key test thread: one request, then the result goes to the message thread.
+void VibeSynthAudioProcessor::KeyTestThread::run()
+{
+    const auto reply = vibesynth::testApiKey (config, key, &cancel);
+    if (cancel.load() || reply.error == vibesynth::ChatError::Cancelled)
+        return;
+    const bool ok = vibesynth::keyTestPassed (reply);
+    owner.postKeyTest (id, { ok ? KeyTest::State::Ok : KeyTest::State::Failed,
+                             juce::String (vibesynth::keyTestMessage (reply)) });
+}
+
+void VibeSynthAudioProcessor::postKeyTest (int id, const KeyTest& result)
+{
+    {
+        std::lock_guard<std::mutex> lock (resultMutex);
+        postedKeyTest = result;
+        postedKeyTestId = id;
+        keyTestPosted = true;
+    }
+    triggerAsyncUpdate();
 }
 
 void VibeSynthAudioProcessor::cancelGeneration()
@@ -668,9 +722,19 @@ void VibeSynthAudioProcessor::handleAsyncUpdate()
     std::vector<LoadResult> done;
     Status genStatus;
     bool genStatusChanged = false;
+    bool keyTestChanged = false;
     {
         std::lock_guard<std::mutex> lock (resultMutex);
         done.swap (results);
+        if (keyTestPosted)
+        {
+            keyTestPosted = false;
+            if (postedKeyTestId == keyTestId)
+            {
+                keyTest = postedKeyTest;
+                keyTestChanged = true;
+            }
+        }
         genStatusChanged = generationStatusPending;
         genStatus = generationStatus;
         generationStatusPending = false;
@@ -746,7 +810,7 @@ void VibeSynthAudioProcessor::handleAsyncUpdate()
         updateHostDisplay (details);
         sendChangeMessage();
     }
-    else if (genStatusChanged)
+    else if (genStatusChanged || keyTestChanged)
     {
         sendChangeMessage();
     }

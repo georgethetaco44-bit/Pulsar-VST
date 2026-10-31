@@ -101,6 +101,20 @@ struct GenerationResult
     int completionTokens() const noexcept;
 };
 
+// Settings "Test key" (M9): one tiny request with the generate model, so a
+// bad key, endpoint or model ID shows up before the first generation. Blocks
+// like Generator::run (worker thread or CLI); `cancel` is polled the same way.
+ChatReply testApiKey (const AiConfig& config, const std::string& apiKey, const std::atomic<bool>* cancel);
+
+// The key works: the service answered, or answered with a well-formed 200
+// whose message is empty (a reasoning model spending the 16-token limit
+// thinking still proves the key, endpoint and model). Everything else keeps
+// its mapped message.
+bool keyTestPassed (const ChatReply& reply) noexcept;
+// What Settings shows under the key field. Like the reply's message, but a
+// rejected key doesn't send the user to Settings (they are in it).
+std::string keyTestMessage (const ChatReply& reply);
+
 class Generator
 {
 public:

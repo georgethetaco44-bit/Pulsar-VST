@@ -31,6 +31,16 @@ SettingsPanel::SettingsPanel (VibeSynthAudioProcessor& p) : processor (p)
     }
     setButtonStyle (saveButton, ButtonStyle::Primary);
     setButtonStyle (closeButton, ButtonStyle::Ghost);
+    setButtonStyle (testButton, ButtonStyle::Ghost);
+    testButton.setTooltip ("Send one tiny request to check the key, endpoint and model");
+    testButton.onClick = [this] { testKey(); };
+    addAndMakeVisible (testButton);
+    keyEditor.onTextChange = [this]
+    {
+        // The result belonged to the old text.
+        processor.clearKeyTest();
+        setKeyTest (processor.getKeyTest());
+    };
     saveButton.setTooltip ("Save the settings file");
     closeButton.setTooltip ("Close without saving (Esc)");
     saveButton.onClick = [this] { save(); };
@@ -44,6 +54,8 @@ void SettingsPanel::open()
 {
     auto& s = processor.aiSettings();
     const auto& c = s.config();
+    processor.clearKeyTest();
+    setKeyTest (processor.getKeyTest());
     keyEditor.setText (juce::String (s.savedKey()), false);
     endpointEditor.setText (juce::String (c.endpoint), false);
     generateEditor.setText (juce::String (c.generateModel), false);
@@ -54,6 +66,41 @@ void SettingsPanel::open()
     setVisible (true);
     toFront (true);
     keyEditor.grabKeyboardFocus();
+}
+
+void SettingsPanel::showForSnapshot (const juce::String& fakeKey, const VibeSynthAudioProcessor::KeyTest& result)
+{
+    open();
+    keyEditor.setText (fakeKey, false);
+    setKeyTest (result);
+}
+
+void SettingsPanel::setKeyTest (const VibeSynthAudioProcessor::KeyTest& result)
+{
+    if (result == keyTest)
+        return;
+    keyTest = result;
+    testButton.setEnabled (keyTest.state != VibeSynthAudioProcessor::KeyTest::State::Running);
+    repaint (keyResultArea.expanded (0, Theme::grid));
+}
+
+void SettingsPanel::testKey()
+{
+    // The typed key, else the environment's; the typed endpoint and model.
+    auto typed = keyEditor.getText().trim().toStdString();
+    if (typed.empty() && processor.aiSettings().keyFromEnvironment())
+        typed = processor.aiSettings().apiKey();
+    auto c = processor.aiSettings().config();
+    const vibesynth::AiConfig defaults;
+    auto field = [] (const juce::TextEditor& e, const std::string& fallback)
+    {
+        const auto t = e.getText().trim();
+        return t.isEmpty() ? fallback : t.toStdString();
+    };
+    c.endpoint = field (endpointEditor, defaults.endpoint);
+    c.generateModel = field (generateEditor, defaults.generateModel);
+    processor.testApiKey (typed, c);
+    setKeyTest (processor.getKeyTest());
 }
 
 void SettingsPanel::close()
@@ -115,6 +162,18 @@ void SettingsPanel::paint (juce::Graphics& g)
     for (int i = 0; i < 5; ++i)
         g.drawText (kLabels[i], fieldLabels[i], juce::Justification::centredLeft);
 
+    using State = VibeSynthAudioProcessor::KeyTest::State;
+    if (keyTest.state != State::Idle)
+    {
+        const auto ink = keyTest.state == State::Ok ? accent : keyTest.state == State::Failed ? warning : dimText;
+        auto line = keyResultArea;
+        g.setColour (ink);
+        g.fillEllipse ((float) line.getX() + 1.0f, (float) line.getCentreY() - 3.0f, 6.0f, 6.0f);
+        g.setFont (font (smallSize, Weight::Medium));
+        g.drawFittedText (keyTest.text, line.withTrimmedLeft (grid * 2), juce::Justification::centredLeft, 1, 1.0f);
+    }
+
+    g.setColour (dimText);
     g.setFont (font (captionSize));
     g.drawFittedText (envNote, saveButton.getBounds().withLeft (card.getX() + grid * 3).withRight (closeButton.getX() - grid * 2),
                       juce::Justification::centredLeft, 2);
@@ -130,7 +189,18 @@ void SettingsPanel::resized()
     {
         auto row = r.removeFromTop (grid * 4);
         fieldLabels[i] = row.removeFromLeft (grid * 16);
+        if (i == 0)
+        {
+            testButton.setBounds (row.removeFromRight (grid * 11));
+            row.removeFromRight (grid);
+        }
         fields[i]->setBounds (row);
+        if (i == 0)
+        {
+            // The key test's result, under the key field.
+            keyResultArea = r.removeFromTop (grid * 3).withTrimmedLeft (grid * 16).withTrimmedTop (grid / 2);
+            continue;
+        }
         r.removeFromTop (grid);
     }
     auto buttons = r.removeFromBottom (grid * 4);

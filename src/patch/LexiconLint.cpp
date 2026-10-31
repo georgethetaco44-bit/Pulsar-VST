@@ -3,6 +3,7 @@
 #include "patch/LexiconLint.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <map>
 #include <set>
@@ -467,6 +468,23 @@ int numAllowedBuiltins() noexcept
 const EelBuiltin& allowedBuiltin (int index) noexcept
 {
     return kBuiltins[index >= 0 && index < kNumBuiltins ? index : 0];
+}
+
+unsigned macrosRead (const std::string& codeIn)
+{
+    const std::string code = blankCommentsAndStrings (codeIn);
+    auto ident = [] (char c) { return std::isalnum ((unsigned char) c) || c == '_' || c == '.'; };
+    unsigned used = 0;
+    for (size_t i = 0; i + 1 < code.size(); ++i)
+        if ((code[i] == 'm' || code[i] == 'M') && (i == 0 || ! ident (code[i - 1]))
+            && code[i + 1] >= '1' && code[i + 1] <= '8' && (i + 2 >= code.size() || ! ident (code[i + 2])))
+            used |= 1u << (code[i + 1] - '1');
+    return used;
+}
+
+unsigned macrosRead (const Patch& patch)
+{
+    return macrosRead (patch.init) | macrosRead (patch.voice) | macrosRead (patch.master);
 }
 
 } // namespace vibesynth

@@ -8,7 +8,6 @@ namespace vibesynth::ui {
 
 namespace {
 const juce::String kDot = juce::String::fromUTF8 (" \xc2\xb7 ");
-const juce::String kNoKey = "Add an API key in Settings to generate (or set VIBESYNTH_API_KEY).";
 } // namespace
 
 //==============================================================================
@@ -112,6 +111,15 @@ PromptPanel::PromptPanel()
     actionButton.onClick = [this] { actionClicked(); };
     addAndMakeVisible (actionButton);
 
+    setButtonStyle (addKeyButton, ButtonStyle::Primary);
+    addKeyButton.setTooltip ("Open Settings on the API key field");
+    addKeyButton.onClick = [this]
+    {
+        if (onAddKey)
+            onAddKey();
+    };
+    addChildComponent (addKeyButton);
+
     status.onToggleDetail = [this]
     {
         if (onToggleDetail)
@@ -149,13 +157,15 @@ void PromptPanel::setState (const HeaderState& s)
         setButtonStyle (actionButton, ButtonStyle::Primary);
         actionButton.setButtonText ("Generate");
         actionButton.setEnabled (s.canGenerate);
-        actionButton.setTooltip (s.canGenerate ? "Write, test and load a patch for the prompt (Enter)" : kNoKey);
+        actionButton.setTooltip ("Write, test and load a patch for the prompt (Enter)");
     }
-    prompt.setTextToShowWhenEmpty (s.canGenerate ? "Describe a sound, e.g. weeping neuro reese with a throat that "
-                                                   "closes on the mod wheel"
-                                                 : kNoKey,
-                                   Theme::dimText);
-    prompt.repaint();
+    // No key: an inline card replaces the prompt and the button (the typed
+    // prompt is kept and comes back once a key is saved).
+    const bool card = needsKey();
+    prompt.setVisible (! card);
+    actionButton.setVisible (! card);
+    addKeyButton.setVisible (card);
+    repaint (keyCardArea);
     status.setState (s);
 }
 
@@ -173,6 +183,33 @@ void PromptPanel::paint (juce::Graphics& g)
     g.setColour (text);
     g.setFont (font (19.0f, Weight::SemiBold).withExtraKerningFactor (0.22f));
     g.drawText ("PULSAR", wordmarkArea.withTrimmedLeft (grid * 4).withHeight (64), juce::Justification::centredLeft);
+    if (needsKey())
+    {
+        // The onboarding card: a key glyph, what to do and why it is safe.
+        const auto card = keyCardArea.toFloat();
+        g.setColour (panel);
+        g.fillRoundedRectangle (card, radius);
+        g.setColour (accent.withAlpha (0.45f));
+        g.drawRoundedRectangle (card.reduced (0.5f), radius, hairline);
+
+        const float kx = card.getX() + (float) grid * 3.5f;
+        const float ky = card.getCentreY();
+        g.setColour (accent);
+        g.drawEllipse (kx - 9.0f, ky - 5.0f, 10.0f, 10.0f, 1.75f);   // bow
+        g.drawLine (kx + 1.0f, ky, kx + 12.0f, ky, 1.75f);           // shaft
+        g.drawLine (kx + 8.0f, ky, kx + 8.0f, ky + 4.0f, 1.75f);     // teeth
+        g.drawLine (kx + 12.0f, ky, kx + 12.0f, ky + 4.0f, 1.75f);
+
+        auto words = keyCardArea.withTrimmedLeft (grid * 7).withTrimmedRight (grid * 16).reduced (0, grid);
+        g.setColour (text);
+        g.setFont (font (15.0f, Weight::SemiBold));
+        g.drawFittedText ("Add your Meta API key to generate sounds", words.removeFromTop (grid * 3),
+                          juce::Justification::centredLeft, 1, 1.0f);
+        g.setColour (dimText);
+        g.setFont (font (smallSize));
+        g.drawFittedText ("It stays on this computer. The built-in presets play without one.", words,
+                          juce::Justification::centredLeft, 1, 1.0f);
+    }
 }
 
 void PromptPanel::resized()
@@ -182,6 +219,9 @@ void PromptPanel::resized()
     wordmarkArea = r.removeFromLeft (grid * 18);
     r.removeFromLeft (grid);
     auto top = r.removeFromTop (grid * 8);
+    keyCardArea = top;
+    addKeyButton.setBounds (juce::Rectangle<int> (grid * 12, grid * 5)
+                                .withCentre ({ top.getRight() - grid * 2 - grid * 6, top.getCentreY() }));
     actionButton.setBounds (top.removeFromRight (grid * 16));
     top.removeFromRight (grid * 2);
     prompt.setBounds (top);

@@ -23,6 +23,13 @@ inline bool isFiniteBitsD (double v) noexcept
     return ((bits >> 52) & 0x7FFu) != 0x7FFu;
 }
 
+// Bitwise equality for cache keys (no -Wfloat-equal). Differs from == only
+// for NaN and +-0, which the callers' clamped inputs make harmless.
+inline bool sameBitsD (double a, double b) noexcept
+{
+    return std::memcmp (&a, &b, sizeof (double)) == 0;
+}
+
 inline float sanitizeFloat (float v) noexcept
 {
     uint32_t bits = 0;
