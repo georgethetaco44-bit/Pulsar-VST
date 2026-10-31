@@ -30,6 +30,8 @@ inline bool sameBitsD (double a, double b) noexcept
     return std::memcmp (&a, &b, sizeof (double)) == 0;
 }
 
+constexpr double kHalfPi = 1.57079632679489661923;
+
 inline float sanitizeFloat (float v) noexcept
 {
     uint32_t bits = 0;
@@ -38,6 +40,30 @@ inline float sanitizeFloat (float v) noexcept
     if (((bits >> 23) & 0xFFu) == 0xFFu)
         return 0.0f;
     return v;
+}
+
+inline double sanitizeFloat (double v) noexcept
+{
+    return isFiniteBitsD (v) ? v : 0.0;
+}
+
+inline double clampSafe (double v, double limit = 4.0) noexcept
+{
+    if (! isFiniteBitsD (v))
+        return 0.0;
+    if (v > limit)
+        return limit;
+    if (v < -limit)
+        return -limit;
+    return v;
+}
+
+inline double clampPitch (double hz, double sampleRate) noexcept
+{
+    if (! isFiniteBitsD (hz) || hz < 0.1)
+        return 0.1;
+    const double hi = 0.45 * (sampleRate > 0.0 ? sampleRate : 48000.0);
+    return hz > hi ? hi : hz;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +147,8 @@ inline double fastSin (double x) noexcept
     const double y = kTwoPi * t;
     const double y2 = y * y;
     return y * (1.0 + y2 * (-1.0 / 6.0 + y2 * (1.0 / 120.0
-                + y2 * (-1.0 / 5040.0 + y2 * (1.0 / 362880.0)))));
+                + y2 * (-1.0 / 5040.0 + y2 * (1.0 / 362880.0
+                - y2 * (1.0 / 39916800.0))))));
 }
 
 } // namespace vibesynth (part 1: finite/clamp/map helpers)

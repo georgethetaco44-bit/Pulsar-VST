@@ -111,7 +111,7 @@ constexpr double kLadderMaxFeedback = 4.2; // self-oscillation from res ~0.952
 
 struct SvfState
 {
-    enum Tap { Low = 0, High = 1, Band = 2 };
+    enum Tap { Low = 0, High = 1, Band = 2, Notch = 3 };
 
     double ic1 = 0.0, ic2 = 0.0;   // integrator states
     double cut = -1.0;             // smoothed normalized cutoff (-1: unset)
@@ -149,7 +149,10 @@ struct SvfState
         const double v2 = ic2 + a2 * ic1 + a3 * v3;
         ic1 = 2.0 * v1 - ic1;
         ic2 = 2.0 * v2 - ic2;
-        const double out = tap == Low ? v2 : tap == Band ? v1 : v0 - k * v1 - v2;
+        const double out = tap == Low   ? v2
+                         : tap == Band  ? v1
+                         : tap == Notch ? clampSafe (v0 - k * v1)
+                                        : (v0 - k * v1 - v2);
         if (! isFiniteBitsD (out) || ! isFiniteBitsD (ic1) || ! isFiniteBitsD (ic2))
         {
             ic1 = ic2 = 0.0;

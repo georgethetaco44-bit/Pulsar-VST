@@ -32,17 +32,26 @@ const BenchCase kBenchCases[] = {
     { "osc_tri", "out = osc_tri(0, freq);", "outl = inl; outr = inr;", false },
     { "osc_square", "out = osc_square(0, freq, 0.3);", "outl = inl; outr = inr;", false },
     { "supersaw", "out = osc_supersaw(0, freq, 0.5, 0.6);", "outl = inl; outr = inr;", false },
+    { "osc_wt", "out = osc_wt(0, freq, 2, 0.4);", "outl = inl; outr = inr;", false },
+    { "osc_fm", "out = osc_fm(0, freq, 0.25, 0.5, 0.2);", "outl = inl; outr = inr;", false },
+    { "osc_sync", "out = osc_sync(0, freq, 0.3, 0.4);", "outl = inl; outr = inr;", false },
     { "noise", "out = noise();", "outl = inl; outr = inr;", false },
     { "flt_lp", "out = flt_lp(0, osc_saw(1, freq), 0.5, 0.3);", "outl = inl; outr = inr;", false },
     { "flt_hp", "out = flt_hp(0, osc_saw(1, freq), 0.5, 0.3);", "outl = inl; outr = inr;", false },
     { "flt_bp", "out = flt_bp(0, osc_saw(1, freq), 0.5, 0.3);", "outl = inl; outr = inr;", false },
+    { "flt_notch", "out = flt_notch(0, osc_saw(1, freq), 0.5, 0.3);", "outl = inl; outr = inr;", false },
+    { "flt_peak", "out = flt_peak(0, osc_saw(1, freq), 0.5, 0.75, 0.3);", "outl = inl; outr = inr;", false },
+    { "flt_formant", "out = flt_formant(0, osc_saw(1, freq), 0.35, 0.6);", "outl = inl; outr = inr;", false },
+    { "flt_tilt", "out = flt_tilt(0, osc_saw(1, freq), 0.75);", "outl = inl; outr = inr;", false },
     { "flt_ladder", "out = flt_ladder(0, osc_saw(1, freq), 0.5, 0.5);", "outl = inl; outr = inr;", false },
     { "flt_lp (swept)", "out = flt_lp(0, osc_saw(1, freq), 0.4 + 0.3 * osc_sine(2, 5), 0.3);", "outl = inl; outr = inr;", false },
     { "flt_ladder (swept)", "out = flt_ladder(0, osc_saw(1, freq), 0.4 + 0.3 * osc_sine(2, 5), 0.5);", "outl = inl; outr = inr;", false },
     { "env_adsr", "out = env_adsr(0, gate, 0.1, 0.3, 0.6, 0.3);", "outl = inl; outr = inr;", false },
     { "env_follow", "out = env_follow(0, osc_saw(1, freq));", "outl = inl; outr = inr;", false },
+    { "mod_lfo", "out = mod_lfo(0, 1.0, 0.25);", "outl = inl; outr = inr;", false },
     { "fx_fold", "out = fx_fold(osc_saw(0, freq), 0.5);", "outl = inl; outr = inr;", false },
     { "fx_sat", "out = fx_sat(osc_saw(0, freq), 0.5);", "outl = inl; outr = inr;", false },
+    { "fx_shape", "out = fx_shape(osc_saw(0, freq), 0.6, 0.2);", "outl = inl; outr = inr;", false },
     { "fx_crush", "out = fx_crush(0, osc_saw(1, freq), 0.5, 0.5);", "outl = inl; outr = inr;", false },
     { "fx_comb", "out = fx_comb(0, osc_saw(1, freq), 220.0, 0.5);", "outl = inl; outr = inr;", false },
     { "fx_ott", "out = fx_ott(0, osc_saw(1, freq) * 0.3, 0.8);", "outl = inl; outr = inr;", false },
@@ -405,6 +414,35 @@ int runBench (int oversampling)
     std::printf ("\n-- own filters per call at %.0f kHz (median of 9 interleaved with/without pairs) --\n",
                  voiceRate / 1000.0);
     for (const OwnCase& oc : own)
+    {
+        const double ns = ownCost (oc.ref, oc.test, voiceRate);
+        std::printf ("%-24s %8.1f ns per call (target <= %.0f)  [%s]\n", oc.name, ns, oc.target,
+                     ns <= oc.target ? "PASS" : "FAIL");
+    }
+
+    const OwnCase m12Own[] = {
+        { "osc_wt", "out = 0;", "out = osc_wt(0, freq, 2, 0.4);", kVoiceBudgetNs },
+        { "osc_fm", "out = 0;", "out = osc_fm(0, freq, 0.25, 0.5, 0.2);", kVoiceBudgetNs },
+        { "osc_sync", "out = 0;", "out = osc_sync(0, freq, 0.3, 0.4);", kVoiceBudgetNs },
+        { "mod_lfo", "out = 0;", "out = mod_lfo(0, 1.0, 0.25);", kVoiceBudgetNs },
+        { "flt_notch", "out = osc_saw(1, freq);",
+          "out = flt_notch(0, osc_saw(1, freq), 0.5, 0.3);", kSvfTargetNs },
+        { "flt_peak", "out = osc_saw(1, freq);",
+          "out = flt_peak(0, osc_saw(1, freq), 0.5, 0.75, 0.3);", 45.0 },
+        { "flt_formant", "out = osc_saw(1, freq);",
+          "out = flt_formant(0, osc_saw(1, freq), 0.35, 0.6);", 120.0 },
+        { "flt_tilt", "out = osc_saw(1, freq);",
+          "out = flt_tilt(0, osc_saw(1, freq), 0.75);", kSvfTargetNs },
+        { "fx_fold (ADAA)", "out = osc_saw(0, freq);",
+          "out = fx_fold(osc_saw(0, freq), 0.5);", 60.0 },
+        { "fx_sat (ADAA)", "out = osc_saw(0, freq);",
+          "out = fx_sat(osc_saw(0, freq), 0.5);", 60.0 },
+        { "fx_shape (ADAA)", "out = osc_saw(0, freq);",
+          "out = fx_shape(osc_saw(0, freq), 0.6, 0.2);", 60.0 },
+    };
+    std::printf ("\n-- M12 modules per call at %.0f kHz (median of 9 interleaved with/without pairs) --\n",
+                 voiceRate / 1000.0);
+    for (const OwnCase& oc : m12Own)
     {
         const double ns = ownCost (oc.ref, oc.test, voiceRate);
         std::printf ("%-24s %8.1f ns per call (target <= %.0f)  [%s]\n", oc.name, ns, oc.target,

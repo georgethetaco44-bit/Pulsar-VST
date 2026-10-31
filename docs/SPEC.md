@@ -990,8 +990,18 @@ Each milestone has an exit test. Don't start the next until it passes.
 12. **DSP expansion** (§5.3). Starts after M10 is merged (both touch the
     lexicon table). *Exit: tier 1 in, all tests and budgets pass, the batch
     pass rate holds.*
+    **Done (Oct 31, Tier 1 only):** all 9 functions shipped with table rows,
+    bounds tests and bench lines. ADAA cuts inharmonic content by 4.8 dB
+    (fx_fold), 7.2 dB (fx_sat) and 7.6 dB (fx_shape); trims moved ≤ 0.17 dB.
+    osc_fm snaps the ratio to an integer within ±0.12 (ratio ≥ 1). batch30:
+    26/30 first try, 30/30 with retries; 24/30 used a new function. ~4.4k
+    system+API tokens, ~6.0k prompt per request. Listening pack in
+    build/adaa_ab/. Tier 2 not started.
 13. **[Stretch] MOD strip** (§9.8). Cut first if behind (envelopes before
     LFOs).
+    **Built (Oct 31):** both LFOs and both envelopes shipped. The strip sits
+    under the macros. Merged with a CPU fix: the first build cost +275 ns per
+    voice-sample; the target is ≤ +60 ns.
 14. **Sound pass 2.** The user designs presets by hand with M10–M12; the best
     become the LLM examples (via `--bake`). *Exit: the user keeps ≥ 10 of 15.*
 15. **Release polish.** README with Gatekeeper instructions, tagged GitHub

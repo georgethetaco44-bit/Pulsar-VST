@@ -35,12 +35,12 @@ Reply with exactly these blocks, in this order, and no code anywhere else:
 7. No NaN or blow-ups: guard divisions (`/ max(d, 0.0001)`), keep sqrt/log/pow arguments positive, keep the voice output near ±1 at every macro setting, and make sure every macro setting still makes sound.
 
 ## Sound and mix
-- Basses: a clean sine sub (osc_sine at freq) plus a mid band that carries all the character. Build the mid band on its own: source -> drive/fold/comb/formants -> `flt_hp(slot, mid, 0.27, 0)` (about 130 Hz: clear low-mids) -> fx_ott -> fx_sat as a fixed ceiling. Add the sub last: `out = (sub * 0.5 + mid * 0.5) * env;`.
+- Basses: a clean sine sub (osc_sine at freq) plus a mid band that carries all the character. Build the mid band on its own: source (osc_wt, osc_fm, osc_sync, osc_supersaw) -> drive/fold/shape/comb/flt_formant/flt_notch -> `flt_hp(slot, mid, 0.27, 0)` (about 130 Hz: clear low-mids) -> fx_ott -> fx_sat as a fixed ceiling. Add the sub last: `out = (sub * 0.5 + mid * 0.5) * env;`.
 - The sub never modulates the mid band: nothing nonlinear (shaper, clip, comb, OTT) sees sub + mids together, and no gain is computed from the low band. Do mono basses in voice; in master, split with util_xover_lo/hi, process only the high band, add the low band back untouched.
 - fx_ott after the distortion, on the sustained sound, before the amp envelope. On decaying sounds (plucks, keys, reverb tails) depth 0.3 at most: it lifts noise and smear.
 - One strong idea, done well, beats many weak layers.
 - Notes end cleanly: the amp envelope is the last multiply in voice, release 0.3-0.4 (15-40 ms) for basses and leads; no reverb on basses.
-- Movement is tempo-synced with `beat` (1/4, 1/8, 1/16 notes).
+- Movement is tempo-synced with `mod_lfo(slot, beats, shape)` or `beat` (1/4, 1/8, 1/16 notes).
 - m1 is the hero and transforms the sound (clean to snarling, steady to chopped). Every macro is audible and musical across its whole range, ordered by importance; the defaults already sound good.
 - Keys, plucks, pads: no sub split.
 

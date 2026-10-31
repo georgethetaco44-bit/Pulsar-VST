@@ -65,6 +65,52 @@ EEL_F NSEEL_CGEN_CALL fnFltLadder (void* ctx, INT_PTR np, EEL_F** p)
     return static_cast<EEL_F> (out);
 }
 
+EEL_F NSEEL_CGEN_CALL fnFltFormant (void* ctx, INT_PTR np, EEL_F** p)
+{
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr || np < 4) return 0.0;
+    const int slot = clampSlot (argD (p, np, 0, 0.0), kNumFormantSlots);
+    const float out = sanitizeFloat (rack->fltFormant[slot].process (
+        sanitizeFloat (static_cast<float> (argD (p, np, 1, 0.0))),
+        argD (p, np, 2, 0.0), argD (p, np, 3, 0.0), rack->filterRate));
+    rack->recordMeter (ModuleId::FltFormant, slot, out);
+    return static_cast<EEL_F> (out);
+}
+
+EEL_F NSEEL_CGEN_CALL fnFltNotch (void* ctx, INT_PTR np, EEL_F** p)
+{
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr || np < 4) return 0.0;
+    return svfCore (rack, rack->fltNotch, ModuleId::FltNotch,
+                    argD (p, np, 0, 0.0), argD (p, np, 1, 0.0),
+                    argD (p, np, 2, 0.5), argD (p, np, 3, 0.0), SvfState::Notch);
+}
+
+EEL_F NSEEL_CGEN_CALL fnFltPeak (void* ctx, INT_PTR np, EEL_F** p)
+{
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr || np < 5) return 0.0;
+    const int slot = clampSlot (argD (p, np, 0, 0.0), kNumPeakSlots);
+    const float out = sanitizeFloat (rack->fltPeak[slot].process (
+        sanitizeFloat (static_cast<float> (argD (p, np, 1, 0.0))),
+        argD (p, np, 2, 0.5), argD (p, np, 3, 0.5), argD (p, np, 4, 0.0),
+        rack->filterRate));
+    rack->recordMeter (ModuleId::FltPeak, slot, out);
+    return static_cast<EEL_F> (out);
+}
+
+EEL_F NSEEL_CGEN_CALL fnFltTilt (void* ctx, INT_PTR np, EEL_F** p)
+{
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr || np < 3) return 0.0;
+    const int slot = clampSlot (argD (p, np, 0, 0.0), kNumTiltSlots);
+    const float out = sanitizeFloat (rack->fltTilt[slot].process (
+        sanitizeFloat (static_cast<float> (argD (p, np, 1, 0.0))),
+        argD (p, np, 2, 0.5), rack->filterRate));
+    rack->recordMeter (ModuleId::FltTilt, slot, out);
+    return static_cast<EEL_F> (out);
+}
+
 // ADSR: times and sustain are applied at control ticks and on every gate
 // edge (a new note always starts with its own times); each time is mapped
 // only when its raw input changed. The gate itself is read every sample.
@@ -118,6 +164,17 @@ EEL_F NSEEL_CGEN_CALL fnEnvFollow (void* ctx, INT_PTR np, EEL_F** p)
     const float out = sanitizeFloat (rack->envFollow[slot].process (
         sanitizeFloat (static_cast<float> (argD (p, np, 1, 0.0)))));
     rack->recordMeter (ModuleId::EnvFollow, slot, out);
+    return static_cast<EEL_F> (out);
+}
+
+EEL_F NSEEL_CGEN_CALL fnModLfo (void* ctx, INT_PTR np, EEL_F** p)
+{
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr || np < 3) return 0.0;
+    const int slot = clampSlot (argD (p, np, 0, 0.0), kNumModLfoSlots);
+    const float out = sanitizeFloat (static_cast<float> (rack->modLfo[slot].process (
+        rack->currentBeat, argD (p, np, 1, 1.0), argD (p, np, 2, 0.0))));
+    rack->recordMeter (ModuleId::ModLfo, slot, out);
     return static_cast<EEL_F> (out);
 }
 

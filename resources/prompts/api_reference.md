@@ -21,6 +21,9 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 - `osc_tri(slot, hz)` · 4 slots · both — triangle.
 - `osc_square(slot, hz, pw)` · 4 slots · both — pulse; pw 0-1 (0.5 = square).
 - `osc_supersaw(slot, hz, detune, mix)` · 2 slots · both — 7 saws; detune 0-1 (up to ±30 cents), mix 0-1 (centre saw to the 6 detuned ones) [90].
+- `osc_wt(slot, hz, table, pos)` · 2 slots · both — wavetable oscillator (`table` 0–7: basic, PWM, vocal, bell, sync, comb, fold, growl; `pos` 0–1 morphs) [25].
+- `osc_fm(slot, hz, ratio, index, feedback)` · 2 slots · both — 2-op FM oscillator (`ratio` 0–1 → 0.5–16, snaps to integers) [25].
+- `osc_sync(slot, hz, ratio, shape)` · 2 slots · both — hard-sync oscillator (`ratio` 0–1 → 1–16× slave, `shape` saw→square) [25].
 - `noise()` · no slot · both — white noise ±1.
 
 ### Filters (linear; cutoff 0-1 maps to 20 Hz-20 kHz: Hz = 20·1000^cutoff, so key tracking is cutoff = log(hz / 20) / log(1000))
@@ -28,14 +31,20 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 - `flt_hp(slot, in, cutoff, res)` · 3 slots · both — 12 dB highpass.
 - `flt_bp(slot, in, cutoff, res)` · 3 slots · both — bandpass.
 - `flt_ladder(slot, in, cutoff, res)` · 2 slots · both — 24 dB ladder with tanh in the loop; self-oscillates from res ≈ 0.95 [130].
+- `flt_formant(slot, in, vowel, res)` · 2 slots · both — 3-peak vowel filter (`vowel` 0–1 morphs a→e→i→o→u) [65].
+- `flt_notch(slot, in, cutoff, res)` · 3 slots · both — 2-pole band-reject (notch) filter.
+- `flt_peak(slot, in, cutoff, gain, res)` · 3 slots · both — parametric bell filter (`gain` 0–1 → −18…+18 dB, 0.5 = flat).
+- `flt_tilt(slot, in, tilt)` · 2 slots · both — spectral tilt filter (±6 dB around 1 kHz, 0.5 = flat).
 
-### Envelopes
+### Envelopes and modulators
 - `env_adsr(slot, gate, a, d, s, r)` · 3 slots · both — output 0-1; gate on when ≥ 0.5; a, d, r 0-1 map to 1 ms-10 s (0.25 = 10 ms, 0.5 = 100 ms, 0.75 = 1 s); s is a level 0-1.
 - `env_follow(slot, in)` · 2 slots · both — envelope of |in| (1 ms attack, 100 ms release).
+- `mod_lfo(slot, beats, shape)` · 3 slots · both — tempo-synced LFO (`beats` = period, `shape` 0–1: sine/tri/saw/square/S&H; output 0–1).
 
-### Shapers and effects
+### Shapers and effects (first-order ADAA on fx_fold, fx_sat, fx_shape)
 - `fx_fold(in, amount)` · no slot · both — sine wavefolder: sin(in · (1 + 8·amount)).
 - `fx_sat(in, drive)` · no slot · both — tanh saturation, drive 0-1 (gain 1-10), level-compensated.
+- `fx_shape(in, drive, type)` · no slot · both — multi-curve waveshaper (`type` 0–1 selects curve: hard clip, tube, half-rect, full-rect, Chebyshev-3, diode foldback).
 - `fx_crush(slot, in, bits, rate)` · 2 slots · both — bits 0-1 (0 clean, 1 ≈ 2 bits); rate 0-1 (1 full rate, 0 ≈ 1 kHz sample-and-hold).
 - `fx_comb(slot, in, hz, feedback)` · 2 slots · both — comb tuned to hz (min 10 Hz), feedback 0-0.95; rings at hz and its harmonics, louder with feedback.
 - `fx_ott(slot, in, depth)` · 2 slots · both — 3-band (120 Hz / 2.5 kHz) upward + downward compressor, depth 0-1 (0 = bypass). In master use slot 0 for L, 1 for R [85].

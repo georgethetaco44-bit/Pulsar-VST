@@ -290,6 +290,59 @@ void SnapshotDriver::runShots()
     editor.closeSettings();
 
     runM11Snapshots (editor, [this] (const juce::String& n) { shoot (n); }, [this] (double t) { playNote (t); });
+
+    // M12 inspector snapshots: osc_wt (table choice + pos), osc_fm, flt_formant.
+    {
+        const auto m12File = dir.getChildFile ("_m12_temp.pulsar");
+        vibesynth::Patch m12Patch;
+        m12Patch.name = "M12 Growl";
+        m12Patch.prompt = "wavetable and FM formant bass";
+        m12Patch.voiceMode = "mono";
+        m12Patch.trim = 0.75;
+        m12Patch.macros = {
+            { "Morph", 0.45 }, { "Growl", 0.5 }, { "FM", 0.4 }, { "Vowel", 0.35 },
+            { "Resonance", 0.6 }, { "Rate", 0.5 }, { "Space", 0.25 }, { "Drive", 0.35 }
+        };
+        m12Patch.init = "0;";
+        m12Patch.voice =
+            "lfo = mod_lfo(0, 1.0, 0.0);\n"
+            "wt = osc_wt(0, freq, 2, 0.2 + m1 * 0.5 + lfo * 0.2);\n"
+            "fm = osc_fm(0, freq, 0.25, 0.2 + m3 * 0.5, 0.15);\n"
+            "sig = fx_shape(wt * 0.6 + fm * 0.4, 0.2 + m2 * 0.4, 0.25);\n"
+            "sig = flt_formant(0, sig, 0.2 + m4 * 0.5 + lfo * 0.2, 0.3 + m5 * 0.5);\n"
+            "env = env_adsr(0, gate, 0.02, 0.3, 0.75, 0.2);\n"
+            "out = sig * env * vel * 0.4;";
+        m12Patch.master =
+            "d = 0.15 + m8 * 0.3;\n"
+            "outl = bus_sat(inl, d);\n"
+            "outr = bus_sat(inr, d);";
+        m12File.replaceWithText (vibesynth::serializePatch (m12Patch));
+        const int prevVer = proc.getPatchVersion();
+        proc.loadPatchFile (m12File);
+        for (int i = 0; i < 500 && (proc.getPatchVersion() == prevVer || ! proc.areNodesKnown()); ++i)
+        {
+            juce::Thread::sleep (10);
+            proc.deliverPendingResults();
+        }
+        m12File.deleteFile();
+        program.reset();
+        player.reset();
+        noteStarted = false;
+        proc.setNodeArg ("osc_wt:0", "table", vibesynth::ArgTweak::kReplace, 2.0);
+        editor.setKeyOverride (true);
+        playNote (0.4);
+        editor.openInspector (NodeRef { RackKind::Voice, ModuleId::OscWt, 0 });
+        playNote (0.2);
+        shoot ("inspector_osc_wt");
+        editor.openInspector (NodeRef { RackKind::Voice, ModuleId::OscFm, 0 });
+        playNote (0.2);
+        shoot ("inspector_osc_fm");
+        editor.openInspector (NodeRef { RackKind::Voice, ModuleId::FltFormant, 0 });
+        playNote (0.2);
+        shoot ("inspector_flt_formant");
+        editor.closeInspector();
+    }
+
     checkNodeViews();
 }
 

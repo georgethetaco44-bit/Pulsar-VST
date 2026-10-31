@@ -12,6 +12,7 @@ namespace {
 inline bool statelessModule (int m) noexcept
 {
     return m == static_cast<int> (ModuleId::FxFold) || m == static_cast<int> (ModuleId::FxSat)
+        || m == static_cast<int> (ModuleId::FxShape)
         || m == static_cast<int> (ModuleId::UtilBytebeat) || m == static_cast<int> (ModuleId::BusSat);
 }
 
@@ -90,7 +91,10 @@ EEL_F callHooked (const LexiconEntry& e, LexiconWrapperFn fn, void* ctx, INT_PTR
         // set don't change.
         const float metered = sanitizeFloat (static_cast<float> (result));
         if (stateless)
+        {
+            vr->skipAdaaSlot (static_cast<ModuleId> (m));
             vr->recordStateless (static_cast<ModuleId> (m), metered);
+        }
         else if (isMasterRackModule (m))
             rc->master->recordMeter (static_cast<ModuleId> (m), 0, metered);
         else

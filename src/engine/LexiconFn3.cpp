@@ -12,7 +12,7 @@ EEL_F NSEEL_CGEN_CALL fnFxFold (void* ctx, INT_PTR np, EEL_F** p)
     if (rack == nullptr || np < 2) return 0.0;
     const float out = foldSample (
         sanitizeFloat (static_cast<float> (argD (p, np, 0, 0.0))),
-        argD (p, np, 1, 0.0));
+        argD (p, np, 1, 0.0), rack->nextAdaaSlot (0));
     rack->recordStateless (ModuleId::FxFold, out);
     return static_cast<EEL_F> (out);
 }
@@ -23,8 +23,19 @@ EEL_F NSEEL_CGEN_CALL fnFxSat (void* ctx, INT_PTR np, EEL_F** p)
     if (rack == nullptr || np < 2) return 0.0;
     const float out = satSample (
         sanitizeFloat (static_cast<float> (argD (p, np, 0, 0.0))),
-        argD (p, np, 1, 0.0));
+        argD (p, np, 1, 0.0), rack->nextAdaaSlot (1));
     rack->recordStateless (ModuleId::FxSat, out);
+    return static_cast<EEL_F> (out);
+}
+
+EEL_F NSEEL_CGEN_CALL fnFxShape (void* ctx, INT_PTR np, EEL_F** p)
+{
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr || np < 3) return 0.0;
+    const float out = shapeSample (
+        sanitizeFloat (static_cast<float> (argD (p, np, 0, 0.0))),
+        argD (p, np, 1, 0.0), argD (p, np, 2, 0.0), rack->nextAdaaSlot (2));
+    rack->recordStateless (ModuleId::FxShape, out);
     return static_cast<EEL_F> (out);
 }
 

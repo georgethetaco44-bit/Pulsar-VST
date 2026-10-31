@@ -100,6 +100,45 @@ EEL_F NSEEL_CGEN_CALL fnOscSupersaw (void* ctx, INT_PTR np, EEL_F** p)
     return static_cast<EEL_F> (out);
 }
 
+EEL_F NSEEL_CGEN_CALL fnOscWt (void* ctx, INT_PTR np, EEL_F** p)
+{
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr || np < 4)
+        return 0.0;
+    const int slot = clampSlot (argD (p, np, 0, 0.0), kNumWtOscSlots);
+    const float out = sanitizeFloat (static_cast<float> (rack->oscWt[slot].process (
+        argD (p, np, 1, 0.0), argD (p, np, 2, 0.0), argD (p, np, 3, 0.0),
+        rack->sampleRate)));
+    rack->recordMeter (ModuleId::OscWt, slot, out);
+    return static_cast<EEL_F> (out);
+}
+
+EEL_F NSEEL_CGEN_CALL fnOscFm (void* ctx, INT_PTR np, EEL_F** p)
+{
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr || np < 5)
+        return 0.0;
+    const int slot = clampSlot (argD (p, np, 0, 0.0), kNumFmOscSlots);
+    const float out = sanitizeFloat (static_cast<float> (rack->oscFm[slot].process (
+        argD (p, np, 1, 0.0), argD (p, np, 2, 0.2), argD (p, np, 3, 0.0),
+        argD (p, np, 4, 0.0), rack->sampleRate)));
+    rack->recordMeter (ModuleId::OscFm, slot, out);
+    return static_cast<EEL_F> (out);
+}
+
+EEL_F NSEEL_CGEN_CALL fnOscSync (void* ctx, INT_PTR np, EEL_F** p)
+{
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr || np < 4)
+        return 0.0;
+    const int slot = clampSlot (argD (p, np, 0, 0.0), kNumSyncOscSlots);
+    const float out = sanitizeFloat (static_cast<float> (rack->oscSync[slot].process (
+        argD (p, np, 1, 0.0), argD (p, np, 2, 0.0), argD (p, np, 3, 0.0),
+        rack->sampleRate)));
+    rack->recordMeter (ModuleId::OscSync, slot, out);
+    return static_cast<EEL_F> (out);
+}
+
 EEL_F NSEEL_CGEN_CALL fnNoise (void* ctx, INT_PTR, EEL_F**)
 {
     auto* rack = voiceRackOf (ctx);

@@ -30,11 +30,13 @@
 // Own DSP (after DaisySP includes; see note at the top).
 #include "engine/ChaosMath.h"
 #include "engine/Filters.h"
+#include "engine/Filters2.h"
 #include "engine/Utilities.h"
 #include "engine/Utilities2.h"
 #include "engine/Utilities3.h"
 #include "engine/Utilities4.h"
 #include "engine/Utilities5.h"
+#include "engine/Wavetables.h"
 
 namespace vibesynth {
 
@@ -49,14 +51,23 @@ enum class ModuleId : int
     OscTri,
     OscSquare,
     OscSupersaw,
+    OscWt,
+    OscFm,
+    OscSync,
     FltLp,
     FltHp,
     FltBp,
     FltLadder,
+    FltFormant,
+    FltNotch,
+    FltPeak,
+    FltTilt,
     EnvAdsr,
     EnvFollow,
-    FxFold,      // stateless (fx_fold, fx_sat, util_bytebeat, bus_sat): the
+    ModLfo,
+    FxFold,      // stateless (fx_fold, fx_sat, fx_shape, util_bytebeat, bus_sat): the
     FxSat,       // nth call in a sample meters as slot n (recordStateless)
+    FxShape,
     FxCrush,
     FxComb,
     FxOtt,
@@ -146,17 +157,30 @@ struct VoiceRack
     OscCache oscSquareCache[kNumOscSlots];
 
     SupersawState supersaw[kNumSupersawSlots];
+    WtOscState oscWt[kNumWtOscSlots];
+    FmOscState oscFm[kNumFmOscSlots];
+    SyncOscState oscSync[kNumSyncOscSlots];
 
     FilterRate filterRate;
     SvfState fltLp[kNumSvfSlots];
     SvfState fltHp[kNumSvfSlots];
     SvfState fltBp[kNumSvfSlots];
     LadderState fltLadder[kNumLadderSlots];
+    FormantState fltFormant[kNumFormantSlots];
+    SvfState fltNotch[kNumNotchSlots];
+    PeakSvfState fltPeak[kNumPeakSlots];
+    TiltState fltTilt[kNumTiltSlots];
 
     daisysp::Adsr envAdsr[kNumAdsrSlots];
     AdsrCache adsrCache[kNumAdsrSlots];
 
     EnvFollowState envFollow[kNumEnvFollowSlots];
+    ModLfoState modLfo[kNumModLfoSlots];
+    double currentBeat = 0.0;
+    uint32_t seedValue = 1u;
+
+    AdaaSlot adaa[kNumAdaaGroups][kMaxAdaaCalls];
+    uint8_t adaaCalls[kNumAdaaGroups] = {};
 
     daisysp::Decimator crush[kNumCrushSlots];
     CrushCache crushCache[kNumCrushSlots];
@@ -201,9 +225,39 @@ struct VoiceRack
 
     void init (double newSampleRate, uint32_t voiceSeed);
     void reset() noexcept;
+    void noteOn (double beat = 0.0) noexcept;
     void recordMeter (ModuleId module, int slot, float out) noexcept;
-    void beginSample() noexcept { std::memset (statelessCalls, 0, sizeof (statelessCalls)); }
+    void beginSample() noexcept
+    {
+        std::memset (statelessCalls, 0, sizeof (statelessCalls));
+        std::memset (adaaCalls, 0, sizeof (adaaCalls));
+    }
     void recordStateless (ModuleId module, float out) noexcept;
+
+    AdaaSlot* nextAdaaSlot (int group) noexcept
+    {
+        if (group < 0 || group >= kNumAdaaGroups)
+            return nullptr;
+        const uint8_t idx = adaaCalls[group];
+        if (idx >= kMaxAdaaCalls)
+            return nullptr;
+        adaaCalls[group] = static_cast<uint8_t> (idx + 1);
+        return &adaa[group][idx];
+    }
+
+    void skipAdaaSlot (ModuleId module) noexcept
+    {
+        const int group = module == ModuleId::FxFold  ? 0
+                        : module == ModuleId::FxSat   ? 1
+                        : module == ModuleId::FxShape ? 2
+                        : module == ModuleId::BusSat  ? 3
+                                                      : -1;
+        if (group >= 0 && adaaCalls[group] < kMaxAdaaCalls)
+        {
+            adaa[group][adaaCalls[group]].reset();
+            ++adaaCalls[group];
+        }
+    }
 };
 
 } // namespace vibesynth

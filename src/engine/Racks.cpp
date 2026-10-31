@@ -39,7 +39,9 @@ void VoiceRack::recordStateless (ModuleId module, float out) noexcept
 // module state is then cleared by reset().
 void VoiceRack::init (double newSampleRate, uint32_t voiceSeed)
 {
+    initWavetables();
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 48000.0;
+    seedValue = voiceSeed != 0u ? voiceSeed : 1u;
     const float sr = static_cast<float> (sampleRate);
 
     for (int i = 0; i < kNumOscSlots; ++i)
@@ -121,6 +123,12 @@ void VoiceRack::reset() noexcept
     }
     for (int i = 0; i < kNumSupersawSlots; ++i)
         supersaw[i].reset();
+    for (int i = 0; i < kNumWtOscSlots; ++i)
+        oscWt[i].reset();
+    for (int i = 0; i < kNumFmOscSlots; ++i)
+        oscFm[i].reset();
+    for (int i = 0; i < kNumSyncOscSlots; ++i)
+        oscSync[i].reset();
 
     for (int i = 0; i < kNumSvfSlots; ++i)
     {
@@ -128,6 +136,14 @@ void VoiceRack::reset() noexcept
     }
     for (int i = 0; i < kNumLadderSlots; ++i)
         fltLadder[i].reset();
+    for (int i = 0; i < kNumFormantSlots; ++i)
+        fltFormant[i].reset();
+    for (int i = 0; i < kNumNotchSlots; ++i)
+        fltNotch[i].reset();
+    for (int i = 0; i < kNumPeakSlots; ++i)
+        fltPeak[i].reset();
+    for (int i = 0; i < kNumTiltSlots; ++i)
+        fltTilt[i].reset();
 
     // Init (not Retrigger): idle, level 0, gate low, so the next gate rise
     // starts a clean attack and a low gate stays silent.
@@ -139,6 +155,13 @@ void VoiceRack::reset() noexcept
 
     for (int i = 0; i < kNumEnvFollowSlots; ++i)
         envFollow[i].reset();
+    for (int i = 0; i < kNumModLfoSlots; ++i)
+        modLfo[i].reset (seedValue ^ static_cast<uint32_t> ((i + 1) * 0x85EBCA6Bu));
+    currentBeat = 0.0;
+
+    for (int g = 0; g < kNumAdaaGroups; ++g)
+        for (int c = 0; c < kMaxAdaaCalls; ++c)
+            adaa[g][c].reset();
 
     for (int i = 0; i < kNumCrushSlots; ++i)
     {
@@ -186,6 +209,17 @@ void VoiceRack::reset() noexcept
         touched[m].store (0u, std::memory_order_relaxed);
     }
     beginSample();
+}
+
+void VoiceRack::noteOn (double beat) noexcept
+{
+    currentBeat = sanitizeFloat (beat);
+    for (int i = 0; i < kNumModLfoSlots; ++i)
+        modLfo[i].noteOn (currentBeat);
+    for (int g = 0; g < kNumAdaaGroups; ++g)
+        for (int c = 0; c < kMaxAdaaCalls; ++c)
+            adaa[g][c].reset();
+    std::memset (adaaCalls, 0, sizeof (adaaCalls));
 }
 
 } // namespace vibesynth

@@ -358,6 +358,7 @@ void EelVoice::noteOn (double freq, double note, double vel,
     if (vel_ != nullptr) *vel_ = vel;
     if (gate_ != nullptr) *gate_ = 1.0;
     if (trig_ != nullptr) *trig_ = 1.0;
+    rackStorage_.noteOn (transport.beat);
     if (initCode_ != nullptr)
     {
         rackStorage_.beginSample();
@@ -400,6 +401,7 @@ float EelVoice::renderSample (double freq, double gate, double note, double vel,
     if (srate_ != nullptr) *srate_ = rackStorage_.sampleRate;
     if (bpm_ != nullptr) *bpm_ = transport.bpm;
     if (beat_ != nullptr) *beat_ = transport.beat;
+    rackStorage_.currentBeat = transport.beat;
     for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
         if (macro_[i] != nullptr)
             *macro_[i] = macros[i];
@@ -521,6 +523,7 @@ void EelMaster::renderSample (float inL, float inR, float& outL, float& outR,
             *macro_[i] = macros[i];
     if (outl_ != nullptr) *outl_ = inL;
     if (outr_ != nullptr) *outr_ = inR;
+    voiceRackStorage_.currentBeat = transport.beat;
     voiceRackStorage_.beginSample();
     NSEEL_code_execute (masterCode_);
     outL = rawOutput (*outl_);

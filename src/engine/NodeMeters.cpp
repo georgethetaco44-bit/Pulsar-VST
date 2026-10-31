@@ -11,9 +11,11 @@ namespace {
 // ModuleId order (Lexicon.h).
 constexpr const char* kModuleNames[kNumModules] = {
     "osc_sine", "osc_saw", "osc_tri", "osc_square", "osc_supersaw",
+    "osc_wt", "osc_fm", "osc_sync",
     "flt_lp", "flt_hp", "flt_bp", "flt_ladder",
-    "env_adsr", "env_follow",
-    "fx_fold", "fx_sat", "fx_crush", "fx_comb", "fx_ott",
+    "flt_formant", "flt_notch", "flt_peak", "flt_tilt",
+    "env_adsr", "env_follow", "mod_lfo",
+    "fx_fold", "fx_sat", "fx_shape", "fx_crush", "fx_comb", "fx_ott",
     "phys_resonator", "phys_string",
     "chaos_lorenz", "chaos_duffing",
     "util_safe_fb", "util_xover", "util_bytebeat",
@@ -22,8 +24,8 @@ constexpr const char* kModuleNames[kNumModules] = {
 static_assert (static_cast<int> (ModuleId::BusReverb) == kNumModules - 1,
                "kModuleNames must list every ModuleId");
 // Spot checks that the table follows the enum order.
-static_assert (static_cast<int> (ModuleId::FxFold) == 11 && static_cast<int> (ModuleId::FxCrush) == 13
-                   && static_cast<int> (ModuleId::UtilBytebeat) == 22 && static_cast<int> (ModuleId::BusSat) == 23,
+static_assert (static_cast<int> (ModuleId::FxFold) == 19 && static_cast<int> (ModuleId::FxCrush) == 22
+                   && static_cast<int> (ModuleId::UtilBytebeat) == 31 && static_cast<int> (ModuleId::BusSat) == 32,
                "kModuleNames is in ModuleId order");
 
 struct Alias
@@ -59,8 +61,8 @@ const char* moduleShortName (ModuleId module) noexcept
 
 bool isStatelessModule (ModuleId module) noexcept
 {
-    return module == ModuleId::FxFold || module == ModuleId::FxSat || module == ModuleId::UtilBytebeat
-        || module == ModuleId::BusSat;
+    return module == ModuleId::FxFold || module == ModuleId::FxSat || module == ModuleId::FxShape
+        || module == ModuleId::UtilBytebeat || module == ModuleId::BusSat;
 }
 
 bool moduleFromName (const std::string& name, ModuleId& module) noexcept

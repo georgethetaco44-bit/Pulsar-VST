@@ -29,8 +29,8 @@ a = osc_supersaw(0, freq * det * (1 + fb1 * m1 * 0.02), m2, 0.65);
 b = osc_saw(0, freq * (2 - det));
 env = env_adsr(0, gate, 0.01, 0.35, 0.8, 0.35);
 // the envelope opens the filter; Wobble adds a 1/4, 1/8 or 1/16 LFO
-div = m7 < 0.33 ? 1 : m7 < 0.66 ? 2 : 4;
-lfo = sin(beat * 2 * $pi * div) * m6 * 0.25;
+per = m7 < 0.33 ? 1 : m7 < 0.66 ? 0.5 : 0.25;
+lfo = (mod_lfo(0, per, 0) - 0.5) * 2 * m6 * 0.25;
 x = flt_lp(0, a * 0.7 + b * 0.3, min(0.95, 0.15 + m3 * 0.5 + env * 0.25 + lfo), m4 * 0.8);
 // Snarl drives and folds the mids only; the loop is made safe
 x = fx_fold(fx_sat(x, 0.25 + m1 * 0.65), m1 * 0.35);

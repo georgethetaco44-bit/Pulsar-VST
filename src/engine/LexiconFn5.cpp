@@ -22,7 +22,7 @@ EEL_F NSEEL_CGEN_CALL fnBusSat (void* ctx, INT_PTR np, EEL_F** p)
         return 0.0;
     const float out = satSample (
         sanitizeFloat (static_cast<float> (argD (p, np, 0, 0.0))),
-        argD (p, np, 1, 0.0));
+        argD (p, np, 1, 0.0), voice != nullptr ? voice->nextAdaaSlot (3) : nullptr);
     if (voice != nullptr)
         voice->recordStateless (ModuleId::BusSat, out);
     else

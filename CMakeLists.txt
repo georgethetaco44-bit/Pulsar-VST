@@ -283,6 +283,7 @@ add_library(vibesynth_engine STATIC
     src/patch/LexiconLint.cpp
     src/patch/PatchPlayer.cpp
     src/engine/NodeMeters.cpp
+    src/engine/Wavetables.cpp
     src/engine/LexiconRacks.cpp
     src/engine/Racks.cpp
     src/engine/Racks2.cpp
@@ -354,6 +355,7 @@ target_sources(vibesynth_cli PRIVATE
 target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/Edit.cpp
     tools/vibesynth_cli/SmokeM11.cpp
+    tools/vibesynth_cli/SmokeM12.cpp
     tools/vibesynth_cli/SmokeMerge.cpp)
 # --render writes WAV only: keep JUCE's bundled FLAC/Ogg Vorbis codecs (and
 # the Windows Media reader) out of the CLI.
