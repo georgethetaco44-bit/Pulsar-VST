@@ -290,6 +290,38 @@ followers are a few lines of our own code), Mutable Elements (32 kHz internal,
 block-based, overlaps DaisySP Resonator), Airwindows SubTight as a crossover
 (replaced by `util_xover_*`).
 
+### 5.3 DSP expansion **[MVP, M12]**
+More variety for the model and for hand-built presets, plus the top-end fix.
+All own code (or MIT DaisySP modules, checked per file); every function gets
+a table row with argument metadata (§9.6), bounds/NaN smoketests at extreme
+arguments, a `--bench` line and an api_reference line. Tier 1 ships first;
+tier 2 if time allows.
+
+**Tier 1**
+| Function | Notes |
+|---|---|
+| `osc_wt(slot, hz, table, pos)` | wavetable; 8 built-in tables generated procedurally at startup (no assets): basic (sine→tri→saw→square), PWM, vocal/formant, bell (sparse high partials), sync sweep, harmonic comb, fold sweep, growl. `pos` morphs across the table's frames; band-limited by per-octave mipmaps; 2 slots |
+| `osc_fm(slot, hz, ratio, index, feedback)` | 2-operator phase modulation with modulator self-feedback; ratio 0–1 maps to 0.5–16 (snaps near integers below 0.02 away); 2 slots |
+| `osc_sync(slot, hz, ratio, shape)` | hard-sync oscillator, slave at 1–16× the master, saw→square by `shape`, PolyBLEP-corrected resets; 2 slots |
+| `fx_shape(in, drive, type)` | stateless multi-curve distortion: hard clip, asymmetric tube, half-wave rectify, full-wave rectify, Chebyshev-3, diode foldback (`type` 0–1 picks a curve) |
+| ADAA on `fx_sat`, `fx_fold`, `fx_shape` | first-order antiderivative anti-aliasing; the previous input is kept per call index (the stateless call counter, §9.6). Targets the "messy top end" from Sound pass batch 1 |
+| `flt_formant(slot, in, vowel, res)` | 3 parallel band-passes morphing a→e→i→o→u; 2 slots |
+| `flt_notch(slot, in, cutoff, res)` `flt_peak(slot, in, cutoff, gain, res)` | from the existing TPT SVF; gain 0–1 maps to −18…+18 dB; 3 slots each |
+| `flt_tilt(slot, in, tilt)` | ±6 dB tilt around ~1 kHz, for taming or opening the top; 2 slots |
+| `mod_lfo(slot, beats, shape)` | tempo-synced LFO, period in beats (0.25 = 1/16 note), shape 0–1 across sine/tri/saw/square/S&H; unipolar 0–1; retriggers at note-on; 3 slots |
+
+**Tier 2**
+| Function | Notes |
+|---|---|
+| `fx_phaser(slot, in, pos, depth, feedback)` | 8 allpass stages; `pos` is the sweep position (the code modulates it); 2 slots |
+| `fx_fshift(slot, in, shift)` | IIR Hilbert frequency shifter; `shift` 0.5 = none, 0/1 = ±2 kHz (exponential); 1 slot |
+| `bus_delay(l, r, beats, feedback, mix)` / `bus_delay_r()` | ping-pong delay, time in beats, low-cut and high-cut in the feedback path; master only |
+| `bus_width(l, r, amount)` / `bus_width_r()` | mid/side width applied above ~150 Hz only; master only |
+
+The prompt grows by about one line per function (~0.5k tokens for all of
+them). Recipes and examples are updated to use what's new, then one batch run
+checks that pass rates hold.
+
 ---
 
 ## 6. LLM integration
@@ -611,25 +643,90 @@ Loading a patch file runs the same compile + offline test as a generated patch.
   label or value; tooltip "Unused by this patch".
 - Code viewer (read-only text) showing the active patch.
 
-### 9.6 Node visualizer **[MVP, read-only]**
+### 9.6 Node view **[MVP; interactive from M10]**
 - **Nodes** come from the *real* code: the set of (module, slot) pairs touched
   during the offline test.
 - **Edges** come from the LLM's `graph.edges`, filtered to nodes that really
   exist. They are labelled as descriptive.
+- Each node pulses with its own `rack->meters` peak (read atomically at 30 fps).
 - **Stateless shapers** (`fx_fold`, `fx_sat`, `util_bytebeat`, `bus_sat`) have
   no slot, so each call is numbered by its order within the sample
   ("fx_sat #0", "#1", …; the 4th and later calls share #3). Under branches
   this numbering is descriptive only.
-- Each node pulses with its own `rack->meters` peak (read atomically at 30 fps).
-- **[LATER]** editable graph. That requires making the graph the source of truth
-  (the plugin generates code from the graph, and the LLM writes graph +
-  custom expression nodes). Not possible with free-form code.
 
-### 9.7 Mutate / Breed **[MVP stretch]**
-- **Mutate:** sends the active patch back with "make 4 distinct variations". All 4
-  go through compile + test. The user auditions each (one click = swap) and
-  keeps one.
-- **Breed:** select two saved patches, ask for 4 hybrids, same audition flow.
+**M10: no-code editing.** Users never have to touch code. The Code tab stays
+read-only.
+- **Live trace in every node pill.** The newest sounding voice writes a
+  decimated copy of each node's output into a lock-free buffer; the UI draws it
+  at 30 fps. Envelopes and other control-rate nodes draw a rolling ~2 s trace;
+  audio-rate nodes draw a steady cycle (triggered on rising zero crossings).
+- **Inspector.** Clicking a node opens a panel with:
+  - a large version of the trace; for filters, the magnitude-response curve
+    drawn in the UI from the live cutoff/res (no audio-thread cost);
+  - one knob per editable argument (the audio input and slot aren't
+    editable), showing the argument's live value;
+  - per knob, **Offset** (default: adds to the code's value in the argument's
+    normalized range, so modulation is kept) or **Replace** (fixed value).
+    Pitch (`hz`) arguments offset in semitones;
+  - **Bypass**: effects/filters/utilities pass their input through,
+    oscillators output 0, `util_safe_fb` outputs 0 (feedback off). Envelopes
+    have no bypass;
+  - **Map to macro**: right-click a knob → "Map to macro N" with a min/max
+    range. Mapping onto an unused macro gives it a label (the argument's name)
+    and un-dims it, so user-shaped presets stay playable from the 8 macros and
+    host automation;
+  - **Change this node**: a text box; see §9.7.
+- **Mechanism.** The lexicon table (`LexiconTable.h`) gains per-argument
+  metadata (name, kind, range, bypass behaviour). Overrides live in a fixed
+  per-(module, slot, arg) table of atomics written by the UI and applied in
+  the shared wrapper layer before the native function runs, so new lexicon
+  functions get inspector support by adding table rows. No recompile, no
+  allocation; one branch per argument when no override is set. Arguments are
+  still clamped (§5.1), and the guard and limiter stay on, so an override
+  can't make a patch unsafe, only louder than its trim (the limiter catches
+  that).
+- **Persistence.** Tweaks and macro maps are saved in `.pulsar` and in the
+  plugin state as optional `"tweaks"` and `"macroMaps"` keys (older files load
+  without them; `version` stays 1). A new patch clears them. "Change this
+  node" keeps the tweaks whose (module, slot) still exists; Mutate clears them.
+- **Bake (developer tool).** `vibesynth_cli --bake in.pulsar out.pulsar`
+  rewrites the code so that tweaks become part of it (overrides folded into
+  the call arguments, bypassed calls replaced). Used to turn hand-shaped
+  presets into LLM examples. Not exposed in the UI.
+- **[LATER]** editable wiring. That requires making the graph the source of
+  truth. Structural changes go through "Change this node" instead.
+
+### 9.7 Mutate and "Change this node" **[MVP from M11]**
+- **Mutate:** sends the active patch back as 4 parallel requests, each with a
+  different direction (e.g. darker/heavier, more movement, brighter/sharper,
+  weirder). Each result goes through the full compile + offline test (with
+  self-heal) and lands in a 4-slot audition strip as it finishes. One click
+  swaps it in; **Keep** makes it the active patch. Failed slots say so.
+- **Change this node:** the inspector's text box sends the active patch, the
+  selected node's id and the user's instruction ("make this wobble at 1/4",
+  "add grit before this"). The model returns a full patch, told to change only
+  what the instruction needs and keep everything else, including slot numbers.
+  Same validation path.
+- **Undo:** every swap (generate, mutate, change, preset load) pushes the
+  previous patch, tweaks and macro values onto a small undo stack (message
+  thread). An Undo button restores it. History keeps working as before.
+- **Breed** is cut for the hackathon.
+
+### 9.8 MOD strip **[MVP stretch, M13]**
+- **2 LFOs:** sine, triangle, saw up, saw down, square, sample-and-hold,
+  smooth random. Rate synced to the host (1/32 to 4 bars, dotted and triplet)
+  or free in Hz. Retrigger per note, or free-running (free LFOs follow the
+  host's beat position).
+- **2 envelopes:** ADSR, triggered per note.
+- Each modulator shows its shape with a moving playhead.
+- **Assign** by dragging a modulator onto a macro or an inspector knob, or
+  right-click → "Modulate with…". A coloured ring shows the depth (bipolar;
+  drag the ring). Envelopes and retriggered LFOs are per voice; modulated
+  macros are therefore per-voice values in each voice VM.
+- Smoothed per sample; no stepping. Saved as an optional `"mods"` key. The LLM
+  doesn't know about it (prompts unchanged). Mutate and "Change this node"
+  keep macro modulation and drop modulation on node knobs that no longer
+  exist.
 
 ---
 
@@ -831,7 +928,28 @@ Each milestone has an exit test. Don't start the next until it passes.
    dubstep, halftime, glitch), adding any core DSP they need first. Work
    in small batches with the user listening to `--phrase riff` renders.
    *Exit: the user keeps ≥ 10 of 15.*
-10. **Release polish.** README with Gatekeeper instructions, tagged GitHub
-    release, demo video script.
-11. **[Stretch] Mutate & Breed** with 4-variant audition.
-12. **[LATER]** extra libraries (§5.2 LATER list), editable graph.
+   **Batch 1 result: run B passed 12/12 on the first try (A: 9/12);
+   sub-to-mid coupling went from −11…−15 dB to numerical noise. User verdict:
+   still "messy and dry sounding, especially in the top end". The sound pass
+   continues as M14, by hand, with the new editing tools and DSP.**
+10. **Node inspector & visualization** (§9.6). *Exit: every built-in can be
+    shaped with tweaks/bypass/macro maps, tweaks round-trip through `.pulsar`
+    and plugin state, `--bake` output renders identically to the tweaked patch,
+    bench within 5 % of M9.*
+11. **Mutate & "Change this node"** (§9.7), plus Undo. Highest priority of
+    M10–M13: this is the Meta-AI showcase. *Exit: both work end to end in the
+    plugin; a batch of node-change instructions passes validation.*
+12. **DSP expansion** (§5.3). Starts after M10 is merged (both touch the
+    lexicon table). *Exit: tier 1 in, all tests and budgets pass, the batch
+    pass rate holds.*
+13. **[Stretch] MOD strip** (§9.8). Cut first if behind (envelopes before
+    LFOs).
+14. **Sound pass 2.** The user designs presets by hand with M10–M12; the best
+    become the LLM examples (via `--bake`). *Exit: the user keeps ≥ 10 of 15.*
+15. **Release polish.** README with Gatekeeper instructions, tagged GitHub
+    release, demo video script. Code freeze the evening of Nov 3.
+16. **[LATER]** extra libraries (§5.2 LATER list), editable wiring, Breed.
+
+**Schedule (deadline Nov 4, 6 PM PST):** Oct 31: M10 and M11 in parallel
+(two worktrees). Nov 1: M12, then M13 in parallel if M10 is merged; README.
+Nov 2: M14. Nov 3: fixes only, tag, freeze. Nov 4: demo video, submit.
