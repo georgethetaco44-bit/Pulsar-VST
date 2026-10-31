@@ -557,7 +557,9 @@ bool smokeClient()
     canceller.join();
     listener.close();
     server.join();
-    ok = check (r.error == ChatError::Cancelled && r.seconds < 1.5 && waits >= 2,
+    // One progress call is enough: the watcher's 100 ms waits can overshoot
+    // badly on a loaded CI runner (macOS arm64 saw one call in 0.48 s).
+    ok = check (r.error == ChatError::Cancelled && r.seconds < 1.5 && waits >= 1,
                 "client: cancel during a silent request returns in %.2f s (%d progress calls): \"%s\"",
                 r.seconds, waits, r.message.c_str()) && ok;
     return ok;
