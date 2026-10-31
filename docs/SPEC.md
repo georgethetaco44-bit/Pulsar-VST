@@ -695,11 +695,30 @@ read-only.
 - **Persistence.** Tweaks and macro maps are saved in `.pulsar` and in the
   plugin state as optional `"tweaks"` and `"macroMaps"` keys (older files load
   without them; `version` stays 1). A new patch clears them. "Change this
-  node" keeps the tweaks whose (module, slot) still exists; Mutate clears them.
+  node" keeps the tweaks whose (module, slot) still exists. Mutate bakes the
+  tweaks into the patch it sends (the model only sees code), so variations
+  keep the user's shaping and start with no tweaks; if bake refuses, it sends
+  the unbaked patch and says so.
 - **Bake (developer tool).** `vibesynth_cli --bake in.pulsar out.pulsar`
   rewrites the code so that tweaks become part of it (overrides folded into
   the call arguments, bypassed calls replaced). Used to turn hand-shaped
-  presets into LLM examples. Not exposed in the UI.
+  presets into LLM examples. Not exposed in the UI. It writes the offline
+  test's new trim into its output. It refuses a tweaked stateless shaper
+  whose call order is ambiguous (inside a branch, loop or function) and a
+  call whose slot isn't a literal.
+- **As built (M10):**
+  - Node ids: `flt_lp:0` (voice), `fx_sat#1` (shaper, by call order),
+    `master/bus_sat#1`, `master/bus_reverb` (bus effects have no slot).
+  - Every lexicon function runs through a small thunk: with nothing set it
+    costs one load and one branch.
+  - Bypass details: `phys_*` output 0 (they're sound sources);
+    `bus_chorus`/`bus_reverb` run with mix 0 (dry); `bus_mono_low` has no
+    bypass (two outputs, no single input).
+  - Gate arguments and `util_bytebeat`'s `t` aren't editable.
+  - Offset on a non-pitch argument is a fraction of its range. A macro map on
+    a pitch argument is linear in Hz.
+  - Traces run only while an editor is open: one voice plus the master, about
+    +53 % CPU for that voice.
 - **[LATER]** editable wiring. That requires making the graph the source of
   truth. Structural changes go through "Change this node" instead.
 
@@ -952,6 +971,14 @@ Each milestone has an exit test. Don't start the next until it passes.
     shaped with tweaks/bypass/macro maps, tweaks round-trip through `.pulsar`
     and plugin state, `--bake` output renders identically to the tweaked patch,
     bench within 5 % of M9.*
+    **Done (Oct 31):** 292 smoketests and 125 strict selftests pass. Bake is
+    equivalent on 15/15 built-ins (138 tweaks, worst diff 0), and every
+    no-tweak render is byte-identical to M9. Bench: most rows are within
+    ±3 %, but 5 voice rows are +8–14 % (Tape Stop, Pluck, Mono Lead, Garage
+    Organ, Clean Sub) and Reese master is +11 %. A build with the thunks
+    removed was just as slow, so this was **accepted as code-layout noise**.
+    Every row is under its budget. Bug fix: DaisySP's triangle oscillator
+    state is now zeroed on reset.
 11. **Mutate & "Change this node"** (§9.7), plus Undo. Highest priority of
     M10–M13: this is the Meta-AI showcase. *Exit: both work end to end in the
     plugin; a batch of node-change instructions passes validation.*
