@@ -1,0 +1,111 @@
+#pragma once
+
+// The generation pipeline (SPEC §3 steps 1-5, §6.4), shared by the plugin's
+// generation worker and vibesynth_cli --batch:
+//
+//   build prompt -> request -> parse -> lint -> compile -> offline test
+//
+// A parse, lint, compile or test failure retries (at most kMaxRetries) at
+// the retry temperature with the model's own reply and the exact reason.
+// Weight hint: a patch that passes but whose measured voice cost is over
+// 1.5x its budget (poly 300 / mono 1,200 ns) gets one "too heavy" retry if
+// one is left; if that retry fails, the heavy patch is still accepted
+// (CPU is never a hard reject beyond the §7.1 runaway rule). An empty,
+// garbled or timed-out reply uses up an attempt and is asked again; other
+// request errors (no key, auth, rate limit, network, server, bad model)
+// end the run at once: retrying can't fix them.
+//
+// Blocking; runs on a worker thread or in the CLI, never the audio
+// thread. `cancel` is polled by the request (every 100 ms) and the
+// validator (every sample), so a cancelled run returns within moments.
+
+#include <atomic>
+#include <functional>
+#include <string>
+#include <vector>
+
+#include "ai/AiSettings.h"
+#include "ai/MetaClient.h"
+#include "engine/NodeMeters.h"
+#include "patch/Patch.h"
+
+namespace vibesynth {
+
+struct GenerationRequest
+{
+    std::string prompt;
+    AiConfig config;
+    std::string apiKey;           // held in memory only
+    double sampleRate = 48000.0;  // the validator's rate
+    double cpuScale = 1.0;        // validator CPU allowance (CLI under Rosetta)
+    // Replaces MetaClient::send (the smoketest's offline self-heal cases).
+    std::function<ChatReply (const ChatRequest&)> transport;
+};
+
+enum class GenerationStage
+{
+    Building,   // building the prompt
+    Waiting,    // request sent, waiting for the model
+    Parsing,
+    Testing,    // lint + compile + offline matrix
+    Done,
+    Failed,
+    Cancelled
+};
+
+struct GenerationProgress
+{
+    GenerationStage stage = GenerationStage::Building;
+    int retry = 0;           // 0 = first attempt, then 1..kMaxRetries
+    double waitSeconds = 0;  // Waiting only
+};
+
+// "Waiting for model (4 s)", "Testing (retry 1/2)", ...
+std::string describeProgress (const GenerationProgress& p);
+
+struct GenerationAttempt
+{
+    std::string reply;          // the model's raw output (empty on a request error)
+    // Where it ended: "request", "parse", "lint", "compile", "test",
+    // "weight" (passed but too heavy) or "ok".
+    std::string stage;
+    std::string status;         // patchStatusName / chatErrorName detail ("nan", "timeout", ...)
+    std::string reason;         // the exact reason (sent back on the next retry)
+    std::vector<std::string> notes;  // parser fix-ups
+    std::vector<std::string> recipes;
+    std::vector<std::string> examples;
+    int promptTokens = 0;
+    int completionTokens = 0;   // includes reasoningTokens
+    int reasoningTokens = 0;
+    double requestSeconds = 0.0;
+    double voiceNs = 0.0;       // measured, when the patch passed the test
+    double temperature = 0.0;
+};
+
+struct GenerationResult
+{
+    bool ok = false;
+    bool cancelled = false;
+    Patch patch;                // ok: validated, trim set, prompt = the user's prompt
+    std::string reason;         // the last failure reason (or a note when ok)
+    std::vector<GenerationAttempt> attempts;
+    double voiceNs = 0.0;       // the accepted patch's measured voice cost
+    double voiceBudgetNs = 0.0;
+    double seconds = 0.0;
+    TouchedNodes touched;       // ok: the offline test's node list (M9, SPEC §9.6)
+
+    int promptTokens() const noexcept;
+    int completionTokens() const noexcept;
+};
+
+class Generator
+{
+public:
+    static constexpr int kMaxRetries = 2;          // SPEC §6.4
+    static constexpr double kWeightHintFactor = 1.5;
+
+    static GenerationResult run (const GenerationRequest& request, const std::atomic<bool>* cancel,
+                                 const std::function<void (const GenerationProgress&)>& onProgress = {});
+};
+
+} // namespace vibesynth

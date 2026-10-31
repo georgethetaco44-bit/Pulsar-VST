@@ -60,3 +60,23 @@ own code, so neither DaisySP's LGPL `MoogLadder` nor its MIT `Svf` and
 ## CPM.cmake — MIT (Lars Melchior et al.)
 `cmake/CPM.cmake` is the stock CPM distribution file (MIT), with its
 licence text at the top of the file.
+
+## Inter 4.1 — SIL Open Font License 1.1 (The Inter Project Authors)
+`resources/fonts/Inter-Regular.ttf`, `Inter-Medium.ttf`, `Inter-SemiBold.ttf`:
+the static TTFs from the v4.1 release (`extras/ttf`), unmodified, embedded
+in the plugin with JUCE BinaryData as the editor's UI font (M9).
+Upstream: https://github.com/rsms/inter
+Copyright (c) 2016 The Inter Project Authors. Full licence text:
+`resources/fonts/Inter-OFL.txt` (copied from the release's LICENSE.txt).
+
+## JetBrains Mono 2.304 — SIL Open Font License 1.1 (The JetBrains Mono Project Authors)
+`resources/fonts/JetBrainsMonoNL-Regular.ttf`: the no-ligatures static TTF
+from the v2.304 release (`fonts/ttf`), unmodified, embedded with JUCE
+BinaryData as the code viewer's font (M9).
+Upstream: https://github.com/JetBrains/JetBrainsMono
+Copyright 2020 The JetBrains Mono Project Authors. Full licence text:
+`resources/fonts/JetBrainsMono-OFL.txt` (copied from the release's OFL.txt).
+
+OFL-1.1 allows bundling the fonts with software; the fonts themselves stay
+under the OFL (they are not relicensed under the AGPLv3) and may not be
+sold on their own.

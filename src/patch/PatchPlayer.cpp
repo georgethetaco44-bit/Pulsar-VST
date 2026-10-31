@@ -669,6 +669,24 @@ bool PatchPlayer::slotGate (int slot) const noexcept
     return slotVoiceIndex (slot) >= 0 && voices_[(size_t) slot].lifetime.gateHeld;
 }
 
+void PatchPlayer::harvestMeters (NodeMeterBank& bank) noexcept
+{
+    if (program_ == nullptr)
+        return;
+    bool sounding[kNumVoiceObjects] = {};
+    for (const auto& v : voices_)
+        if (v.state != VoiceSlot::State::Free && v.index >= 0 && v.index < kNumVoiceObjects)
+            sounding[v.index] = true;
+    for (int i = 0; i < kNumVoiceObjects; ++i)
+    {
+        auto& rack = program_->voice (i).rack();
+        harvestRackMeters (rack.meters, rack.touched, sounding[i] ? bank.voice : nullptr);
+    }
+    auto& master = program_->master();
+    harvestRackMeters (master.rack().meters, master.rack().touched, bank.master);
+    harvestRackMeters (master.voiceRack().meters, master.voiceRack().touched, bank.master);
+}
+
 int PatchPlayer::soundingVoices() const noexcept
 {
     int n = 0;

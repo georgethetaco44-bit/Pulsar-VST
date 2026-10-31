@@ -38,7 +38,10 @@ step_build() {
     if run_in_box cmake --build "$BUILD_DIR" >"$log" 2>&1; then
         # Warnings from our own code only (not JUCE, WDL or DaisySP).
         local warns
-        warns=$(grep -E "^(\.\./\.\./)?(src|tools)/[^:]+:[0-9]+:[0-9]+: warning:" "$log" | sort -u)
+        local root
+        root=$(pwd)
+        warns=$(grep -E "^(${root}/|\.\./\.\./)?(src|tools)/[^:]+:[0-9]+:[0-9]+: warning:" "$log" \
+                | sed "s|^${root}/||; s|^\.\./\.\./||" | sort -u)
         if [ -n "$warns" ]; then
             echo "BUILD OK, $(printf '%s\n' "$warns" | wc -l) warning(s) in our code:"
             printf '%s\n' "$warns" | head -n 40

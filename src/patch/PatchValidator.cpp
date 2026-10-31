@@ -9,8 +9,10 @@
 #include <cmath>
 #include <cstdio>
 #include <iterator>
+#include <vector>
 
 #include "engine/Oversampler.h"
+#include "patch/LexiconLint.h"
 #include "patch/LoopNesting.h"
 
 namespace vibesynth {
@@ -139,6 +141,12 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
         return r;
     };
 
+    // M8 (SPEC §6.4): unknown functions, argument counts and literal slots,
+    // with suggestions the self-heal retry can act on.
+    const LintResult lint = lintPatch (patch);
+    if (! lint.ok())
+        return finish (reject (result, PatchStatus::LintError, lint.message()));
+
     // Before compiling (SPEC §7.1): with the 1024 loop cap, more than two
     // levels could make one sample run for seconds, past any deadline.
     const LoopNestingResult nesting = checkLoopNesting (patch);
@@ -250,6 +258,11 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
                                        "too slow: " + fmt ("%.0f", configMs) + " ms to render 1 s (max "
                                            + fmt ("%.0f", deadlineMs) + ", " + where (note, set) + ")"));
 
+            // M9: the node list (SPEC §5.1 rule 4) is every touched slot.
+            TouchedNodes::add (result.touched.voice, voice->rack().touched);
+            TouchedNodes::add (result.touched.master, master->rack().touched);
+            TouchedNodes::add (result.touched.master, master->voiceRack().touched);
+
             const double window = static_cast<double> (total - dcStart);
             const double dc = std::max (std::fabs (sumL), std::fabs (sumR)) / window;
             result.configDc[config] = dc;
@@ -276,6 +289,110 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
     if (result.trim <= 0.0)
         result.trim = 1.0e-6;
     return finish (result);
+}
+
+TouchedNodes probeTouchedNodes (const Patch& patch, double sampleRate,
+                                const std::atomic<bool>* cancel, int oversampling)
+{
+    constexpr double kProbeSeconds = 0.5;
+    constexpr double kProbeNoteOffSeconds = 0.35;
+    TouchedNodes touched;
+    const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
+    const int os = std::clamp (oversampling, 1, PatchProgram::kMaxOversampling);
+    const double voiceRate = sr * os;
+    const int total = static_cast<int> (std::lround (sr * kProbeSeconds));
+    const int noteOff = static_cast<int> (std::lround (sr * kProbeNoteOffSeconds));
+
+    const PatchStrings ps = { patch.init.c_str(), patch.voice.c_str(), patch.master.c_str() };
+    const auto voice = std::make_unique<EelVoice> (ps, voiceRate, PatchProgram::voiceSeed (0));
+    const auto master = std::make_unique<EelMaster> (ps, sr);
+    if (! voice->isValid() || ! master->isValid())
+        return {};
+
+    float voiceBuf[kChunk * PatchProgram::kMaxOversampling];
+    for (const int note : kNotes)
+    {
+        const double freq = 440.0 * std::pow (2.0, (note - 69) / 12.0);
+        for (int set = 0; set < kNumMacroSets; ++set)
+        {
+            double macros[MacroSmoother::kNumMacros];
+            for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
+                macros[m] = set == 0 ? 0.0 : set == 2 ? 1.0 : patch.macroDefault (m);
+
+            // resetState() leaves the VMs as fresh as the validator's.
+            voice->resetState();
+            master->resetState();
+            HalfbandDecimator decimator;
+            Transport transport;
+            const double beatStep = transport.beatStep (sr);
+            const double voiceBeatStep = transport.beatStep (voiceRate);
+            voice->noteOn (freq, note, 1.0, transport);
+
+            for (int start = 0; start < total; start += kChunk)
+            {
+                if (cancel != nullptr && cancel->load (std::memory_order_relaxed))
+                    return {};
+                const int n = std::min (kChunk, total - start);
+                const int vstart = start * os;
+                for (int k = 0; k < n * os; ++k)
+                {
+                    const double gate = start + k / os < noteOff ? 1.0 : 0.0;
+                    transport.beat = (vstart + k) * voiceBeatStep;
+                    voiceBuf[k] = voice->renderSample (freq, gate, note, 1.0, macros, transport);
+                }
+                for (int k = 0; k < n; ++k)
+                {
+                    float v = voiceBuf[k];
+                    if (os == 2)
+                        v = decimator.process (voiceBuf[2 * k], voiceBuf[2 * k + 1]);
+                    if (! isFiniteBits (v))
+                        v = 0.0f;
+                    float l = 0.0f, r = 0.0f;
+                    transport.beat = (start + k) * beatStep;
+                    master->renderSample (v, v, l, r, macros, transport);
+                }
+            }
+            TouchedNodes::add (touched.voice, voice->rack().touched);
+            TouchedNodes::add (touched.master, master->rack().touched);
+            TouchedNodes::add (touched.master, master->voiceRack().touched);
+        }
+    }
+    return touched;
+}
+
+double measureVoiceNs (const Patch& patch, double sampleRate, int runs, int samples, int oversampling)
+{
+    const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
+    const double voiceRate = sr * std::clamp (oversampling, 1, PatchProgram::kMaxOversampling);
+    const PatchStrings ps = { patch.init.c_str(), patch.voice.c_str(), patch.master.c_str() };
+    const auto voice = std::make_unique<EelVoice> (ps, voiceRate, PatchProgram::voiceSeed (0));
+    if (! voice->isValid() || runs < 1 || samples < 1)
+        return 0.0;
+    double macros[MacroSmoother::kNumMacros];
+    for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
+        macros[m] = patch.macroDefault (m);
+    constexpr double kFreq = 55.0, kNote = 33.0;
+    Transport transport;
+    const double step = transport.beatStep (voiceRate);
+    voice->noteOn (kFreq, kNote, 0.9, transport);
+    volatile float sink = 0.0f;
+    std::vector<double> times;
+    for (int r = -1; r < runs; ++r) // run -1: untimed warm-up
+    {
+        float acc = 0.0f;
+        const auto t0 = Clock::now();
+        for (int i = 0; i < samples; ++i)
+        {
+            transport.beat += step;
+            acc += voice->renderSample (kFreq, 1.0, kNote, 0.9, macros, transport);
+        }
+        const auto t1 = Clock::now();
+        sink = sink + acc;
+        if (r >= 0)
+            times.push_back (std::chrono::duration<double, std::nano> (t1 - t0).count() / samples);
+    }
+    std::sort (times.begin(), times.end());
+    return times[times.size() / 2];
 }
 
 } // namespace vibesynth

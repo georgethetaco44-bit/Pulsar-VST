@@ -1,4 +1,6 @@
 // M4 — LexiconReg.cpp: registerLexiconFunctions() + wrapper declarations.
+// M8: the registrations are a table (engine/LexiconTable.h) that the lint
+// and the api_reference.md smoketest read too.
 // EEL2 headers must come first (they declare EEL_F/INT_PTR); our headers
 // (which open namespace vibesynth) come after they close.
 
@@ -6,6 +8,7 @@
 #include "eel2/ns-eel-addfuncs.h"
 
 #include "engine/Lexicon.h"
+#include "engine/LexiconTable.h"
 
 namespace vibesynth {
 
@@ -47,40 +50,98 @@ EEL_F NSEEL_CGEN_CALL fnBusChorusR (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnBusReverb (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnBusReverbR (void*, INT_PTR, EEL_F**);
 
+namespace {
+
+using LexiconFn = EEL_F (NSEEL_CGEN_CALL*) (void*, INT_PTR, EEL_F**);
+
+struct Registration
+{
+    LexiconEntry entry;
+    LexiconFn fn;
+};
+
+constexpr LexiconScope kBoth = LexiconScope::Both;
+constexpr LexiconScope kMaster = LexiconScope::Master;
+
+// SPEC §5.2. Argument counts are exact (the lint enforces them; EEL2's
+// varparm registration only enforces the minimum). Slot counts mirror the
+// pools in Lexicon.h. bus_sat is stateless and works on a voice rack too
+// (LexiconFn5.cpp), so only the stateful bus_* are master-only.
+const Registration kRegistrations[] = {
+    { { "osc_sine", "slot, hz", 2, kNumOscSlots, kBoth }, &fnOscSine },
+    { { "osc_saw", "slot, hz", 2, kNumOscSlots, kBoth }, &fnOscSaw },
+    { { "osc_tri", "slot, hz", 2, kNumOscSlots, kBoth }, &fnOscTri },
+    { { "osc_square", "slot, hz, pw", 3, kNumOscSlots, kBoth }, &fnOscSquare },
+    { { "osc_supersaw", "slot, hz, detune, mix", 4, kNumSupersawSlots, kBoth }, &fnOscSupersaw },
+    { { "noise", "", 0, 0, kBoth }, &fnNoise },
+    { { "flt_lp", "slot, in, cutoff, res", 4, kNumSvfSlots, kBoth }, &fnFltLp },
+    { { "flt_hp", "slot, in, cutoff, res", 4, kNumSvfSlots, kBoth }, &fnFltHp },
+    { { "flt_bp", "slot, in, cutoff, res", 4, kNumSvfSlots, kBoth }, &fnFltBp },
+    { { "flt_ladder", "slot, in, cutoff, res", 4, kNumLadderSlots, kBoth }, &fnFltLadder },
+    { { "env_adsr", "slot, gate, a, d, s, r", 6, kNumAdsrSlots, kBoth }, &fnEnvAdsr },
+    { { "env_follow", "slot, in", 2, kNumEnvFollowSlots, kBoth }, &fnEnvFollow },
+    { { "fx_fold", "in, amount", 2, 0, kBoth }, &fnFxFold },
+    { { "fx_sat", "in, drive", 2, 0, kBoth }, &fnFxSat },
+    { { "fx_crush", "slot, in, bits, rate", 4, kNumCrushSlots, kBoth }, &fnFxCrush },
+    { { "fx_comb", "slot, in, hz, feedback", 4, kNumCombSlots, kBoth }, &fnFxComb },
+    { { "fx_ott", "slot, in, depth", 3, kNumOttSlots, kBoth }, &fnFxOtt },
+    { { "phys_resonator", "slot, exciter, hz, structure, brightness, damping", 6, kNumResonatorSlots, kBoth }, &fnPhysResonator },
+    { { "phys_string", "slot, exciter, hz, brightness, damping", 5, kNumStringSlots, kBoth }, &fnPhysString },
+    { { "chaos_lorenz", "slot, rate, axis", 3, kNumLorenzSlots, kBoth }, &fnChaosLorenz },
+    { { "chaos_duffing", "slot, hz, chaos", 3, kNumDuffingSlots, kBoth }, &fnChaosDuffing },
+    { { "util_safe_fb", "slot, x", 2, kNumSafeFbSlots, kBoth }, &fnUtilSafeFb },
+    { { "util_xover_lo", "slot, in", 2, kNumXoverSlots, kBoth }, &fnUtilXoverLo },
+    { { "util_xover_hi", "slot", 1, kNumXoverSlots, kBoth }, &fnUtilXoverHi },
+    { { "util_bytebeat", "t, mode", 2, 0, kBoth }, &fnUtilBytebeat },
+    { { "bus_sat", "in, drive", 2, 0, kBoth }, &fnBusSat },
+    { { "bus_mono_low", "l, r", 2, 0, kMaster }, &fnBusMonoLow },
+    { { "bus_mono_low_r", "", 0, 0, kMaster }, &fnBusMonoLowR },
+    { { "bus_chorus", "l, r, depth, mix", 4, 0, kMaster }, &fnBusChorus },
+    { { "bus_chorus_r", "", 0, 0, kMaster }, &fnBusChorusR },
+    { { "bus_reverb", "l, r, size, mix", 4, 0, kMaster }, &fnBusReverb },
+    { { "bus_reverb_r", "", 0, 0, kMaster }, &fnBusReverbR },
+};
+
+constexpr int kNumRegistrations = static_cast<int> (sizeof (kRegistrations) / sizeof (kRegistrations[0]));
+
+bool sameNameIgnoringCase (const char* a, const char* b) noexcept
+{
+    for (; *a != 0 && *b != 0; ++a, ++b)
+    {
+        const char ca = (*a >= 'A' && *a <= 'Z') ? static_cast<char> (*a - 'A' + 'a') : *a;
+        const char cb = (*b >= 'A' && *b <= 'Z') ? static_cast<char> (*b - 'A' + 'a') : *b;
+        if (ca != cb)
+            return false;
+    }
+    return *a == *b;
+}
+
+} // namespace
+
+int numLexiconEntries() noexcept
+{
+    return kNumRegistrations;
+}
+
+const LexiconEntry& lexiconEntry (int index) noexcept
+{
+    return kRegistrations[index >= 0 && index < kNumRegistrations ? index : 0].entry;
+}
+
+const LexiconEntry* findLexiconEntry (const char* name) noexcept
+{
+    if (name == nullptr)
+        return nullptr;
+    for (const Registration& r : kRegistrations)
+        if (sameNameIgnoringCase (r.entry.name, name))
+            return &r.entry;
+    return nullptr;
+}
+
 void registerLexiconFunctions()
 {
-    NSEEL_addfunc_varparm ("osc_sine", 2, NSEEL_PProc_THIS, &fnOscSine);
-    NSEEL_addfunc_varparm ("osc_saw", 2, NSEEL_PProc_THIS, &fnOscSaw);
-    NSEEL_addfunc_varparm ("osc_tri", 2, NSEEL_PProc_THIS, &fnOscTri);
-    NSEEL_addfunc_varparm ("osc_square", 3, NSEEL_PProc_THIS, &fnOscSquare);
-    NSEEL_addfunc_varparm ("osc_supersaw", 4, NSEEL_PProc_THIS, &fnOscSupersaw);
-    NSEEL_addfunc_varparm ("noise", 0, NSEEL_PProc_THIS, &fnNoise);
-    NSEEL_addfunc_varparm ("flt_lp", 4, NSEEL_PProc_THIS, &fnFltLp);
-    NSEEL_addfunc_varparm ("flt_hp", 4, NSEEL_PProc_THIS, &fnFltHp);
-    NSEEL_addfunc_varparm ("flt_bp", 4, NSEEL_PProc_THIS, &fnFltBp);
-    NSEEL_addfunc_varparm ("flt_ladder", 4, NSEEL_PProc_THIS, &fnFltLadder);
-    NSEEL_addfunc_varparm ("env_adsr", 6, NSEEL_PProc_THIS, &fnEnvAdsr);
-    NSEEL_addfunc_varparm ("env_follow", 2, NSEEL_PProc_THIS, &fnEnvFollow);
-    NSEEL_addfunc_varparm ("fx_fold", 2, NSEEL_PProc_THIS, &fnFxFold);
-    NSEEL_addfunc_varparm ("fx_sat", 2, NSEEL_PProc_THIS, &fnFxSat);
-    NSEEL_addfunc_varparm ("fx_crush", 4, NSEEL_PProc_THIS, &fnFxCrush);
-    NSEEL_addfunc_varparm ("fx_comb", 4, NSEEL_PProc_THIS, &fnFxComb);
-    NSEEL_addfunc_varparm ("fx_ott", 3, NSEEL_PProc_THIS, &fnFxOtt);
-    NSEEL_addfunc_varparm ("phys_resonator", 6, NSEEL_PProc_THIS, &fnPhysResonator);
-    NSEEL_addfunc_varparm ("phys_string", 5, NSEEL_PProc_THIS, &fnPhysString);
-    NSEEL_addfunc_varparm ("chaos_lorenz", 3, NSEEL_PProc_THIS, &fnChaosLorenz);
-    NSEEL_addfunc_varparm ("chaos_duffing", 3, NSEEL_PProc_THIS, &fnChaosDuffing);
-    NSEEL_addfunc_varparm ("util_safe_fb", 2, NSEEL_PProc_THIS, &fnUtilSafeFb);
-    NSEEL_addfunc_varparm ("util_xover_lo", 2, NSEEL_PProc_THIS, &fnUtilXoverLo);
-    NSEEL_addfunc_varparm ("util_xover_hi", 1, NSEEL_PProc_THIS, &fnUtilXoverHi);
-    NSEEL_addfunc_varparm ("util_bytebeat", 2, NSEEL_PProc_THIS, &fnUtilBytebeat);
-    NSEEL_addfunc_varparm ("bus_sat", 2, NSEEL_PProc_THIS, &fnBusSat);
-    NSEEL_addfunc_varparm ("bus_mono_low", 2, NSEEL_PProc_THIS, &fnBusMonoLow);
-    NSEEL_addfunc_varparm ("bus_mono_low_r", 0, NSEEL_PProc_THIS, &fnBusMonoLowR);
-    NSEEL_addfunc_varparm ("bus_chorus", 4, NSEEL_PProc_THIS, &fnBusChorus);
-    NSEEL_addfunc_varparm ("bus_chorus_r", 0, NSEEL_PProc_THIS, &fnBusChorusR);
-    NSEEL_addfunc_varparm ("bus_reverb", 4, NSEEL_PProc_THIS, &fnBusReverb);
-    NSEEL_addfunc_varparm ("bus_reverb_r", 0, NSEEL_PProc_THIS, &fnBusReverbR);
+    for (const Registration& r : kRegistrations)
+        NSEEL_addfunc_varparm (r.entry.name, r.entry.numArgs, NSEEL_PProc_THIS, r.fn);
 }
 
 } // namespace vibesynth

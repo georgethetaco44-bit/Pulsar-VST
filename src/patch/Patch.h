@@ -34,6 +34,7 @@ enum class PatchStatus
     BadField,      // version, voiceMode, macros or code have the wrong shape
     MissingVoice,  // code.voice absent or empty
     TooLarge,      // file > 256 KB or a code section > 32 KB (SPEC §7.1)
+    LintError,     // unknown function, wrong argument count or slot (M8, before compiling)
     NestedLoops,   // loop/while nested more than 2 deep (checked before compiling)
     CompileError,  // EEL2 rejected a section
     NonFinite,     // NaN or Inf in the offline test
@@ -129,5 +130,8 @@ int numBuiltinPresets() noexcept;
 const char* builtinPresetFile (int index) noexcept; // e.g. "reese.pulsar"
 std::string builtinPresetText (int index);
 std::string builtinPresetName (int index);          // the patch's "name"
+// M9: built-ins [0, numShowcasePresets()) are the preset browser's
+// Showcase section, the rest its Basic section (program order).
+int numShowcasePresets() noexcept;
 
 } // namespace vibesynth

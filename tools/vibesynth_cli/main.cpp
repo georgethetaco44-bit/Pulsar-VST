@@ -14,7 +14,11 @@
 //                loop-nesting check (cases + tests/patches/ok_nested), a
 //                worker thread validating broken_slow stopping promptly,
 //                the master's own VoiceRack, bpm/beat, and the selftest's
-//                trim tolerance and CPU budgets.
+//                trim tolerance and CPU budgets. M8 (SmokeM8.cpp, offline):
+//                api_reference.md against the registered lexicon, the
+//                lexicon lint, the response parser, the few-shot examples
+//                through the validator, the prompt builder, the client's
+//                error mapping and cancel, and self-heal on canned replies.
 //   --selftest   the preset gate in CI (M6, exit 1 on any failure): every
 //                built-in parses, round-trips, passes the offline test with
 //                its stored trim within 1 dB of the computed one, builds a
@@ -26,6 +30,8 @@
 //   --validate   parse + offline-test one .pulsar file (exit 1 if rejected).
 //   --render     play the test phrase through PatchPlayer into a WAV; see
 //                Render.cpp.
+//   --batch      (M8) generate a patch for every prompt in a file with the
+//                real service and report pass rates; see Batch.cpp.
 //   --os 1|2     (M7, any mode but the tests) the voice oversampling for
 //                --bench, --validate and --render; default 2 like the
 //                plugin. 1 exists for A/B aliasing comparisons only.
@@ -48,11 +54,14 @@
 
 #include <juce_core/juce_core.h>
 
+#include "Batch.h"
 #include "Bench.h"
 #include "CliCheck.h"
 #include "PulsarTestPatches.h"
 #include "Render.h"
 #include "SmokeM7.h"
+#include "SmokeM8.h"
+#include "SmokeM9.h"
 #include "engine/OutputStage.h"
 #include "patch/LoopNesting.h"
 #include "patch/Patch.h"
@@ -838,7 +847,7 @@ bool smokeBrokenPatches()
                         wallMs, deadlineMs, deadlineMs + 100.0 * validatorCpuScale()) && ok;
         }
     }
-    ok = check (rejected == 10, "%d/10 broken test patches rejected", rejected) && ok;
+    ok = check (rejected == 11, "%d/11 broken test patches rejected", rejected) && ok;
 
     // Limits that need no file: total size and macro count.
     const ParseResult huge = parsePatch (std::string (Patch::kMaxFileBytes + 1, ' '));
@@ -1171,6 +1180,17 @@ int runSmoketest()
     ok = vibesynth_cli::smokeAliasAB() && ok;
     ok = vibesynth_cli::smokeFilters() && ok;
     ok = vibesynth_cli::smokeVoiceModes() && ok;
+    ok = vibesynth_cli::smokeApiReference() && ok;
+    ok = vibesynth_cli::smokeLint() && ok;
+    ok = vibesynth_cli::smokeResponseParser() && ok;
+    ok = vibesynth_cli::smokePromptExamples() && ok;
+    ok = vibesynth_cli::smokePromptBuilder() && ok;
+    ok = vibesynth_cli::smokeClient() && ok;
+    ok = vibesynth_cli::smokeSelfHeal() && ok;
+    ok = vibesynth_cli::smokeTouchedNodes() && ok;
+    ok = vibesynth_cli::smokeMeterHarvest() && ok;
+    ok = vibesynth_cli::smokeNodeLayout() && ok;
+    ok = vibesynth_cli::smokePatchLibrary() && ok;
     std::printf (ok ? "SMOKETEST PASS\n" : "SMOKETEST FAIL\n");
     return ok ? 0 : 1;
 }
@@ -1253,12 +1273,15 @@ int main (int argc, char** argvIn)
     const bool bench = argc == 2 && std::strcmp (argv[1], "--bench") == 0;
     const bool validate = argc == 3 && std::strcmp (argv[1], "--validate") == 0;
     const bool render = argc >= 4 && std::strcmp (argv[1], "--render") == 0;
-    if (! smoke && ! self && ! bench && ! validate && ! render)
+    const bool batch = argc >= 3 && std::strcmp (argv[1], "--batch") == 0;
+    if (! smoke && ! self && ! bench && ! validate && ! render && ! batch)
     {
         std::printf ("usage: vibesynth_cli (--smoketest | --selftest [--strict-cpu] | --bench | --validate file.pulsar\n"
                      "                     | --render <patch.pulsar | built-in> out.wav\n"
                      "                       [--sr HZ] [--seconds-tail S] [--bpm BPM] [--phrase default|riff]\n"
-                     "                       [--mode patch|poly|mono] [--glide G] [--macro N=V]...)\n"
+                     "                       [--mode patch|poly|mono] [--glide G] [--macro N=V]...\n"
+                     "                     | --batch prompts.txt [--batch-limit N] [--out DIR] [--endpoint URL] [--model ID]\n"
+                     "                       [--effort low|minimal|medium|none])\n"
                      "                     [--os 1|2]  (bench/validate/render voice oversampling, default 2)\n");
         return 2;
     }
@@ -1283,6 +1306,8 @@ int main (int argc, char** argvIn)
         return jitOk ? runValidate (argv[2]) : 2;
     if (render)
         return jitOk ? vibesynth_cli::runRender (argc - 2, argv + 2, validatorCpuScale(), g_oversampling) : 2;
+    if (batch)
+        return jitOk ? vibesynth_cli::runBatch (argc - 2, argv + 2, validatorCpuScale(), g_oversampling) : 2;
 
     bool ok = check (jit, "execution mode is %s", mode);
     ok = check (initOk, "NSEEL_init") && ok;

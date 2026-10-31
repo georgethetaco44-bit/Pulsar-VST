@@ -316,6 +316,7 @@ escaping breaks.
 {
   "name": "Weeping Reese",
   "macros": [ {"label": "Detune", "default": 0.4}, ... 8 entries ... ],
+  "voiceMode": "mono",
   "graph": { "edges": [["osc_supersaw:0", "flt_lp:0"], ["flt_lp:0", "out"]] }
 }
 ```
@@ -342,8 +343,13 @@ goes through the retry path.
 | Retry after compile/test failure | `muse-spark-1.3` | 0.15 |
 
 Model IDs and endpoint (`https://api.meta.ai/v1/chat/completions`,
-OpenAI-compatible) are configurable in settings, not hardcoded. Expect 3–8 s per
-generation. The UI shows progress, never blocks.
+OpenAI-compatible) are configurable in settings, not hardcoded. The model is a
+reasoning model: requests send `reasoning_effort: "low"` (settings file only)
+and `max_tokens: 8192`; a reply that spends the whole cap reasoning is its own
+failure reason ("hit the token limit while reasoning") and is retried, as are
+empty, garbled or timed-out replies. Measured in M8: ~13 s per generation
+(max 25.8 s), ~5.1k prompt + ~2.4k completion tokens. Timeout is **60 s**.
+The UI shows progress, never blocks.
 
 ### 6.4 Self-heal
 On parse, compile or test failure, send the model its own output plus the exact
@@ -777,8 +783,31 @@ Each milestone has an exit test. Don't start the next until it passes.
 8. **AI generation.** MetaClient, PromptBuilder, ResponseParser, self-heal,
    settings panel, `--batch`. *Exit: ≥70 % of a 30-prompt batch produce a
    passing patch within 2 retries.*
+   **Result: passed. 30/30 batch prompts produced a passing patch on the first
+   try (224k tokens for the run). The lexicon lint, the API-reference
+   self-check, and the switch to a reasoning-model request (`reasoning_effort`
+   low, 8,192 max tokens) were the decisive pieces. `bus_sat` is also allowed
+   in voice. The lint refuses `freembuf`, `stack_*` and `gmem`. Settings live
+   in the "Pulsar" app-data folder (`~/.config/Pulsar/` on Linux). Cancel
+   takes up to ~1 s on Linux (JUCE's curl loop). A valid patch isn't
+   necessarily a good-sounding one: the Sound pass also reviews generated
+   output.**
 9. **Editor UI.** Prompt panel, labelled macros, preset browser, code viewer,
-   read-only node visualizer with live meters.
+   read-only node visualizer with live meters. Look: dark with one neon
+   accent (user's choice). *Exit: every §9.5/§9.6 feature works in REAPER on
+   the Deck; pluginval passes with editor open/close; the user approves the
+   look from snapshots and REAPER.* Mutate/Breed (§9.7) is a separate step
+   after M9.
+   **Result: passed (pending pluginval in CI). Tested in Bitwig; snapshots
+   reviewed. Nodes come from the validator's touched set (or a silent probe
+   for built-ins/restores); meters reach the UI through a processor-owned
+   lock-free bank, never a program pointer. Edges are contracted through
+   non-node names. Open UI items for the next round: (1) stateless shapers
+   (`fx_fold`, `fx_sat`, …) are invisible in the node view, though they're
+   where much of a patch's character lives; (2) unused macros show as
+   "Macro N 0.50" and should read as unused; (3) the output meter reads as a
+   menu icon; (4) 16 compiler warnings in Generator.cpp, Filters.h and
+   PluginEditor.cpp (`userArea` deprecated).**
 9b. **Sound pass.** With M7's DSP (2×, own ladder/SVF, glide) and the M9 UI in
    place, redo the 15 presets against the user's references (modern DnB,
    dubstep, halftime, glitch), adding any core DSP they need first. Work

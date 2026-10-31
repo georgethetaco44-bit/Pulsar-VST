@@ -13,7 +13,7 @@
    communicate through SPSC queues and atomics only. No -ffast-math on
    validation, safety or guard code. NaN/Inf checks use bit-pattern tests,
    not std::isnan.
-6. Dependencies must be permissive (MIT/BSD/zlib). Never add LGPL/GPL
+6. Dependencies must be permissive (MIT/BSD/zlib; fonts may be OFL-1.1). Never add LGPL/GPL
    dependencies other than JUCE itself. Keep THIRD_PARTY_LICENSES.md up to
    date as dependencies are added.
 7. Never hardcode API keys or write them to any file in the repo. The key

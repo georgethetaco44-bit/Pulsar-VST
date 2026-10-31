@@ -4,6 +4,8 @@
 
 #include <algorithm>
 
+#include "patch/PatchLibrary.h"
+
 // M5: the sound is a PatchProgram built off the audio thread from a
 // .pulsar patch (SPEC 3, 7, 9.3). Threads:
 //   message thread  posts load jobs (mutex-protected deque; never touched
@@ -18,6 +20,14 @@
 // M6: voices, stealing, MIDI, the master VM, the runtime guard and the
 // output stage are vibesynth::PatchPlayer (see PatchPlayer.h), shared with
 // vibesynth_cli --render; this file keeps the threads and the swap fade.
+//
+// M8: a generation worker runs vibesynth::Generator (network + offline
+// tests) and posts a passing patch to the load worker as a Generated job;
+// its progress text reaches the status line through the AsyncUpdater.
+//
+// M9: results carry the node list (validator) or, for compile-only loads,
+// ask the load worker for a probe render when it is idle; the audio
+// thread publishes rack and output peaks into atomics once per block.
 //
 // Real-time rules (SPEC 11): processBlock performs no allocation, locks,
 // logging, I/O or exceptions, and never frees a program. MIDI is parsed
@@ -57,15 +67,24 @@ VibeSynthAudioProcessor::VibeSynthAudioProcessor()
         macroLabels[(size_t) i] = juce::String (i < (int) defaultPatch.macros.size()
                                                     ? defaultPatch.macros[(size_t) i].label
                                                     : std::string());
-    statusText = "Loaded " + juce::String (defaultPatch.name);
+    status.text = "Loaded " + juce::String (defaultPatch.name);
+    uiPatch = defaultPatch;
+    probeRequested = true; // the default patch's nodes, once the worker runs
 
     worker.startThread();
+    generationWorker.startThread(); // idles until generate(); no network here
 }
 
 VibeSynthAudioProcessor::~VibeSynthAudioProcessor()
 {
-    // Stop the worker first (a validation in progress aborts after its
-    // current sample), then free everything it or the audio thread owned.
+    // Stop the generation worker first (a request in flight is cancelled
+    // within about a second, a validation after its current sample), then
+    // the load worker it posts to, then free everything they or the audio
+    // thread owned.
+    cancelGenerationFlag = true;
+    generationWorker.signalThreadShouldExit();
+    generationWorker.notify();
+    generationWorker.stopThread (10000);
     cancelValidation = true;
     worker.signalThreadShouldExit();
     worker.notify();
@@ -194,6 +213,7 @@ void VibeSynthAudioProcessor::loadBuiltin (int index)
     job.kind = LoadJob::Kind::Builtin; // compile-only, stored trim (SPEC 9.4)
     job.text = vibesynth::builtinPresetText (index);
     job.source = juce::String (vibesynth::builtinPresetName (index));
+    job.sourceKey = "builtin:" + juce::String (index);
     postJob (std::move (job));
 }
 
@@ -202,13 +222,15 @@ void VibeSynthAudioProcessor::loadPatchFile (const juce::File& file)
     // Refuse oversize files before reading them; parsePatch re-checks.
     if (file.getSize() > (juce::int64) vibesynth::Patch::kMaxFileBytes)
     {
-        setStatus ("Rejected " + file.getFileName() + ": patch file too large (max 256 KB)");
+        setStatus ("Rejected " + file.getFileName() + ": patch file too large (max 256 KB)",
+                   StatusKind::Error);
         return;
     }
     LoadJob job;
     job.kind = LoadJob::Kind::Load;
     job.text = file.loadFileAsString().toStdString();
-    job.source = file.getFileName();
+    job.source = file.getFileNameWithoutExtension();
+    job.sourceKey = file.getFullPathName();
     postJob (std::move (job));
 }
 
@@ -232,10 +254,190 @@ juce::String VibeSynthAudioProcessor::getMacroLabel (int index) const
     return label.isNotEmpty() ? label : "Macro " + juce::String (index + 1);
 }
 
-void VibeSynthAudioProcessor::setStatus (const juce::String& s)
+void VibeSynthAudioProcessor::setStatus (const juce::String& text, StatusKind kind, const juce::String& detail)
 {
-    statusText = s;
+    status = { kind, text, detail };
     sendChangeMessage();
+}
+
+void VibeSynthAudioProcessor::adoptSavedPatch (const juce::File& file, const vibesynth::Patch& patch)
+{
+    {
+        std::lock_guard<std::mutex> lock (patchMutex);
+        if (activePatch.voice == patch.voice && activePatch.init == patch.init && activePatch.master == patch.master)
+            activePatch = patch;
+    }
+    uiPatch = patch;
+    ++patchVersion;
+    activeSource = file.getFullPathName();
+    setStatus ("Saved '" + juce::String (patch.name) + "' to your patches", StatusKind::Info, file.getFullPathName());
+}
+
+double VibeSynthAudioProcessor::getGenerationSeconds() const
+{
+    return isGenerating() ? (juce::Time::getMillisecondCounterHiRes() - generationStartMs) / 1000.0 : 0.0;
+}
+
+//==============================================================================
+// M8 generation (SPEC 6). Message thread: generate / cancel / settings.
+
+vibesynth::AiSettings& VibeSynthAudioProcessor::aiSettings()
+{
+    if (settings == nullptr)
+        settings = std::make_unique<vibesynth::AiSettings>();
+    return *settings;
+}
+
+void VibeSynthAudioProcessor::generate (const juce::String& prompt)
+{
+    const auto text = prompt.trim();
+    if (text.isEmpty())
+    {
+        setStatus ("Type a prompt first", StatusKind::Error);
+        return;
+    }
+    auto& s = aiSettings();
+    if (! s.hasKey())
+    {
+        setStatus ("Generate needs an API key: add one in Settings (or set VIBESYNTH_API_KEY)",
+                   StatusKind::Error);
+        return;
+    }
+    auto request = std::make_unique<vibesynth::GenerationRequest>();
+    request->prompt = text.toStdString();
+    request->config = s.config();
+    request->apiKey = s.apiKey();
+    const double rate = preparedRate.load();
+    request->sampleRate = rate > 0.0 ? rate : 48000.0;
+    {
+        // A generation in flight is now stale: cancel it, newest wins.
+        std::lock_guard<std::mutex> lock (generationMutex);
+        nextGeneration = std::move (request);
+        generationPending = true;
+        cancelGenerationFlag = true;
+    }
+    generationWorker.notify();
+    generationStartMs = juce::Time::getMillisecondCounterHiRes();
+    generationStage = "Starting";
+    setStatus ("Generating: starting", StatusKind::Busy);
+}
+
+void VibeSynthAudioProcessor::cancelGeneration()
+{
+    {
+        std::lock_guard<std::mutex> lock (generationMutex);
+        nextGeneration.reset();
+        generationPending = false;
+        cancelGenerationFlag = true;
+    }
+    if (! generating.load())
+    {
+        setStatus ("Generation cancelled");
+    }
+    else
+    {
+        generationStage = "Cancelling";
+        setStatus ("Cancelling", StatusKind::Busy);
+    }
+}
+
+void VibeSynthAudioProcessor::GenerationWorker::run()
+{
+    while (! threadShouldExit())
+    {
+        std::unique_ptr<vibesynth::GenerationRequest> request;
+        {
+            std::lock_guard<std::mutex> lock (owner.generationMutex);
+            if (owner.nextGeneration != nullptr)
+            {
+                request = std::move (owner.nextGeneration);
+                owner.generating = true;
+                owner.generationPending = false;
+                owner.cancelGenerationFlag = false;
+            }
+        }
+        if (request != nullptr)
+            owner.runGeneration (*request);
+        else
+            wait (100);
+    }
+}
+
+// Generation worker thread.
+void VibeSynthAudioProcessor::runGeneration (const vibesynth::GenerationRequest& request)
+{
+    juce::String last;
+    auto onProgress = [this, &last] (const vibesynth::GenerationProgress& p)
+    {
+        using Stage = vibesynth::GenerationStage;
+        if (p.stage == Stage::Done || p.stage == Stage::Failed || p.stage == Stage::Cancelled)
+            return; // the final status comes below
+        // The editor shows its own elapsed time, so the wait seconds are
+        // left out (fewer, steadier updates).
+        auto q = p;
+        q.waitSeconds = 0.0;
+        auto s = juce::String (vibesynth::describeProgress (q));
+        if (p.stage == Stage::Waiting)
+            s = s.upToFirstOccurrenceOf (" (0 s)", false, false)
+              + s.fromFirstOccurrenceOf (" (0 s)", false, false);
+        if (s != last)
+        {
+            last = s;
+            postGenerationStatus (StatusKind::Busy, s);
+        }
+    };
+    const auto res = vibesynth::Generator::run (request, &cancelGenerationFlag, onProgress);
+    generating = false;
+
+    if (res.cancelled || generationPending.load())
+    {
+        // Superseded by a newer prompt (which reports itself), or cancelled.
+        if (! generationPending.load())
+            postGenerationStatus (StatusKind::Info, "Generation cancelled");
+        return;
+    }
+    if (! res.ok)
+    {
+        const juce::String reason (res.reason);
+        postGenerationStatus (StatusKind::Error, "Generation failed: " + reason,
+                              reason + "\n\nThe current patch is still playing.");
+        return;
+    }
+
+    // M9 (SPEC §9.5): every successful generation goes to the history.
+    juce::String historyError;
+    const auto saved = vibesynth::PatchLibrary::addToHistory (vibesynth::PatchLibrary::historyFolder(), res.patch,
+                                                              juce::Time::getCurrentTime(), historyError);
+    if (saved != juce::File())
+        ++historyVersion;
+
+    const int attempts = (int) res.attempts.size();
+    LoadJob job;
+    job.kind = LoadJob::Kind::Generated;
+    job.text = vibesynth::serializePatch (res.patch);
+    job.source = juce::String (res.patch.name);
+    job.sourceKey = saved.getFullPathName();
+    job.hasNodes = true;
+    job.nodes = res.touched;
+    juce::String note = juce::String (attempts) + (attempts == 1 ? " attempt, " : " attempts, ")
+                      + juce::String (res.seconds, 1) + " s";
+    if (! res.reason.empty())
+        note << "\n" << juce::String (res.reason);
+    if (historyError.isNotEmpty())
+        note << "\nNot saved to the history: " << historyError;
+    job.detail = note;
+    postJob (std::move (job));
+}
+
+void VibeSynthAudioProcessor::postGenerationStatus (StatusKind kind, const juce::String& text,
+                                                    const juce::String& detail)
+{
+    {
+        std::lock_guard<std::mutex> lock (resultMutex);
+        generationStatus = { kind, text, detail };
+        generationStatusPending = true;
+    }
+    triggerAsyncUpdate();
 }
 
 void VibeSynthAudioProcessor::postJob (LoadJob job)
@@ -280,9 +482,36 @@ void VibeSynthAudioProcessor::Worker::run()
         LoadJob job;
         if (owner.takeJob (job))
             owner.processJob (job);
+        else if (owner.nodesWanted.load() && owner.probeRequested.exchange (false))
+            owner.probeActivePatch();
         else
             wait (20);
     }
+}
+
+// Load worker, idle: the node list of whatever is (about to be) playing
+// (SPEC §9.6). A newer job cancels it; the message thread drops a result
+// whose code no longer matches the patch it shows.
+void VibeSynthAudioProcessor::probeActivePatch()
+{
+    vibesynth::Patch patch;
+    {
+        std::lock_guard<std::mutex> lock (patchMutex);
+        patch = activePatch;
+    }
+    const double rate = preparedRate.load();
+    LoadResult r;
+    r.nodes = vibesynth::probeTouchedNodes (patch, rate > 0.0 ? rate : 48000.0, &cancelValidation);
+    if (cancelValidation.load())
+    {
+        probeRequested = true; // try again after the new job
+        return;
+    }
+    r.ok = true;
+    r.nodesOnly = true;
+    r.hasNodes = true;
+    r.patch = std::move (patch);
+    postResult (std::move (r));
 }
 
 void VibeSynthAudioProcessor::freeRetired() noexcept
@@ -314,15 +543,19 @@ bool VibeSynthAudioProcessor::buildAndPushLocked (const vibesynth::Patch& patch,
 
 void VibeSynthAudioProcessor::processJob (const LoadJob& job)
 {
-    // Only files get the offline matrix; built-ins and restores compile
-    // with their stored trim (SPEC 9.3, 9.4).
+    // Only files get the offline matrix here; built-ins and restores
+    // compile with their stored trim (SPEC 9.3, 9.4), and generated
+    // patches were tested on the generation worker (trim set).
     const bool validate = job.kind == LoadJob::Kind::Load;
     const bool isRestore = job.kind == LoadJob::Kind::Restore;
+    const bool isGenerated = job.kind == LoadJob::Kind::Generated;
     auto stale = [this, &job] { return job.generation != generation.load(); };
     auto fail = [this, &job] (const juce::String& reason)
     {
         LoadResult r;
+        r.kind = StatusKind::Error;
         r.message = "Rejected " + job.source + ": " + reason;
+        r.detail = reason;
         r.generation = job.generation;
         postResult (std::move (r));
     };
@@ -345,6 +578,8 @@ void VibeSynthAudioProcessor::processJob (const LoadJob& job)
         patch = defaultPatch;
     }
 
+    bool hasNodes = job.hasNodes;
+    vibesynth::TouchedNodes nodes = job.nodes;
     if (validate)
     {
         const double rate = preparedRate.load();
@@ -357,6 +592,8 @@ void VibeSynthAudioProcessor::processJob (const LoadJob& job)
             return;
         }
         patch.trim = vr.trim;
+        hasNodes = true;
+        nodes = vr.touched;
     }
 
     {
@@ -374,6 +611,7 @@ void VibeSynthAudioProcessor::processJob (const LoadJob& job)
             // SPEC 9.3: a restored patch that doesn't compile -> default.
             restoreError = error;
             patch = defaultPatch;
+            hasNodes = false;
             if (! buildAndPushLocked (patch, error))
                 return;
         }
@@ -386,12 +624,32 @@ void VibeSynthAudioProcessor::processJob (const LoadJob& job)
     r.patch = patch;
     r.setMacros = ! isRestore;
     r.generation = job.generation;
+    r.sourceKey = restoreError.isNotEmpty() ? juce::String ("builtin:0") : job.sourceKey;
+    r.hasNodes = hasNodes;
+    r.nodes = nodes;
+    const juce::String dot = juce::String::fromUTF8 (" \xc2\xb7 ");
     if (restoreError.isNotEmpty())
-        r.message = "Saved patch failed (" + restoreError + "); loaded " + juce::String (patch.name);
+    {
+        r.kind = StatusKind::Error;
+        r.message = "Saved patch failed; loaded " + juce::String (patch.name);
+        r.detail = restoreError;
+    }
+    else if (isGenerated)
+    {
+        r.kind = StatusKind::Success;
+        r.message = "Generated '" + juce::String (patch.name) + "'" + dot + "trim " + formatDb (patch.trim);
+        r.detail = job.detail;
+    }
     else
-        r.message = (isRestore ? "Restored " : "Loaded ") + juce::String (patch.name)
-                  + ", trim " + formatDb (patch.trim);
+    {
+        r.message = (isRestore ? "Restored " : "Loaded ") + juce::String (patch.name) + dot + "trim "
+                  + formatDb (patch.trim);
+    }
     postResult (std::move (r));
+    // Compile-only loads (built-ins, restores) learn their nodes from a
+    // probe render once the worker is idle.
+    if (! hasNodes)
+        probeRequested = true;
 }
 
 void VibeSynthAudioProcessor::postResult (LoadResult result)
@@ -403,32 +661,93 @@ void VibeSynthAudioProcessor::postResult (LoadResult result)
     triggerAsyncUpdate();
 }
 
-// Message thread: macro defaults (SPEC 9.2), labels, status line.
+// Message thread: macro defaults (SPEC 9.2), labels, status line, and the
+// editor's patch, source and node list (M9).
 void VibeSynthAudioProcessor::handleAsyncUpdate()
 {
     std::vector<LoadResult> done;
+    Status genStatus;
+    bool genStatusChanged = false;
     {
         std::lock_guard<std::mutex> lock (resultMutex);
         done.swap (results);
+        genStatusChanged = generationStatusPending;
+        genStatus = generationStatus;
+        generationStatusPending = false;
     }
+    if (genStatusChanged)
+    {
+        if (genStatus.kind == StatusKind::Busy)
+        {
+            generationStage = genStatus.text;
+            status = { StatusKind::Busy, "Generating: " + genStatus.text, {} };
+        }
+        else
+        {
+            status = genStatus;
+        }
+    }
+
+    bool labelsChanged = false, anyLoad = false;
     for (auto& r : done)
     {
-        statusText = r.message;
-        if (! r.ok)
+        if (r.nodesOnly)
+        {
+            // A probe for the patch the UI shows (not one replaced since).
+            const bool same = r.patch.init == uiPatch.init && r.patch.voice == uiPatch.voice
+                           && r.patch.master == uiPatch.master;
+            if (same && (! nodesKnown || r.nodes != uiNodes))
+            {
+                uiNodes = r.nodes;
+                nodesKnown = true;
+                ++nodesVersion;
+                anyLoad = true;
+            }
             continue;
+        }
+        status = { r.kind, r.message, r.detail };
+        anyLoad = true;
+        if (! r.ok)
+        {
+            // The old patch keeps playing; make sure its nodes arrive.
+            if (! nodesKnown)
+            {
+                probeRequested = true;
+                worker.notify();
+            }
+            continue;
+        }
+        uiPatch = r.patch;
+        ++patchVersion;
+        if (r.sourceKey.isNotEmpty())
+            activeSource = r.sourceKey;
+        uiNodes = r.hasNodes ? r.nodes : vibesynth::TouchedNodes();
+        nodesKnown = r.hasNodes;
+        ++nodesVersion;
         for (int i = 0; i < numMacros; ++i)
-            macroLabels[(size_t) i] = juce::String (i < (int) r.patch.macros.size()
-                                                        ? r.patch.macros[(size_t) i].label
-                                                        : std::string());
+        {
+            const juce::String label (i < (int) r.patch.macros.size() ? r.patch.macros[(size_t) i].label
+                                                                     : std::string());
+            labelsChanged = labelsChanged || label != macroLabels[(size_t) i];
+            macroLabels[(size_t) i] = label;
+        }
         // Only the newest load sets macros; a later restore or load wins.
         if (r.setMacros && r.generation == generation.load())
             for (int i = 0; i < numMacros; ++i)
                 if (auto* param = apvts.getParameter ("macro" + juce::String (i + 1)))
                     param->setValueNotifyingHost ((float) r.patch.macroDefault (i));
     }
-    if (! done.empty())
+    if (anyLoad)
     {
-        updateHostDisplay (ChangeDetails().withProgramChanged (true));
+        // SPEC 9.2: hosts that re-read parameter info may show the labels.
+        auto details = ChangeDetails().withProgramChanged (true);
+        if (labelsChanged)
+            details = details.withParameterInfoChanged (true);
+        updateHostDisplay (details);
+        sendChangeMessage();
+    }
+    else if (genStatusChanged)
+    {
         sendChangeMessage();
     }
 }
@@ -491,10 +810,13 @@ void VibeSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
             LoadResult r;
             r.ok = built != nullptr;
             r.patch = defaultPatch;
-            r.message = "Saved patch failed (" + reason + "); loaded "
-                      + juce::String (defaultPatch.name);
+            r.kind = StatusKind::Error;
+            r.message = "Saved patch failed; loaded " + juce::String (defaultPatch.name);
+            r.detail = reason;
+            r.sourceKey = "builtin:0";
             r.generation = generation.load();
             postResult (std::move (r));
+            probeRequested = true;
             std::lock_guard<std::mutex> plock (patchMutex);
             activePatch = defaultPatch;
         }
@@ -706,6 +1028,11 @@ void VibeSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         const auto event = *midiIt;
         player.handleMidi (event.data, event.numBytes);
     }
+
+    // M9 meters for the editor (relaxed atomics, no allocation).
+    player.harvestMeters (meterBank);
+    publishOutputPeak (0, buffer.getMagnitude (0, 0, numSamples));
+    publishOutputPeak (1, buffer.getMagnitude (numChannels > 1 ? 1 : 0, 0, numSamples));
 }
 
 //==============================================================================
@@ -731,6 +1058,7 @@ void VibeSynthAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
         state.setProperty ("patchJson", juce::String (vibesynth::serializePatch (activePatch)), nullptr);
     }
     state.setProperty ("program", currentProgramIndex.load(), nullptr);
+    state.setProperty ("uiScale", (double) editorScale.load(), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -745,8 +1073,12 @@ void VibeSynthAudioProcessor::setStateInformation (const void* data, int sizeInB
     auto tree = juce::ValueTree::fromXml (*xml);
     const auto json = tree.getProperty ("patchJson").toString();
     const int programIndex = tree.getProperty ("program", -1);
+    const double uiScale = tree.getProperty ("uiScale", 0.0);
     tree.removeProperty ("patchJson", nullptr);
     tree.removeProperty ("program", nullptr);
+    tree.removeProperty ("uiScale", nullptr);
+    if (uiScale >= 0.75 && uiScale <= 1.5)
+        editorScale = (float) uiScale;
     apvts.replaceState (tree);
 
     if (programIndex >= 0 && programIndex < getNumPrograms())
@@ -757,6 +1089,15 @@ void VibeSynthAudioProcessor::setStateInformation (const void* data, int sizeInB
     // Compile on the worker (or in prepareToPlay if not prepared yet),
     // never here: this may run on any thread pluginval picks.
     const auto parsed = vibesynth::parsePatch (json.toStdString());
+    // The editor highlights the built-in only if that is what was saved.
+    juce::String sourceKey ("restored");
+    if (parsed.ok() && programIndex >= 0 && programIndex < getNumPrograms())
+    {
+        const auto builtin = vibesynth::parsePatch (vibesynth::builtinPresetText (programIndex));
+        if (builtin.ok() && builtin.patch.voice == parsed.patch.voice && builtin.patch.init == parsed.patch.init
+            && builtin.patch.master == parsed.patch.master)
+            sourceKey = "builtin:" + juce::String (programIndex);
+    }
     if (parsed.ok())
     {
         std::lock_guard<std::mutex> lock (patchMutex);
@@ -773,9 +1114,11 @@ void VibeSynthAudioProcessor::setStateInformation (const void* data, int sizeInB
             r.ok = true;
             r.patch = parsed.patch;
             r.message = "Restored " + juce::String (parsed.patch.name)
-                      + ", trim " + formatDb (parsed.patch.trim);
+                      + juce::String::fromUTF8 (" \xc2\xb7 trim ") + formatDb (parsed.patch.trim);
+            r.sourceKey = sourceKey;
             r.generation = generation.load();
             postResult (std::move (r));
+            probeRequested = true;
             return;
         }
     }
@@ -784,6 +1127,7 @@ void VibeSynthAudioProcessor::setStateInformation (const void* data, int sizeInB
     job.kind = LoadJob::Kind::Restore;
     job.text = json.toStdString();
     job.source = "saved patch";
+    job.sourceKey = sourceKey;
     postJob (std::move (job));
 }
 

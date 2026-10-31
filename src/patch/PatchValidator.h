@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 
+#include "engine/NodeMeters.h"
 #include "patch/Patch.h"
 #include "patch/PatchEngine.h"
 
@@ -76,6 +77,9 @@ struct ValidationResult
     double voiceCpu = 0.0;     // voice render time / audio time, all configs
     double configCpu = 0.0;    // worst configuration: voice + master time / its 1 s
     double wallMs = 0.0;       // whole matrix incl. compiling the test VMs
+    // M9 (SPEC §5.1 rule 4, §9.6): every (module, slot) touched in any
+    // configuration that ran, the node visualizer's node list.
+    TouchedNodes touched;
 
     bool ok() const noexcept { return status == PatchStatus::Ok && ! cancelled; }
 };
@@ -85,8 +89,8 @@ struct ValidationResult
 // all 1}, note-on at 0, note-off at 0.7 s, 1 s each, measured on the
 // master output before trim/limiter. M7: through the plugin's voice path,
 // i.e. the voice at `oversampling` x `sampleRate`, the same half-band
-// decimator, then the master at `sampleRate`. The loop-nesting check and compile
-// errors are reported first. `cancel` (optional) is polled with the
+// decimator, then the master at `sampleRate`. The lexicon lint (M8), the
+// loop-nesting check and compile errors are reported first. `cancel` (optional) is polled with the
 // deadline after every voice sample. A configuration whose voice + master
 // rendering takes more than 50 % of real time (500 ms for its 1 s) is
 // rejected as too slow: a runaway guard, not the §4.2.1 design budget.
@@ -97,6 +101,25 @@ struct ValidationResult
 ValidationResult validatePatch (const Patch& patch, double sampleRate,
                                 const std::atomic<bool>* cancel = nullptr,
                                 double cpuScale = 1.0,
+                                int oversampling = PatchProgram::kDefaultOversampling);
+
+// M8 weight hint (SPEC §6.4): the voice section's cost in ns per
+// (oversampled) voice-sample, measured as the selftest and --bench do: one
+// fresh voice at 55 Hz, gate held, macros at the patch defaults, beat
+// advancing at 120 bpm, the median of `runs` x `samples` after one untimed
+// pass. (The matrix's own timing reads the clock every sample, so it runs
+// high.) 0 if the voice doesn't compile. Worker thread or the CLI.
+double measureVoiceNs (const Patch& patch, double sampleRate, int runs = 3, int samples = 24000,
+                       int oversampling = PatchProgram::kDefaultOversampling);
+
+// M9 (SPEC §9.6): the touched (module, slot) set for a patch that is only
+// compiled (built-ins, restores): a short silent render of the validator's
+// 9 configurations (0.5 s each, note-off at 0.35 s) on one test voice and
+// master, reset between configurations. Nothing is measured or rejected.
+// Empty if the patch doesn't compile or `cancel` fires. Worker thread or
+// the CLI.
+TouchedNodes probeTouchedNodes (const Patch& patch, double sampleRate,
+                                const std::atomic<bool>* cancel = nullptr,
                                 int oversampling = PatchProgram::kDefaultOversampling);
 
 // "compile error in voice: <text>" (section omitted when empty).

@@ -1,0 +1,82 @@
+#pragma once
+
+// M9 macro panel (SPEC §9.2, §9.5): the 8 macros as rotary knobs in a 4 x 2
+// grid with the patch's labels and values (the host's "Macro N" name is
+// in each tooltip), then Voice Mode (Patch / Poly / Mono) and Glide.
+// Attached to the APVTS, so host automation and the knobs stay in sync.
+
+#include <juce_audio_processors/juce_audio_processors.h>
+
+#include <array>
+#include <memory>
+
+#include "ui/Theme.h"
+
+namespace vibesynth::ui {
+
+class MacroKnob final : public juce::Component
+{
+public:
+    MacroKnob (juce::AudioProcessorValueTreeState& state, int index);
+
+    // The patch's label (empty = "Macro N") and default (double-click).
+    void setPatchMacro (const juce::String& label, double defaultValue);
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+    juce::Slider slider;
+
+private:
+    const int index;
+    juce::String label;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+};
+
+class VoiceModeControl final : public juce::Component
+{
+public:
+    explicit VoiceModeControl (juce::RangedAudioParameter& param);
+
+    void setPatchMode (const juce::String& mode);  // "poly" / "mono"
+    int getMode() const noexcept { return mode; }
+    void resized() override;
+
+    std::array<juce::TextButton, 3> buttons;
+    std::function<void()> onChange;
+
+private:
+    void update (int newMode);
+
+    juce::ParameterAttachment attachment;
+    int mode = 0;
+};
+
+class MacroPanel final : public juce::Component
+{
+public:
+    explicit MacroPanel (juce::AudioProcessorValueTreeState& state);
+
+    // A new patch: name, voice mode and the 8 labels + defaults.
+    void setPatch (const juce::String& name, const juce::String& voiceMode,
+                   const std::array<juce::String, 8>& labels, const std::array<double, 8>& defaults);
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+    // In keyboard focus order: the knobs, the voice mode, glide.
+    juce::Array<juce::Component*> focusOrder();
+
+private:
+    void updateGlide();
+
+    juce::AudioProcessorValueTreeState& state;
+    std::array<std::unique_ptr<MacroKnob>, 8> knobs;
+    VoiceModeControl voiceMode;
+    juce::Slider glide;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> glideAttachment;
+    juce::String patchName, patchMode;
+    juce::Rectangle<int> titleArea, voiceLabelArea, glideLabelArea, glideValueArea;
+};
+
+} // namespace vibesynth::ui

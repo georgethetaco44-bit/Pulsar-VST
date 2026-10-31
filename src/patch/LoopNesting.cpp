@@ -8,20 +8,6 @@
 
 namespace vibesynth {
 
-namespace {
-
-// Any user function that (indirectly) calls itself: always too deep.
-constexpr int kRecursionDepth = 99;
-
-struct Token
-{
-    enum class Kind { Ident, Open, Close };
-    Kind kind;
-    std::string text; // lower-case identifier (Ident only)
-};
-
-using Tokens = std::vector<Token>;
-
 // Comments, "strings" and 'char' constants become spaces, so nothing
 // inside them can open, close or name a loop.
 std::string blankCommentsAndStrings (const std::string& code)
@@ -65,6 +51,20 @@ std::string blankCommentsAndStrings (const std::string& code)
     }
     return s;
 }
+
+namespace {
+
+// Any user function that (indirectly) calls itself: always too deep.
+constexpr int kRecursionDepth = 99;
+
+struct Token
+{
+    enum class Kind { Ident, Open, Close };
+    Kind kind;
+    std::string text; // lower-case identifier (Ident only)
+};
+
+using Tokens = std::vector<Token>;
 
 bool isIdentChar (char c)
 {

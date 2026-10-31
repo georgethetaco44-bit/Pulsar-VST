@@ -40,4 +40,9 @@ int loopNestingDepth (const std::string& code);
 // "loops nested too deep (max 2) in voice" (empty when r.ok()).
 std::string loopNestingError (const LoopNestingResult& r);
 
+// `code` with comments, "strings" and 'char' constants replaced by spaces
+// (same length, newlines kept), so scanners see only code. Shared with the
+// lexicon lint (LexiconLint.h).
+std::string blankCommentsAndStrings (const std::string& code);
+
 } // namespace vibesynth

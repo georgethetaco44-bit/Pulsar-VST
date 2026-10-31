@@ -46,6 +46,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "engine/NodeMeters.h"
 #include "engine/OutputStage.h"
 #include "engine/Oversampler.h"
 #include "patch/PatchEngine.h"
@@ -138,6 +139,12 @@ public:
         }
         finishChunk (n);
     }
+
+    // M9 (SPEC §9.6, §11): once per host block, moves every voice's and
+    // the master's rack meter peaks into `bank` (the max over sounding
+    // voices; a free voice's leftovers are cleared, not published) and
+    // zeroes them in the racks. Audio thread; no allocation or locks.
+    void harvestMeters (NodeMeterBank& bank) noexcept;
 
     const float* outL() const noexcept { return outL_.data(); }
     const float* outR() const noexcept { return outR_.data(); }

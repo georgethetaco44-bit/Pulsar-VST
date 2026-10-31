@@ -159,7 +159,30 @@ juce_add_plugin(VibeSynthVST
 # linking juce_core into the engine as well as the plugin would duplicate
 # every JUCE symbol. The plugin and vibesynth_cli each compile this list.
 set(VIBESYNTH_PATCH_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/patch/Patch.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/patch/Patch.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/patch/PatchLibrary.cpp")
+
+# M8: AI generation (SPEC §6): settings, the chat-completions client, prompt
+# builder, response parser and the generate/self-heal pipeline. JUCE-based
+# like Patch.cpp, so the plugin and vibesynth_cli (--batch) each compile it.
+set(VIBESYNTH_AI_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/AiSettings.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/MetaClient.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/PromptBuilder.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/ResponseParser.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/Generator.cpp")
+
+# M8: prompt resources (SPEC §6.1), embedded for the plugin and the CLI.
+# BinaryData keeps only file names, so names must be unique across the
+# folders (examples are example_*.md).
+file(GLOB VIBESYNTH_PROMPT_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/prompts/*.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/prompts/recipes/*.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/prompts/examples/*.md")
+juce_add_binary_data(PulsarPromptData
+    HEADER_NAME PulsarPromptData.h
+    NAMESPACE PulsarPromptData
+    SOURCES ${VIBESYNTH_PROMPT_FILES})
 
 # M5: built-in presets (SPEC §9.4), embedded for the plugin and the CLI.
 # juce_add_binary_data makes a plain static library (generated .cpp, no
@@ -185,10 +208,35 @@ juce_add_binary_data(PulsarPresetData
         resources/presets/mono_lead.pulsar
         resources/presets/velvet_pad.pulsar)
 
+# M9: the editor's fonts (SPEC §9.5; OFL-1.1, see THIRD_PARTY_LICENSES.md).
+# Plugin only; the licence texts sit next to them in resources/fonts.
+juce_add_binary_data(PulsarFontData
+    HEADER_NAME PulsarFontData.h
+    NAMESPACE PulsarFontData
+    SOURCES
+        resources/fonts/Inter-Regular.ttf
+        resources/fonts/Inter-Medium.ttf
+        resources/fonts/Inter-SemiBold.ttf
+        resources/fonts/JetBrainsMonoNL-Regular.ttf)
+
+# M9: the editor (SPEC §9.5, §9.6, §12 src/ui).
+set(VIBESYNTH_UI_SOURCES
+    src/ui/PulsarLookAndFeel.cpp
+    src/ui/PromptPanel.cpp
+    src/ui/MacroPanel.cpp
+    src/ui/NodeLayout.cpp
+    src/ui/NodeView.cpp
+    src/ui/PresetBrowser.cpp
+    src/ui/CodeView.cpp
+    src/ui/SettingsPanel.cpp
+    src/ui/Snapshot.cpp)
+
 target_sources(VibeSynthVST PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
-    ${VIBESYNTH_PATCH_SOURCES})
+    ${VIBESYNTH_UI_SOURCES}
+    ${VIBESYNTH_PATCH_SOURCES}
+    ${VIBESYNTH_AI_SOURCES})
 
 target_include_directories(VibeSynthVST PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -201,6 +249,8 @@ target_compile_definitions(VibeSynthVST PUBLIC
 target_link_libraries(VibeSynthVST PRIVATE
     vibesynth_engine
     PulsarPresetData
+    PulsarPromptData
+    PulsarFontData
     juce::juce_audio_utils
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
@@ -215,7 +265,9 @@ add_library(vibesynth_engine STATIC
     src/patch/PatchEngine.cpp
     src/patch/PatchValidator.cpp
     src/patch/LoopNesting.cpp
+    src/patch/LexiconLint.cpp
     src/patch/PatchPlayer.cpp
+    src/engine/NodeMeters.cpp
     src/engine/LexiconRacks.cpp
     src/engine/Racks.cpp
     src/engine/Racks2.cpp
@@ -249,22 +301,32 @@ target_compile_options(vibesynth_engine PRIVATE
 # CI runs --smoketest and --selftest (gating); --bench is report-only.
 # Engine headers come through vibesynth_engine's public include dirs (no
 # repo-root include path, repo rule 10). M5: a JUCE console app so it
-# compiles the same Patch.cpp as the plugin; no curl, no web browser. M6:
-# juce_audio_formats for --render's WAV writer.
+# compiles the same Patch.cpp as the plugin; no web browser. M6:
+# juce_audio_formats for --render's WAV writer. M8: the AI sources for
+# --batch, so curl on Linux (as the plugin) and juce_data_structures for
+# the settings file.
+set(VIBESYNTH_CLI_CURL FALSE)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(VIBESYNTH_CLI_CURL TRUE)
+endif()
 juce_add_console_app(vibesynth_cli
-    NEEDS_CURL FALSE
+    NEEDS_CURL ${VIBESYNTH_CLI_CURL}
     NEEDS_WEB_BROWSER FALSE)
 target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/main.cpp
     tools/vibesynth_cli/Bench.cpp
     tools/vibesynth_cli/Render.cpp
     tools/vibesynth_cli/SmokeM7.cpp
-    ${VIBESYNTH_PATCH_SOURCES})
+    tools/vibesynth_cli/SmokeM8.cpp
+    tools/vibesynth_cli/Batch.cpp
+    tools/vibesynth_cli/SmokeM9.cpp
+    src/ui/NodeLayout.cpp
+    ${VIBESYNTH_PATCH_SOURCES}
+    ${VIBESYNTH_AI_SOURCES})
 # --render writes WAV only: keep JUCE's bundled FLAC/Ogg Vorbis codecs (and
 # the Windows Media reader) out of the CLI.
 target_compile_definitions(vibesynth_cli PRIVATE
     JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
     JUCE_USE_FLAC=0
     JUCE_USE_OGGVORBIS=0
     JUCE_USE_MP3AUDIOFORMAT=0
@@ -287,13 +349,16 @@ juce_add_binary_data(PulsarTestPatches
         tests/patches/broken_missing_voice.pulsar
         tests/patches/broken_oversize.pulsar
         tests/patches/broken_nested.pulsar
+        tests/patches/broken_lint.pulsar
         tests/patches/ok_nested.pulsar)
 
 target_link_libraries(vibesynth_cli PRIVATE
     vibesynth_engine
     PulsarPresetData
+    PulsarPromptData
     PulsarTestPatches
     juce::juce_core
+    juce::juce_data_structures
     juce::juce_audio_formats
     juce::juce_recommended_config_flags)
 # Keep the binary at build/vibesynth_cli (CI and docs call it there), not

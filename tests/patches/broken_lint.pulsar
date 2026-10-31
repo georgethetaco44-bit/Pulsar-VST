@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "Broken: invented function",
+  "prompt": "test patch for the M8 lexicon lint (must be rejected before compiling)",
+  "macros": [
+    {
+      "label": "A",
+      "default": 0.5
+    }
+  ],
+  "voiceMode": "poly",
+  "code": {
+    "init": "",
+    "voice": "x = osc_wavetable(0, freq, m1);\nout = x * env_adsr(0, gate, 0.01, 0.3, 0.8, 0.3);",
+    "master": ""
+  }
+}

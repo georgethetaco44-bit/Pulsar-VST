@@ -78,6 +78,7 @@ const char* patchStatusName (PatchStatus s) noexcept
         case PatchStatus::BadField:     return "bad_field";
         case PatchStatus::MissingVoice: return "missing_voice";
         case PatchStatus::TooLarge:     return "oversize";
+        case PatchStatus::LintError:    return "lint";
         case PatchStatus::NestedLoops:  return "nested";
         case PatchStatus::CompileError: return "compile_error";
         case PatchStatus::NonFinite:    return "nan";
@@ -240,7 +241,7 @@ constexpr BuiltinEntry kBuiltins[] = {
     { "corroder.pulsar",       "corroder_pulsar" },
     { "boing.pulsar",          "boing_pulsar" },
     { "micro_edit.pulsar",     "micro_edit_pulsar" },
-    // bread and butter
+    // bread and butter (kNumShowcase marks the boundary)
     { "sub.pulsar",            "sub_pulsar" },
     { "garage_organ.pulsar",   "garage_organ_pulsar" },
     { "twostep_stab.pulsar",   "twostep_stab_pulsar" },
@@ -251,12 +252,18 @@ constexpr BuiltinEntry kBuiltins[] = {
 };
 
 constexpr int kNumBuiltins = static_cast<int> (sizeof (kBuiltins) / sizeof (kBuiltins[0]));
+constexpr int kNumShowcase = 8;
 
 } // namespace
 
 int numBuiltinPresets() noexcept
 {
     return kNumBuiltins;
+}
+
+int numShowcasePresets() noexcept
+{
+    return kNumShowcase;
 }
 
 const char* builtinPresetFile (int index) noexcept
