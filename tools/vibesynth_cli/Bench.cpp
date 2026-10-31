@@ -11,17 +11,24 @@
 #include "Bench.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "engine/Modulators.h"
+#include "engine/NodeOverrides.h"
 #include "engine/Oversampler.h"
 #include "patch/Patch.h"
 #include "patch/PatchEngine.h"
+#include "patch/PatchPlayer.h"
+#include "patch/PatchTweaks.h"
+#include "patch/PatchValidator.h"
 
 namespace vibesynth_cli {
 
@@ -125,6 +132,172 @@ double timeVoice (vibesynth::EelVoice& v, double freq, double note,
             times.push_back (nsPerSample (t0, t1, samples));
     }
     return median (times);
+}
+
+// M13: median of `runs` x `samples` of voice rendering with 2 LFOs, 2 ADSR
+// envelopes and 4 active modulation assignments (2 macros + 2 node knobs).
+double timeVoiceWithMods (vibesynth::EelVoice& v, const vibesynth::Patch& basePatch,
+                          double freq, double note,
+                          const double macros[vibesynth::MacroSmoother::kNumMacros],
+                          double voiceRate, int runs = kRuns, int samples = kSamples)
+{
+    using namespace vibesynth;
+    Patch modPatch = basePatch;
+    setPatchMacroMod (modPatch, ModSource::Lfo1, 1, 0.35);
+    setPatchMacroMod (modPatch, ModSource::Env1, 2, 0.40);
+    setPatchArgMod (modPatch, ModSource::Lfo2, "flt_lp:0", "cutoff", 0.30);
+    setPatchArgMod (modPatch, ModSource::Env2, "flt_lp:0", "res", -0.25);
+
+    auto table = std::make_unique<OverrideTable>();
+    applyPatchTweaks (modPatch, *table);
+    v.rack().overrides = table.get();
+    v.rackContext().hooked = true;
+    v.rackContext().hookModules = table->activeModules (RackKind::Voice);
+
+    // The same per-sample work as PatchPlayer::renderVoices with mods.
+    VoiceModPack pack;
+    pack.prepare (voiceRate, 9);
+    ModSpecs specs;
+    for (int l = 0; l < kNumModLfos; ++l)
+        specs.lfos[(size_t) l] = table->getLfoSpec (l);
+    for (int e = 0; e < kNumModEnvs; ++e)
+        specs.envs[(size_t) e] = table->getEnvSpec (e);
+    MacroModPlan plan;
+    table->buildMacroModPlan (plan);
+    const uint8_t mask = table->modSources();
+
+    volatile float sink = 0.0f;
+    std::vector<double> times;
+    Transport t;
+    const double step = t.beatStep (voiceRate);
+    v.noteOn (freq, note, 0.9, t);
+    pack.noteOn ((int) note);
+    for (int r = -1; r < runs; ++r)
+    {
+        float acc = 0.0f;
+        const auto t0 = Clock::now();
+        for (int i = 0; i < samples; ++i)
+        {
+            t.beat += step;
+            pack.tick (mask, specs, t.bpm, t.beat, step, 1.0);
+            auto& vr = v.rack();
+            for (int src = 0; src < kNumModSources; ++src)
+                vr.modValues[src] = pack.values[(size_t) src];
+            double voiceMacros[MacroSmoother::kNumMacros];
+            plan.apply (macros, pack.values.data(), voiceMacros);
+            acc += v.renderSample (freq, 1.0, note, 0.9, voiceMacros, t);
+        }
+        const auto t1 = Clock::now();
+        sink = sink + acc;
+        if (r >= 0)
+            times.push_back (nsPerSample (t0, t1, samples));
+    }
+    v.rack().overrides = nullptr;
+    v.rackContext().hooked = false;
+    v.rackContext().hookModules = ~uint64_t { 0 };
+    return median (times);
+}
+
+// M13: the real PatchPlayer path (voice allocation, the per-voice
+// modulators, the hook layer, the trace voice). One run renders 1 s of
+// host audio in 256-sample chunks, re-striking the notes every 0.25 s,
+// and returns ns per sounding voice-sample (oversampled). The master is
+// replaced by a pass-through so the voices dominate.
+class PlayerBench
+{
+public:
+    PlayerBench (const vibesynth::Patch& patch, bool withMods, bool editorOpen, std::vector<int> notes)
+        : notes_ (std::move (notes))
+    {
+        using namespace vibesynth;
+        Patch p = patch;
+        p.master = "outl = inl;\noutr = inr;";
+        if (! withMods)
+            p.mods = PatchMods {};
+        std::string error;
+        program_ = PatchProgram::build (p, kSampleRate, error);
+        if (program_ == nullptr)
+            return;
+        table_ = std::make_unique<OverrideTable>();
+        applyPatchTweaks (p, *table_);
+        if (editorOpen)
+        {
+            traces_ = std::make_unique<TraceBank>();
+            traces_->enabled.store (true);
+        }
+        for (int m = 0; m < PatchPlayer::kNumMacros; ++m)
+            targets_[m] = static_cast<float> (p.macroDefault (m));
+        player_ = std::make_unique<PatchPlayer>();
+        player_->setProgram (program_.get());
+        player_->prepare (kSampleRate, kChunk, targets_);
+        player_->setHostTransport (140.0, false, false, 0.0);
+        player_->setVoiceControls (PatchPlayer::VoiceMode::Patch, 0.0);
+        // Like the plugin: the processor's table is always set (empty without mods).
+        player_->setNodeHooks (table_.get(), traces_.get());
+        os_ = program_->oversampling();
+    }
+
+    bool ok() const noexcept { return program_ != nullptr; }
+
+    double runOnce()
+    {
+        struct Ev { int samplePosition; const uint8_t* data; int numBytes; };
+        std::vector<Ev> evs;
+        std::vector<std::array<uint8_t, 3>> bytes (notes_.size() * 2);
+        double voiceSamples = 0.0;
+        volatile float sink = 0.0f;
+        const auto t0 = Clock::now();
+        for (int start = 0; start < kHostSamples; start += kChunk)
+        {
+            evs.clear();
+            if (start % kRestrike == 0)
+            {
+                for (size_t k = 0; k < notes_.size(); ++k)
+                {
+                    bytes[k] = { 0x80, static_cast<uint8_t> (notes_[k]), 0 };
+                    bytes[notes_.size() + k] = { 0x90, static_cast<uint8_t> (notes_[k]), 100 };
+                }
+                for (auto& b : bytes)
+                    evs.push_back ({ start, b.data(), 3 });
+            }
+            auto it = evs.cbegin();
+            player_->renderChunk (kChunk, targets_, it, evs.cend(), start);
+            sink = sink + player_->outL()[0];
+            voiceSamples += static_cast<double> (player_->soundingVoices()) * kChunk * os_;
+        }
+        const auto t1 = Clock::now();
+        return std::chrono::duration<double, std::nano> (t1 - t0).count() / std::max (1.0, voiceSamples);
+    }
+
+private:
+    static constexpr int kChunk = 256;
+    static constexpr int kHostSamples = 48000;
+    static constexpr int kRestrike = 12032;  // ~0.25 s, a multiple of kChunk
+    std::vector<int> notes_;
+    std::unique_ptr<vibesynth::PatchProgram> program_;
+    std::unique_ptr<vibesynth::OverrideTable> table_;
+    std::unique_ptr<vibesynth::TraceBank> traces_;
+    std::unique_ptr<vibesynth::PatchPlayer> player_;
+    float targets_[vibesynth::PatchPlayer::kNumMacros] = {};
+    int os_ = 2;
+};
+
+// Interleaved medians: round r runs every variant once, so machine load
+// drifts hit them all alike.
+std::vector<double> timePlayers (std::vector<std::unique_ptr<PlayerBench>>& benches, int rounds = 9)
+{
+    std::vector<std::vector<double>> t (benches.size());
+    for (auto& b : benches)
+        if (b->ok())
+            b->runOnce();  // warm-up
+    for (int r = 0; r < rounds; ++r)
+        for (size_t i = 0; i < benches.size(); ++i)
+            if (benches[i]->ok())
+                t[i].push_back (benches[i]->runOnce());
+    std::vector<double> out;
+    for (auto& v : t)
+        out.push_back (v.empty() ? 0.0 : median (v));
+    return out;
 }
 
 // Median of `runs` x `samples` of master rendering (after one untimed
@@ -381,6 +554,12 @@ int runBench (int oversampling)
         const std::string vName = patch.name + " voice";
         const std::string mName = patch.name + " master";
         printRow (vName.c_str(), vNs, voiceBase, patch.voiceBudgetNs());
+        if (pi == 0)
+        {
+            const double modNs = timeVoiceWithMods (*pvPtr, patch, 55.0, 33.0, presetMacros, voiceRate);
+            printRow ("Reese voice + 2 LFOs + 2 envs, 4 assignments", modNs, voiceBase, patch.voiceBudgetNs());
+            std::printf ("  mod overhead vs plain Reese: %+.1f ns per voice-sample\n", modNs - vNs);
+        }
         printRow (mName.c_str(), mNs, masterBase, kMasterBudgetNs);
         if (pi == 0)
         {
@@ -461,6 +640,81 @@ int runBench (int oversampling)
                  "(budget 25%%), + decimator %.2f%%\n", voiceRate / 1000.0, os, voicePct, decimatorPct);
     std::printf ("default preset, projected master @48 kHz: %.2f%% of a core (budget 10%%)\n",
                  masterPct);
+    // M13 (SPEC §9.8): modulation cost through the real PatchPlayer path.
+    {
+        using namespace vibesynth;
+        Patch reese, pluck;
+        for (int pi = 0; pi < numBuiltinPresets(); ++pi)
+        {
+            const std::string f = builtinPresetFile (pi);
+            if (f == "reese.pulsar")
+                reese = parsePatch (builtinPresetText (pi)).patch;
+            else if (f == "pluck.pulsar")
+                pluck = parsePatch (builtinPresetText (pi)).patch;
+        }
+        auto addFourMods = [] (Patch& p)
+        {
+            setPatchMacroMod (p, ModSource::Lfo1, 1, 0.35);
+            setPatchMacroMod (p, ModSource::Env1, 2, 0.40);
+            setPatchArgMod (p, ModSource::Lfo2, "flt_lp:0", "cutoff", 0.30);
+            setPatchArgMod (p, ModSource::Env2, "flt_lp:0", "res", -0.25);
+        };
+        Patch reeseMods = reese;
+        addFourMods (reeseMods);
+        Patch pluckLfo = pluck;
+        setPatchMacroMod (pluckLfo, ModSource::Lfo1, 1, 0.30);
+        Patch pluckMods = pluck;
+        addFourMods (pluckMods);
+        // The same 4 assignments with values that hold still (slow square
+        // LFOs, a 2 ms envelope): the mod path's own cost, without the DSP
+        // reacting to moving arguments (e.g. the SVF re-deriving its
+        // coefficients for a cutoff that moves every sample).
+        Patch reeseStatic = reeseMods;
+        {
+            ModLfoSpec sq;
+            sq.shape = LfoShape::Square;
+            sq.sync = false;
+            sq.rateHz = 0.05;
+            sq.retrigger = true;
+            setPatchModLfo (reeseStatic, 0, sq);
+            setPatchModLfo (reeseStatic, 1, sq);
+            ModEnvSpec fast;
+            fast.attack = 0.001;
+            fast.decay = 0.001;
+            fast.sustain = 0.5;
+            fast.release = 0.1;
+            reeseStatic.mods.envs[0] = fast;
+            reeseStatic.mods.envs[1] = fast;
+        }
+
+        const std::vector<int> mono = { 33 };
+        const std::vector<int> chord = { 45, 52, 57, 60, 64, 67, 69, 72 };
+        // `plain`: the row this one is compared with (same patch, no mods, editor closed).
+        struct Row { const char* name; const Patch* patch; bool mods; bool editor; const std::vector<int>* notes; int plain; };
+        const Row rows[] = {
+            { "Reese",                             &reese,       false, false, &mono,  0 },
+            { "Reese + 2 LFOs + 2 envs, 4 asg",    &reeseMods,   true,  false, &mono,  0 },
+            { "Reese + 4 asg, values held still",  &reeseStatic, true,  false, &mono,  0 },
+            { "Reese, editor open, no mods",       &reese,       false, true,  &mono,  0 },
+            { "Pluck x8",                          &pluck,       false, false, &chord, 4 },
+            { "Pluck x8 + LFO 1 on macro 1",       &pluckLfo,    true,  false, &chord, 4 },
+            { "Pluck x8 + 2 LFOs + 2 envs, 4 asg", &pluckMods,   true,  false, &chord, 4 },
+            { "Pluck x8, editor open, no mods",    &pluck,       false, true,  &chord, 4 },
+        };
+        std::vector<std::unique_ptr<PlayerBench>> benches;
+        for (const Row& r : rows)
+            benches.push_back (std::make_unique<PlayerBench> (*r.patch, r.mods, r.editor, *r.notes));
+        const std::vector<double> ns = timePlayers (benches);
+        std::printf ("\n-- M13 modulation through PatchPlayer (ns per sounding voice-sample @ %.0f kHz,\n"
+                     "   median of 9 interleaved 1 s runs; master pass-through; 'vs plain' is the\n"
+                     "   same patch without mods and with the editor closed) --\n", voiceRate / 1000.0);
+        std::printf ("%-36s %9s  %9s\n", "case", "ns", "vs plain");
+        for (size_t i = 0; i < std::size (rows); ++i)
+        {
+            std::printf ("%-36s %6.1f ns  %+8.1f\n", rows[i].name, ns[i], ns[i] - ns[(size_t) rows[i].plain]);
+        }
+    }
+
     std::printf ("BENCH DONE (report-only; exit 0)\n");
     return 0;
 }

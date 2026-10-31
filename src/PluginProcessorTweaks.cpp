@@ -23,6 +23,7 @@ void VibeSynthAudioProcessor::editTweaks (const std::function<void (vibesynth::P
         {
             activePatch.tweaks = uiPatch.tweaks;
             activePatch.macroMaps = uiPatch.macroMaps;
+            activePatch.mods = uiPatch.mods;
         }
     }
     applyTweaksFrom (uiPatch);
@@ -48,4 +49,43 @@ void VibeSynthAudioProcessor::setNodeMacroMap (const std::string& node, const st
 void VibeSynthAudioProcessor::clearNodeMacroMap (const std::string& node, const std::string& arg)
 {
     editTweaks ([&] (vibesynth::Patch& p) { vibesynth::removePatchMacroMap (p, node, arg); });
+}
+
+void VibeSynthAudioProcessor::setModLfo (int index, const vibesynth::ModLfoSpec& spec)
+{
+    editTweaks ([&] (vibesynth::Patch& p) { vibesynth::setPatchModLfo (p, index, spec); });
+}
+
+void VibeSynthAudioProcessor::setModEnv (int index, const vibesynth::ModEnvSpec& spec)
+{
+    editTweaks ([&] (vibesynth::Patch& p) { vibesynth::setPatchModEnv (p, index, spec); });
+}
+
+bool VibeSynthAudioProcessor::setMacroMod (vibesynth::ModSource source, int macro, double depth)
+{
+    bool ok = false;
+    editTweaks ([&] (vibesynth::Patch& p) { ok = vibesynth::setPatchMacroMod (p, source, macro, depth); });
+    if (! ok)
+        setStatus ("Up to 8 modulation assignments per patch", StatusKind::Info);
+    return ok;
+}
+
+void VibeSynthAudioProcessor::clearMacroMod (int macro)
+{
+    editTweaks ([&] (vibesynth::Patch& p) { vibesynth::removePatchMacroMod (p, macro); });
+}
+
+bool VibeSynthAudioProcessor::setNodeArgMod (vibesynth::ModSource source, const std::string& node,
+                                             const std::string& arg, double depth)
+{
+    bool ok = false;
+    editTweaks ([&] (vibesynth::Patch& p) { ok = vibesynth::setPatchArgMod (p, source, node, arg, depth); });
+    if (! ok)
+        setStatus ("Up to 8 modulation assignments per patch", StatusKind::Info);
+    return ok;
+}
+
+void VibeSynthAudioProcessor::clearNodeArgMod (const std::string& node, const std::string& arg)
+{
+    editTweaks ([&] (vibesynth::Patch& p) { vibesynth::removePatchArgMod (p, node, arg); });
 }

@@ -51,6 +51,28 @@ EEL_F callHooked (const LexiconEntry& e, LexiconWrapperFn fn, void* ctx, INT_PTR
 
     EEL_F vals[kMaxLexiconArgs];
     EEL_F* ptrs[kMaxLexiconArgs];
+
+    // M13 fast path: a primary call with overrides or modulation, no trace
+    // and no bypass. Only the set arguments (argBits) are visited and
+    // copied; the others reach the wrapper through the caller's pointers.
+    // The wrapper sees the same values as on the full path below.
+    if (node != nullptr && sink == nullptr && e.primary
+        && (e.bypass == BypassKind::None || node->bypass.load (std::memory_order_relaxed) == 0))
+    {
+        for (int i = 0; i < e.numArgs; ++i)
+            ptrs[i] = p[i];
+        uint32_t bits = node->argBits.load (std::memory_order_acquire)
+                        & ((1u << static_cast<unsigned> (e.numArgs)) - 1u);
+        for (int i = 0; bits != 0u; ++i, bits >>= 1)
+        {
+            if ((bits & 1u) == 0u || ! isEditableArg (e.args[i].kind))
+                continue;
+            vals[i] = static_cast<EEL_F> (effectiveArg (e.args[i], node->args[i], vr->macroVars, vr->modValues, static_cast<double> (*p[i])));
+            ptrs[i] = &vals[i];
+        }
+        return fn (ctx, static_cast<INT_PTR> (e.numArgs), ptrs);
+    }
+
     for (int i = 0; i < e.numArgs; ++i)
     {
         vals[i] = *p[i];
@@ -63,23 +85,9 @@ EEL_F callHooked (const LexiconEntry& e, LexiconWrapperFn fn, void* ctx, INT_PTR
         bypass = e.bypass != BypassKind::None && node->bypass.load (std::memory_order_relaxed) != 0;
         if (e.primary)
             for (int i = 0; i < e.numArgs; ++i)
-            {
-                const auto& ov = node->args[i];
-                const auto mode = static_cast<ArgMode> (ov.mode.load (std::memory_order_acquire));
-                if (mode == ArgMode::None || ! isEditableArg (e.args[i].kind))
-                    continue;
-                double macro = 0.0;
-                if (mode == ArgMode::Macro)
-                {
-                    const int mi = ov.macro.load (std::memory_order_relaxed) & 7;
-                    const double* mv = vr->macroVars[mi];
-                    macro = mv != nullptr ? *mv : 0.0;
-                }
-                vals[i] = static_cast<EEL_F> (overrideArg (e.args[i], mode, ov.applied.load (std::memory_order_relaxed),
-                                                           ov.mapLo.load (std::memory_order_relaxed),
-                                                           ov.mapHi.load (std::memory_order_relaxed), macro,
-                                                           static_cast<double> (vals[i])));
-            }
+                if (isEditableArg (e.args[i].kind))
+                    vals[i] = static_cast<EEL_F> (effectiveArg (e.args[i], node->args[i], vr->macroVars,
+                                                                vr->modValues, static_cast<double> (vals[i])));
     }
 
     EEL_F result = 0.0;

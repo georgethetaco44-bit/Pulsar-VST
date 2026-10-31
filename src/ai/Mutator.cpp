@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "patch/PatchBake.h"
+#include "patch/PatchTweaks.h"
 #include "patch/PatchValidator.h"
 
 namespace vibesynth {
@@ -55,7 +56,10 @@ MutateBase prepareMutateBase (const Patch& active)
     b.patch = active;
     b.hadTweaks = ! active.tweaks.empty() || ! active.macroMaps.empty();
     if (! b.hadTweaks)
+    {
+        carryMutateMods (active, b.patch);
         return b;
+    }
     const BakeResult baked = bakePatch (active);
     if (baked.ok)
     {
@@ -69,6 +73,7 @@ MutateBase prepareMutateBase (const Patch& active)
     }
     b.patch.tweaks.clear();
     b.patch.macroMaps.clear();
+    carryMutateMods (active, b.patch);
     return b;
 }
 

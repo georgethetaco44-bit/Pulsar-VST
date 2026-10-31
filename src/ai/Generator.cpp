@@ -51,6 +51,8 @@ void describeEdit (const Patch& base, const TouchedNodes& baseNodes, bool keepTw
     res.droppedTweaks.clear();
     if (keepTweaks)
         res.droppedTweaks = carrySurvivingTweaks (base, res.touched, res.patch);
+    else
+        carryMutateMods (base, res.patch);
     res.labelChanges.clear();
     for (int i = 0; i < Patch::kMaxMacros; ++i)
     {

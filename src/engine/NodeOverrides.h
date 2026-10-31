@@ -29,10 +29,13 @@
 // (offsetApplied), so a baked patch computes bit-identical arguments.
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 
 #include "engine/Lexicon.h"
 #include "engine/LexiconTable.h"
+#include "engine/Modulators.h"
 
 namespace vibesynth {
 
@@ -52,6 +55,40 @@ double replaceApplied (const LexiconArg& arg, double user) noexcept;
 double overrideArg (const LexiconArg& arg, ArgMode mode, double applied, double mapLo, double mapHi,
                     double macro, double x) noexcept;
 
+// M13: 2^x for any x (clamped to +-60; NaN -> 2^-60): round-to-nearest
+// split and a degree-5 series on [-0.5, 0.5]. Relative error < 4e-6
+// (under 0.01 cent; the smoketest checks 0.1 cent).
+inline double fastExp2 (double x) noexcept
+{
+    x = x > -60.0 ? x : -60.0;
+    x = x < 60.0 ? x : 60.0;
+    const int i = static_cast<int> (x + 1024.5) - 1024;  // nearest integer (x + 1024.5 > 0)
+    const double f = (x - static_cast<double> (i)) * 0.69314718055994530942;
+    const double p = 1.0 + f * (1.0 + f * (0.5 + f * (1.0 / 6.0 + f * (1.0 / 24.0 + f * (1.0 / 120.0)))));
+    const uint64_t bits = static_cast<uint64_t> (i + 1023) << 52;
+    double scale = 0.0;
+    std::memcpy (&scale, &bits, sizeof (scale));
+    return p * scale;
+}
+
+// M13: applies bipolar modulation `modDelta` (sum of depth * modVal) to
+// `val` (the effective knob value after any M10 tweak) in the same
+// normalized/semitone space as M10's Offset, then clamps to [arg.lo, arg.hi].
+// Inline: the hook layer calls it per modulated argument per sample.
+inline double modulateArg (const LexiconArg& arg, double val, double modDelta) noexcept
+{
+    if (! isFiniteBitsD (val))
+        val = arg.lo;
+    if (! isFiniteBitsD (modDelta))
+        modDelta = 0.0;
+    double v = arg.kind == ArgKind::Hz ? val * fastExp2 (modDelta * (kHzModSemitoneRange / 12.0))
+                                       : val + modDelta * (arg.hi - arg.lo);
+    v = v < arg.lo ? arg.lo : (v > arg.hi ? arg.hi : v);
+    if (arg.kind == ArgKind::Choice)
+        v = std::rint (v);
+    return v;
+}
+
 struct ArgOverride
 {
     std::atomic<uint8_t> mode { 0 };      // ArgMode
@@ -59,13 +96,70 @@ struct ArgOverride
     std::atomic<double> applied { 0.0 };  // see overrideArg
     std::atomic<double> mapLo { 0.0 };
     std::atomic<double> mapHi { 1.0 };
+    std::atomic<uint8_t> modMask { 0 };   // bit s: modDepth[s] != 0
+    std::atomic<double> modDepth[kNumModSources] {};
 };
 
 struct NodeOverride
 {
     std::atomic<uint8_t> bypass { 0 };
+    // M13: bit i = args[i] has a mode or a modulation (refresh() keeps it),
+    // so the hook layer visits only those arguments.
+    std::atomic<uint32_t> argBits { 0 };
     ArgOverride args[kMaxLexiconArgs];
 };
+
+// The argument a wrapper runs with (the hook layer, LexiconHooks.cpp and
+// the thunks): the M10 override on the code's value `x`, then the M13
+// modulation. Unassigned sources have depth 0, so the sum needs no mask.
+inline double effectiveArg (const LexiconArg& arg, const ArgOverride& ov, const double* const* macroVars,
+                            const double* modValues, double x) noexcept
+{
+    const auto mode = static_cast<ArgMode> (ov.mode.load (std::memory_order_acquire));
+    const uint8_t mMask = ov.modMask.load (std::memory_order_acquire);
+    double v = x;
+    if (mode != ArgMode::None)
+    {
+        double macro = 0.0;
+        if (mode == ArgMode::Macro)
+        {
+            const double* mv = macroVars[ov.macro.load (std::memory_order_relaxed) & 7];
+            macro = mv != nullptr ? *mv : 0.0;
+        }
+        v = overrideArg (arg, mode, ov.applied.load (std::memory_order_relaxed),
+                         ov.mapLo.load (std::memory_order_relaxed), ov.mapHi.load (std::memory_order_relaxed),
+                         macro, v);
+    }
+    if (mMask != 0u)
+    {
+        static_assert (kNumModSources == 4, "unrolled below");
+        const double modDelta = ov.modDepth[0].load (std::memory_order_relaxed) * modValues[0]
+                              + ov.modDepth[1].load (std::memory_order_relaxed) * modValues[1]
+                              + ov.modDepth[2].load (std::memory_order_relaxed) * modValues[2]
+                              + ov.modDepth[3].load (std::memory_order_relaxed) * modValues[3];
+        v = modulateArg (arg, v, modDelta);
+    }
+    return v;
+}
+
+struct AtomicLfoSpec
+{
+    std::atomic<int> shape { static_cast<int> (LfoShape::Sine) };
+    std::atomic<bool> sync { true };
+    std::atomic<double> rateHz { 2.0 };
+    std::atomic<int> syncDiv { static_cast<int> (LfoSyncDiv::Div1_4) };
+    std::atomic<bool> retrigger { false };
+};
+
+struct AtomicEnvSpec
+{
+    std::atomic<double> attack { 0.01 };
+    std::atomic<double> decay { 0.2 };
+    std::atomic<double> sustain { 0.7 };
+    std::atomic<double> release { 0.3 };
+};
+
+static_assert (kNumModules <= 64, "VmRackContext::hookModules is 64 bits");
 
 struct OverrideTable
 {
@@ -73,11 +167,25 @@ struct OverrideTable
     std::atomic<uint32_t> active[kNumRackKinds][kNumModules];  // bit s: node (m, s) has something set
     std::atomic<uint32_t> anyActive[kNumRackKinds];            // count of active nodes
 
+    // M13: modulator specs and macro modulation depths.
+    AtomicLfoSpec lfos[kNumModLfos];
+    AtomicEnvSpec envs[kNumModEnvs];
+    std::atomic<uint8_t> macroModMask[8] = {};
+    std::atomic<double> macroModDepth[8][kNumModSources] = {};
+    std::atomic<uint32_t> anyModActive { 0 };
+    std::atomic<uint8_t> modSourceMask { 0 };  // bit s: some assignment uses source s
+
+    // Live audio-thread telemetry for the UI (playheads, mod outputs, modulated macros).
+    mutable std::atomic<float> liveModPhase[kNumModSources] = {};
+    mutable std::atomic<float> liveModValue[kNumModSources] = {};
+    mutable std::atomic<float> liveMacroValue[8] = {};
+    mutable std::atomic<bool> liveVoiceActive { false };
+
     OverrideTable() noexcept;
     OverrideTable (const OverrideTable&) = delete;
     OverrideTable& operator= (const OverrideTable&) = delete;
 
-    // Message thread (the only writer).
+    // Message thread (the only writer for overrides/mods).
     void clear() noexcept;
     void setBypass (RackKind rack, ModuleId module, int slot, bool on) noexcept;
     // `user` is the persisted value (offset amount / replace value); for
@@ -86,6 +194,14 @@ struct OverrideTable
                  double lo = 0.0, double hi = 1.0) noexcept;
     void clearArg (RackKind rack, ModuleId module, int slot, int arg) noexcept;
 
+    void setLfoSpec (int index, const ModLfoSpec& spec) noexcept;
+    ModLfoSpec getLfoSpec (int index) const noexcept;
+    void setEnvSpec (int index, const ModEnvSpec& spec) noexcept;
+    ModEnvSpec getEnvSpec (int index) const noexcept;
+    void setMacroMod (int macroIndex, ModSource src, double depth) noexcept;
+    void setArgMod (RackKind rack, ModuleId module, int slot, int arg, ModSource src, double depth) noexcept;
+    void clearMods() noexcept;
+
     // Audio thread: the node's overrides, or null when nothing is set.
     const NodeOverride* activeNode (int rack, int module, int slot) const noexcept
     {
@@ -93,13 +209,34 @@ struct OverrideTable
             return nullptr;
         return &nodes[rack][module][slot];
     }
+    // Bit m: module m has a node set on this rack (VmRackContext::hookModules).
+    uint64_t activeModules (RackKind rack) const noexcept
+    {
+        uint64_t bits = 0;
+        for (int m = 0; m < kNumModules && m < 64; ++m)
+            if (active[(int) rack][m].load (std::memory_order_acquire) != 0u)
+                bits |= uint64_t { 1 } << m;
+        return bits;
+    }
     bool anyFor (RackKind rack) const noexcept
     {
         return anyActive[(int) rack].load (std::memory_order_relaxed) != 0u;
     }
+    bool anyMods() const noexcept
+    {
+        return anyModActive.load (std::memory_order_relaxed) != 0u;
+    }
+    // The sources some assignment uses (the ones voices must step).
+    uint8_t modSources() const noexcept
+    {
+        return anyMods() ? static_cast<uint8_t> (modSourceMask.load (std::memory_order_acquire) & 0x0Fu) : 0u;
+    }
+    // Audio thread, once per render segment: the macro modulation plan.
+    void buildMacroModPlan (MacroModPlan& plan) const noexcept;
 
 private:
     void refresh (int rack, int module, int slot) noexcept;
+    void refreshAnyMods() noexcept;
 };
 
 // ---------------------------------------------------------------------------

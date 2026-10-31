@@ -3,10 +3,12 @@
 #include "ui/Snapshot.h"
 
 #include <cstdio>
+#include <utility>
 
 #include "PluginEditor.h"
 #include "ai/Generator.h"
 #include "ui/SnapshotM11.h"
+#include "ui/SnapshotM13.h"
 #include "ai/MetaClient.h"
 #include "patch/PatchPlayer.h"
 #include "patch/PatchTweaks.h"
@@ -291,6 +293,9 @@ void SnapshotDriver::runShots()
 
     runM11Snapshots (editor, [this] (const juce::String& n) { shoot (n); }, [this] (double t) { playNote (t); });
 
+    // M13 shots run on Reese (left loaded by the M11 shots), before M12 swaps the patch.
+    runM13Snapshots (editor, [this] (const juce::String& n) { shoot (n); }, [this] (double t) { playNote (t); });
+
     // M12 inspector snapshots: osc_wt (table choice + pos), osc_fm, flt_formant.
     {
         const auto m12File = dir.getChildFile ("_m12_temp.pulsar");
@@ -331,15 +336,24 @@ void SnapshotDriver::runShots()
         proc.setNodeArg ("osc_wt:0", "table", vibesynth::ArgTweak::kReplace, 2.0);
         editor.setKeyOverride (true);
         playNote (0.4);
-        editor.openInspector (NodeRef { RackKind::Voice, ModuleId::OscWt, 0 });
-        playNote (0.2);
-        shoot ("inspector_osc_wt");
-        editor.openInspector (NodeRef { RackKind::Voice, ModuleId::OscFm, 0 });
-        playNote (0.2);
-        shoot ("inspector_osc_fm");
-        editor.openInspector (NodeRef { RackKind::Voice, ModuleId::FltFormant, 0 });
-        playNote (0.2);
-        shoot ("inspector_flt_formant");
+        // Each at 1x, 0.75x and 1.5x (overlap review at every scale).
+        const std::pair<ModuleId, const char*> m12Shots[] = { { ModuleId::OscWt, "inspector_osc_wt" },
+                                                              { ModuleId::OscFm, "inspector_osc_fm" },
+                                                              { ModuleId::FltFormant, "inspector_flt_formant" } };
+        for (const auto& [module, name] : m12Shots)
+        {
+            editor.setSize (w, h);
+            editor.openInspector (NodeRef { RackKind::Voice, module, 0 });
+            playNote (0.2);
+            shoot (name);
+            editor.setSize (w * 3 / 4, h * 3 / 4);
+            playNote (0.1);
+            shoot (juce::String (name) + "_075");
+            editor.setSize (w * 3 / 2, h * 3 / 2);
+            playNote (0.1);
+            shoot (juce::String (name) + "_150");
+        }
+        editor.setSize (w, h);
         editor.closeInspector();
     }
 

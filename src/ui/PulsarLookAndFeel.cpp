@@ -3,6 +3,7 @@
 #include "ui/PulsarLookAndFeel.h"
 
 #include "PulsarFontData.h"
+#include "ui/ModStrip.h"
 
 namespace vibesynth::ui {
 
@@ -317,6 +318,8 @@ void PulsarLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
     const auto dir = juce::Point<float> (std::sin (angle), -std::cos (angle));
     g.setColour (text.withMultipliedAlpha (alpha));
     g.drawLine (juce::Line<float> (c + dir * (faceR * 0.35f), c + dir * (faceR * 0.85f)), 2.0f);
+
+    drawKnobModulationRing (g, bounds, pos, startAngle, endAngle, s);
 
     if (s.hasKeyboardFocus (false))
     {

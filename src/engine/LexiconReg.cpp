@@ -15,6 +15,7 @@
 #include "engine/LexiconHooks.h"
 #include "engine/LexiconTable.h"
 #include "engine/MasterRack.h"
+#include "engine/NodeOverrides.h"
 
 namespace vibesynth {
 
@@ -279,12 +280,79 @@ namespace {
 // wrapper unchanged: one load and one predictable branch. Otherwise the shared hook layer
 // (LexiconHooks.cpp) applies the node's overrides and bypass, calls the
 // same wrapper and records the trace.
+//
+// M13: a hooked VM still skips the hook layer for calls whose module has
+// nothing set and no trace wanted (VmRackContext::hookModules, one load).
+// callHooked() would find no node and no sink and run the wrapper on the
+// same arguments, so this is bit-identical; it saves the argument copy and
+// lookups (~7 ns a call), which matters once one modulated knob hooks
+// every call of the voice.
+// M13: the hooked call for a slot module, specialized per function: the
+// common case (no trace, no bypass) inline with the argument count, kinds
+// and slot range as constants, and only the set arguments visited. The
+// same checks and maths as callHooked(), which takes every other case.
+#if defined(_MSC_VER)
+ #define VIBESYNTH_NOINLINE __declspec(noinline)
+#else
+ #define VIBESYNTH_NOINLINE __attribute__ ((noinline))
+#endif
+
+// Out of line, so the unhooked thunk stays one load, one branch and a tail
+// call (inlined, its frame would be set up on every call).
+template <int I>
+VIBESYNTH_NOINLINE EEL_F hookedCall (void* ctx, INT_PTR np, EEL_F** p) noexcept
+{
+    constexpr const LexiconEntry& e = kRegistrations[I].entry;
+    constexpr LexiconFn fn = kRegistrations[I].fn;
+    if constexpr (e.primary && e.numSlots > 0 && e.numArgs >= 1 && e.numArgs <= kMaxLexiconArgs
+                  && e.scope != LexiconScope::Master)
+    {
+        const VoiceRack* vr = static_cast<const VmRackContext*> (ctx)->voice;
+        bool plain = np >= e.numArgs && vr != nullptr && vr->capture == nullptr && vr->overrides != nullptr;
+        for (int i = 0; plain && i < e.numArgs; ++i)
+            plain = p[i] != nullptr;
+        if (plain)
+        {
+            const int slot = clampSlot (static_cast<double> (*p[0]), e.numSlots);
+            const NodeOverride* node = vr->overrides->activeNode (vr->rackKind, e.module, slot);
+            if (node == nullptr)
+                return fn (ctx, np, p);
+            if (e.bypass == BypassKind::None || node->bypass.load (std::memory_order_relaxed) == 0)
+            {
+                EEL_F vals[kMaxLexiconArgs];
+                EEL_F* ptrs[kMaxLexiconArgs];
+                const uint32_t bits = node->argBits.load (std::memory_order_acquire);
+                for (int i = 0; i < e.numArgs; ++i)
+                {
+                    ptrs[i] = p[i];
+                    if (isEditableArg (e.args[i].kind) && ((bits >> i) & 1u) != 0u)
+                    {
+                        vals[i] = static_cast<EEL_F> (effectiveArg (e.args[i], node->args[i], vr->macroVars,
+                                                                    vr->modValues, static_cast<double> (*p[i])));
+                        ptrs[i] = &vals[i];
+                    }
+                }
+                return fn (ctx, static_cast<INT_PTR> (e.numArgs), ptrs);
+            }
+        }
+    }
+    return callHooked (e, fn, ctx, np, p);
+}
+
 template <int I>
 EEL_F NSEEL_CGEN_CALL thunk (void* ctx, INT_PTR np, EEL_F** p)
 {
     // Every VM sets its context (PatchEngine.cpp), so ctx is never null.
-    if (static_cast<const VmRackContext*> (ctx)->hooked)
-        return callHooked (kRegistrations[I].entry, kRegistrations[I].fn, ctx, np, p);
+    constexpr int module = kRegistrations[I].entry.module;
+    const auto* rc = static_cast<const VmRackContext*> (ctx);
+    if constexpr (module >= 0 && module < 64)
+        if (rc->hooked && ((rc->hookModules >> module) & 1u) != 0u)
+        {
+            // The trace voice (an editor is open) takes M10's full path directly.
+            if (rc->voice != nullptr && rc->voice->capture != nullptr)
+                return callHooked (kRegistrations[I].entry, kRegistrations[I].fn, ctx, np, p);
+            return hookedCall<I> (ctx, np, p);
+        }
     return kRegistrations[I].fn (ctx, np, p);
 }
 

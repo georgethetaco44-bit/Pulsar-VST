@@ -70,6 +70,11 @@ struct VmRackContext
     // write (PatchPlayer, per chunk). False keeps every lexicon call on the
     // unchanged fast path: the thunk's one load and one branch.
     bool hooked = false;
+    // M13: while hooked, bit m = send module m's calls through the hook
+    // layer (it has a node set, or this VM records traces: all bits). Set
+    // with `hooked` (PatchPlayer, per segment); a node set in between waits
+    // for the next segment. All bits = every call, as in M10.
+    uint64_t hookModules = ~uint64_t { 0 };
 };
 
 // Registers every SPEC §5.2 MVP native function (once, off the audio

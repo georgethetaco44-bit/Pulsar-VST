@@ -28,7 +28,9 @@ HeaderState::Kind kindOf (VibeSynthAudioProcessor::StatusKind k)
 VibeSynthAudioProcessorEditor::VibeSynthAudioProcessorEditor (VibeSynthAudioProcessor& p)
     : AudioProcessorEditor (p),
       processor (p),
-      macros (p.apvts),
+      macros (p.apvts, &p),
+      modStrip (p),
+      modPopover (p),
       presets (p),
       history (p),
       inspector (p),
@@ -78,6 +80,16 @@ VibeSynthAudioProcessorEditor::VibeSynthAudioProcessorEditor (VibeSynthAudioProc
 
     content.addAndMakeVisible (header);
     content.addAndMakeVisible (macros);
+    content.addAndMakeVisible (modStrip);
+    content.addChildComponent (modPopover);
+    modStrip.onTileClicked = [this] (vibesynth::ModSource src)
+    {
+        if (modPopover.isOpen() && modPopover.activeSource() == src)
+            closeModPopover();
+        else
+            openModPopover (src);
+    };
+    modPopover.onClose = [this] { modStrip.setSelectedSource (std::nullopt); };
     content.addAndMakeVisible (nodes);
     content.addChildComponent (presets);
     content.addChildComponent (code);
@@ -154,7 +166,9 @@ void VibeSynthAudioProcessorEditor::layoutContent()
     // 960 x 640, 16 px margins and gutters, everything on the 8 px grid.
     constexpr int g = Theme::grid;
     header.setBounds (g * 2, g * 2, g * 116, g * 12);
-    macros.setBounds (g * 2, g * 16, g * 47, g * 36);
+    macros.setBounds (g * 2, g * 16, g * 47, g * 28);
+    modStrip.setBounds (g * 2, g * 45, g * 47, g * 7);
+    modPopover.setBounds (g * 2, g * 33, g * 47, g * 11);
     nodes.setBounds (g * 51, g * 16, g * 67, g * 36);
 
     tabRow = { g * 2, g * 54, g * 116, g * 4 };
@@ -280,6 +294,20 @@ void VibeSynthAudioProcessorEditor::updateChangeBox()
     inspector.setChangeEnabled (hasKey && loaded && ! busy, whyNot);
 }
 
+void VibeSynthAudioProcessorEditor::openModPopover (vibesynth::ModSource source)
+{
+    modStrip.setSelectedSource (source);
+    modPopover.openFor (source);
+    errorDetail.toFront (false);
+    settings.toFront (false);
+}
+
+void VibeSynthAudioProcessorEditor::closeModPopover()
+{
+    modPopover.close();
+    modStrip.setSelectedSource (std::nullopt);
+}
+
 void VibeSynthAudioProcessorEditor::closeInspector()
 {
     inspector.setVisible (false);
@@ -328,6 +356,8 @@ bool VibeSynthAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
             setErrorDetailOpen (false);
         else if (processor.isGenerating())
             processor.cancelGeneration();
+        else if (modPopover.isOpen())
+            closeModPopover();
         else if (inspector.isVisible())
             closeInspector();
         else
@@ -433,6 +463,8 @@ void VibeSynthAudioProcessorEditor::refresh()
         // M10: labels, dimming and tooltips follow the macro maps too.
         shownTweaksVersion = processor.getTweaksVersion();
         macros.showPatch (processor.getUiPatch());
+        modStrip.showPatch (processor.getUiPatch());
+        modPopover.refreshFromPatch();
         nodes.setTweaks (processor.getUiPatch());
         inspector.refreshFromPatch();
     }
@@ -487,6 +519,8 @@ void VibeSynthAudioProcessorEditor::tickMeters()
     const double now = juce::Time::getMillisecondCounterHiRes();
     nodes.tick (processor.nodeMeters(), now, &processor.nodeTraces());
     inspector.tick();
+    modStrip.tick();
+    macros.tick (processor.nodeOverrides());
     meter.tick (processor.takeOutputPeak (0), processor.takeOutputPeak (1), now);
 }
 

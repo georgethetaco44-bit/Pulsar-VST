@@ -251,7 +251,9 @@ target_sources(VibeSynthVST PRIVATE
 target_sources(VibeSynthVST PRIVATE
     src/ProcessorEdit.cpp
     src/ui/AuditionStrip.cpp
-    src/ui/SnapshotM11.cpp)
+    src/ui/SnapshotM11.cpp
+    src/ui/ModStrip.cpp
+    src/ui/SnapshotM13.cpp)
 
 target_include_directories(VibeSynthVST PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -296,6 +298,7 @@ add_library(vibesynth_engine STATIC
     src/engine/LexiconReg.cpp
     src/engine/LexiconHooks.cpp
     src/engine/NodeOverrides.cpp
+    src/engine/Modulators.cpp
     src/ai/NodeId.cpp
     src/patch/PatchTweaks.cpp
     src/patch/PatchBake.cpp)
@@ -356,7 +359,8 @@ target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/Edit.cpp
     tools/vibesynth_cli/SmokeM11.cpp
     tools/vibesynth_cli/SmokeM12.cpp
-    tools/vibesynth_cli/SmokeMerge.cpp)
+    tools/vibesynth_cli/SmokeMerge.cpp
+    tools/vibesynth_cli/SmokeM13.cpp)
 # --render writes WAV only: keep JUCE's bundled FLAC/Ogg Vorbis codecs (and
 # the Windows Media reader) out of the CLI.
 target_compile_definitions(vibesynth_cli PRIVATE

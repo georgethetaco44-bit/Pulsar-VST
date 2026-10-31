@@ -10,7 +10,7 @@
 
 namespace vibesynth {
 
-int applyPatchTweaks (const Patch& patch, OverrideTable& table)
+int applyPatchTweaks (const Patch& patch, OverrideTable& table, bool includeMods)
 {
     // What the table should hold, then only the differences are written,
     // so a knob drag never leaves the audio thread a moment with nothing
@@ -21,6 +21,7 @@ int applyPatchTweaks (const Patch& patch, OverrideTable& table)
         double user = 0.0;
         int macro = 0;
         double lo = 0.0, hi = 1.0;
+        double modDepth[kNumModSources] = {};
     };
     struct NodeWant
     {
@@ -68,9 +69,57 @@ int applyPatchTweaks (const Patch& patch, OverrideTable& table)
         if (k < 0 || ! isEditableArg (e->args[k].kind))
             continue;
         auto& w = at (n).args[k];
-        w = { ArgMode::Macro, 0.0, m.macro - 1, m.min, m.max };
+        w.mode = ArgMode::Macro;
+        w.user = 0.0;
+        w.macro = m.macro - 1;
+        w.lo = m.min;
+        w.hi = m.max;
         ++applied;
     }
+
+    double macroModWant[8][kNumModSources] = {};
+    if (includeMods)
+    {
+        for (int i = 0; i < kNumModLfos; ++i)
+            table.setLfoSpec (i, patch.mods.lfos[(size_t) i]);
+        for (int i = 0; i < kNumModEnvs; ++i)
+            table.setEnvSpec (i, patch.mods.envs[(size_t) i]);
+
+        for (const auto& a : patch.mods.assignments)
+        {
+            const int src = static_cast<int> (a.source);
+            if (src < 0 || src >= kNumModSources || std::abs (a.depth) < 1.0e-6)
+                continue;
+            if (a.isMacroTarget())
+            {
+                macroModWant[a.macro - 1][src] = std::clamp (a.depth, -1.0, 1.0);
+                ++applied;
+            }
+            else if (a.isNodeTarget())
+            {
+                NodeRef n;
+                if (! parseNodeId (a.node, n))
+                    continue;
+                const LexiconEntry* e = primaryLexiconEntry ((int) n.module);
+                const int k = e != nullptr ? lexiconArgIndex (*e, a.arg.c_str()) : -1;
+                if (k < 0 || ! isEditableArg (e->args[k].kind))
+                    continue;
+                at (n).args[k].modDepth[src] = std::clamp (a.depth, -1.0, 1.0);
+                ++applied;
+            }
+        }
+    }
+    else
+    {
+        for (int i = 0; i < kNumModLfos; ++i)
+            table.setLfoSpec (i, ModLfoSpec {});
+        for (int i = 0; i < kNumModEnvs; ++i)
+            table.setEnvSpec (i, ModEnvSpec {});
+    }
+
+    for (int m = 0; m < 8; ++m)
+        for (int src = 0; src < kNumModSources; ++src)
+            table.setMacroMod (m, static_cast<ModSource> (src), macroModWant[m][src]);
 
     for (int r = 0; r < kNumRackKinds; ++r)
         for (int m = 0; m < kNumModules; ++m)
@@ -92,6 +141,14 @@ int applyPatchTweaks (const Patch& patch, OverrideTable& table)
                     else
                     {
                         table.setArg (n.rack, n.module, s, k, a.mode, a.user, a.macro, a.lo, a.hi);
+                    }
+                    for (int src = 0; src < kNumModSources; ++src)
+                    {
+                        const double cur = node.args[k].modDepth[src].load (std::memory_order_relaxed);
+                        if (! samePatchNumber (cur, a.modDepth[src])
+                            || ((node.args[k].modMask.load (std::memory_order_relaxed) & (1u << src)) != 0u)
+                                   != (std::abs (a.modDepth[src]) >= 1.0e-6))
+                            table.setArgMod (n.rack, n.module, s, k, static_cast<ModSource> (src), a.modDepth[src]);
                     }
                 }
             }
@@ -187,6 +244,110 @@ void removePatchMacroMap (Patch& p, const std::string& node, const std::string& 
                        p.macroMaps.end());
 }
 
+void setPatchModLfo (Patch& p, int index, const ModLfoSpec& spec)
+{
+    if (index < 0 || index >= kNumModLfos)
+        return;
+    ModLfoSpec clean = spec;
+    clean.rateHz = quantisePatchNumber (std::clamp (isFiniteBitsD (spec.rateHz) ? spec.rateHz : 2.0, 0.01, 50.0));
+    p.mods.lfos[(size_t) index] = clean;
+}
+
+void setPatchModEnv (Patch& p, int index, const ModEnvSpec& spec)
+{
+    if (index < 0 || index >= kNumModEnvs)
+        return;
+    ModEnvSpec clean;
+    clean.attack  = quantisePatchNumber (std::clamp (isFiniteBitsD (spec.attack)  ? spec.attack  : 0.01, 0.001, 10.0));
+    clean.decay   = quantisePatchNumber (std::clamp (isFiniteBitsD (spec.decay)   ? spec.decay   : 0.2,  0.001, 10.0));
+    clean.sustain = quantisePatchNumber (std::clamp (isFiniteBitsD (spec.sustain) ? spec.sustain : 0.7,  0.0,   1.0));
+    clean.release = quantisePatchNumber (std::clamp (isFiniteBitsD (spec.release) ? spec.release : 0.3,  0.001, 10.0));
+    p.mods.envs[(size_t) index] = clean;
+}
+
+bool setPatchMacroMod (Patch& p, ModSource source, int macro, double depth)
+{
+    if (macro < 1 || macro > Patch::kMaxMacros)
+        return false;
+    const double q = quantisePatchNumber (std::clamp (isFiniteBitsD (depth) ? depth : 0.0, -1.0, 1.0));
+    if (std::abs (q) < 1.0e-6)
+    {
+        removePatchMacroMod (p, macro, static_cast<int> (source));
+        return true;
+    }
+    for (auto& a : p.mods.assignments)
+    {
+        if (a.isMacroTarget() && a.macro == macro)
+        {
+            a.source = source;
+            a.depth = q;
+            return true;
+        }
+    }
+    if ((int) p.mods.assignments.size() >= kMaxModAssignments)
+        return false;
+    ModAssignment ma;
+    ma.source = source;
+    ma.macro = macro;
+    ma.depth = q;
+    p.mods.assignments.push_back (ma);
+    return true;
+}
+
+void removePatchMacroMod (Patch& p, int macro, int sourceFilter)
+{
+    p.mods.assignments.erase (
+        std::remove_if (p.mods.assignments.begin(), p.mods.assignments.end(),
+                        [&] (const ModAssignment& a)
+                        {
+                            return a.isMacroTarget() && a.macro == macro
+                                && (sourceFilter < 0 || static_cast<int> (a.source) == sourceFilter);
+                        }),
+        p.mods.assignments.end());
+}
+
+bool setPatchArgMod (Patch& p, ModSource source, const std::string& node, const std::string& arg, double depth)
+{
+    if (node.empty() || arg.empty())
+        return false;
+    const double q = quantisePatchNumber (std::clamp (isFiniteBitsD (depth) ? depth : 0.0, -1.0, 1.0));
+    if (std::abs (q) < 1.0e-6)
+    {
+        removePatchArgMod (p, node, arg, static_cast<int> (source));
+        return true;
+    }
+    for (auto& a : p.mods.assignments)
+    {
+        if (a.isNodeTarget() && a.node == node && a.arg == arg)
+        {
+            a.source = source;
+            a.depth = q;
+            return true;
+        }
+    }
+    if ((int) p.mods.assignments.size() >= kMaxModAssignments)
+        return false;
+    ModAssignment ma;
+    ma.source = source;
+    ma.node = node;
+    ma.arg = arg;
+    ma.depth = q;
+    p.mods.assignments.push_back (ma);
+    return true;
+}
+
+void removePatchArgMod (Patch& p, const std::string& node, const std::string& arg, int sourceFilter)
+{
+    p.mods.assignments.erase (
+        std::remove_if (p.mods.assignments.begin(), p.mods.assignments.end(),
+                        [&] (const ModAssignment& a)
+                        {
+                            return a.isNodeTarget() && a.node == node && a.arg == arg
+                                && (sourceFilter < 0 || static_cast<int> (a.source) == sourceFilter);
+                        }),
+        p.mods.assignments.end());
+}
+
 std::vector<std::string> carrySurvivingTweaks (const Patch& base, const TouchedNodes& touched, Patch& into)
 {
     std::vector<std::string> dropped;
@@ -218,7 +379,30 @@ std::vector<std::string> carrySurvivingTweaks (const Patch& base, const TouchedN
         else
             dropped.push_back ("M" + std::to_string (m.macro) + " -> " + m.node + " " + m.arg);
     }
+
+    // M13: Change this node keeps modulation on macros, and on knobs whose
+    // node survives. Drops the rest and names them in the status detail.
+    into.mods.lfos = base.mods.lfos;
+    into.mods.envs = base.mods.envs;
+    into.mods.assignments.clear();
+    for (const auto& a : base.mods.assignments)
+    {
+        if (a.isMacroTarget() || (a.isNodeTarget() && survives (a.node)))
+            into.mods.assignments.push_back (a);
+        else if (a.isNodeTarget())
+            dropped.push_back (std::string (modSourceLabel (a.source)) + " -> " + a.node + " " + a.arg);
+    }
     return dropped;
+}
+
+void carryMutateMods (const Patch& base, Patch& into)
+{
+    into.mods.lfos = base.mods.lfos;
+    into.mods.envs = base.mods.envs;
+    into.mods.assignments.clear();
+    for (const auto& a : base.mods.assignments)
+        if (a.isMacroTarget())
+            into.mods.assignments.push_back (a);
 }
 
 const NodeTweak* findNodeTweak (const Patch& p, const std::string& node)
@@ -243,6 +427,22 @@ const MacroMap* findMacroMap (const Patch& p, const std::string& node, const std
     for (const auto& m : p.macroMaps)
         if (m.node == node && m.arg == arg)
             return &m;
+    return nullptr;
+}
+
+const ModAssignment* findMacroMod (const Patch& p, int macro)
+{
+    for (const auto& a : p.mods.assignments)
+        if (a.isMacroTarget() && a.macro == macro)
+            return &a;
+    return nullptr;
+}
+
+const ModAssignment* findArgMod (const Patch& p, const std::string& node, const std::string& arg)
+{
+    for (const auto& a : p.mods.assignments)
+        if (a.isNodeTarget() && a.node == node && a.arg == arg)
+            return &a;
     return nullptr;
 }
 

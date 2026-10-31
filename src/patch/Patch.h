@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 
+#include "engine/Modulators.h"
+
 namespace vibesynth {
 
 // Bitwise equality: "reads back identically" (no -Wfloat-equal, and NaN
@@ -119,6 +121,7 @@ struct Patch
     double trim = 1.0;              // output gain from the validator, 0 < trim <= 1
     std::vector<NodeTweak> tweaks;  // M10: optional; empty = absent from the file
     std::vector<MacroMap> macroMaps;
+    PatchMods mods;                 // M13: optional "mods" key; empty = absent from the file
 
     // Design budget for the voice section per voice-sample (SPEC §4.2.1, M6):
     // a mono patch sounds one voice, so it gets 4x the poly figure.
@@ -141,7 +144,8 @@ struct Patch
         return version == o.version && name == o.name && prompt == o.prompt
             && macros == o.macros && voiceMode == o.voiceMode && graphJson == o.graphJson
             && init == o.init && voice == o.voice && master == o.master
-            && samePatchNumber (trim, o.trim) && tweaks == o.tweaks && macroMaps == o.macroMaps;
+            && samePatchNumber (trim, o.trim) && tweaks == o.tweaks && macroMaps == o.macroMaps
+            && mods == o.mods;
     }
 };
 

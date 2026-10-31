@@ -92,6 +92,9 @@ void InspectorKnobLook::drawRotarySlider (juce::Graphics& g, int x, int y, int w
         g.setColour (text);
         g.fillEllipse (p.x - 2.0f, p.y - 2.0f, 4.0f, 4.0f);
     }
+
+    drawKnobModulationRing (g, bounds, pos, startAngle, endAngle, s);
+
     if (s.hasKeyboardFocus (false))
     {
         g.setColour (accent.withAlpha (0.8f));
@@ -290,6 +293,13 @@ ArgKnob::ArgKnob (const LexiconArg& m, int index) : meta (m), argIndex (index)
     knob.setMouseClickGrabsKeyboardFocus (false);
     knob.setTitle (meta.label);
     knob.onValueChange = [this] { knobMoved(); };
+    knob.onRightClick = [this] { showMenu(); };
+    knob.onModDepthChanged = [this] (ModSource src, double d)
+    {
+        modDepth = d;
+        if (onAssignMod)
+            onAssignMod (src, d);
+    };
     knob.addMouseListener (this, false);
     addAndMakeVisible (knob);
 
@@ -404,6 +414,19 @@ void ArgKnob::setState (ArgMode newMode, double newValue, int newMacro, double n
     configureKnob();
 }
 
+void ArgKnob::setModAssignment (const ModAssignment* mod)
+{
+    hasMod = (mod != nullptr && std::abs (mod->depth) >= 1.0e-6);
+    if (hasMod)
+    {
+        modSource = mod->source;
+        modDepth = mod->depth;
+    }
+    const double liveNorm = haveLive ? toNorm (live) : 0.5;
+    knob.setModulation (hasMod, modSource, modDepth, hasMod ? liveNorm : -1.0);
+    repaint();
+}
+
 void ArgKnob::setLive (double v)
 {
     const bool changed = ! haveLive || std::abs (v - live) > 1.0e-6 * (1.0 + std::abs (v));
@@ -411,7 +434,10 @@ void ArgKnob::setLive (double v)
     haveLive = true;
     if (! changed)
         return;
-    knob.getProperties().set ("live", toNorm (v));
+    const double norm = toNorm (v);
+    knob.getProperties().set ("live", norm);
+    if (hasMod)
+        knob.setModulation (true, modSource, modDepth, norm);
     if (mode == ArgMode::Macro || (mode == ArgMode::None && replaceSelected))
     {
         updating = true;
@@ -419,6 +445,36 @@ void ArgKnob::setLive (double v)
         updating = false;
     }
     knob.repaint();
+    repaint();
+}
+
+bool ArgKnob::isInterestedInDragSource (const SourceDetails& details)
+{
+    return details.description.toString().startsWith ("mod:");
+}
+
+void ArgKnob::itemDragEnter (const SourceDetails&)
+{
+    dragHover = true;
+    repaint();
+}
+
+void ArgKnob::itemDragExit (const SourceDetails&)
+{
+    dragHover = false;
+    repaint();
+}
+
+void ArgKnob::itemDropped (const SourceDetails& details)
+{
+    dragHover = false;
+    const juce::String desc = details.description.toString();
+    const int srcIdx = desc.fromFirstOccurrenceOf ("mod:", false, false).getIntValue();
+    if (srcIdx >= 0 && srcIdx < kNumModSources && onAssignMod)
+    {
+        const double d = hasMod ? modDepth : 0.5;
+        onAssignMod (static_cast<ModSource> (srcIdx), d);
+    }
     repaint();
 }
 
@@ -517,12 +573,27 @@ void ArgKnob::showMenu()
                              k.replaceSelected = false;
                              k.onTweak (0, 0.0);
                          }
+                         else if (result >= 100 && result < 100 + kNumModSources && k.onAssignMod)
+                         {
+                             const auto src = static_cast<ModSource> (result - 100);
+                             const double d = k.hasMod ? k.modDepth : 0.5;
+                             k.onAssignMod (src, d);
+                         }
+                         else if (result == 110 && k.onRemoveMod)
+                         {
+                             k.onRemoveMod();
+                         }
                      });
 }
 
 void ArgKnob::paint (juce::Graphics& g)
 {
     using namespace Theme;
+    if (dragHover)
+    {
+        g.setColour (accent.withAlpha (0.35f));
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), 4.0f, 1.5f);
+    }
     auto r = getLocalBounds();
     g.setColour (text);
     g.setFont (font (smallSize, Weight::Medium));
@@ -692,12 +763,28 @@ void NodeInspector::rebuild()
         knob->onMap = [this, name] (int macro, double lo, double hi)
         { processor.setNodeMacroMap (id, name, macro + 1, lo, hi); };
         knob->onUnmap = [this, name] { processor.clearNodeMacroMap (id, name); };
+        knob->onAssignMod = [this, name] (ModSource src, double depth)
+        { processor.setNodeArgMod (src, id, name, depth); };
+        knob->onRemoveMod = [this, name] { processor.clearNodeArgMod (id, name); };
         auto* raw = knob.get();
         knob->buildMenu = [this, raw] (juce::PopupMenu& m)
         {
             const auto& patch = processor.getUiPatch();
             const unsigned read = macrosRead (patch);
             const auto* map = findMacroMap (patch, id, raw->arg().name);
+            const auto* mod = findArgMod (patch, id, raw->arg().name);
+            m.addSectionHeader ("Modulate " + juce::String (raw->arg().label));
+            static const char* kModItems[] = {
+                "Modulate with LFO 1",
+                "Modulate with LFO 2",
+                "Modulate with Env 1",
+                "Modulate with Env 2"
+            };
+            for (int i = 0; i < kNumModSources; ++i)
+                m.addItem (100 + i, kModItems[i], true, mod != nullptr && static_cast<int> (mod->source) == i);
+            if (mod != nullptr)
+                m.addItem (110, "Remove modulation");
+            m.addSeparator();
             m.addSectionHeader ("Map " + juce::String (raw->arg().label) + " to a macro");
             for (int i = 0; i < 8; ++i)
             {
@@ -763,6 +850,7 @@ void NodeInspector::refreshFromPatch()
             k->setState (a->mode == ArgTweak::kReplace ? ArgMode::Replace : ArgMode::Offset, a->value, 0, 0, 1, {});
         else
             k->setState (ArgMode::None, 0.0, 0, 0, 1, {});
+        k->setModAssignment (findArgMod (patch, id, name));
     }
     repaint();
 }

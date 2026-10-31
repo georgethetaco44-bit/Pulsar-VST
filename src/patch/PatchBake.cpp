@@ -444,7 +444,9 @@ BakeResult bakePatch (const Patch& in)
 
     // The engine's own resolution (names, ranges, applied doubles).
     auto table = std::make_unique<OverrideTable>();
-    applyPatchTweaks (in, *table);
+    applyPatchTweaks (in, *table, false);
+    if (! in.mods.empty())
+        r.notes.push_back ("mods left untouched (they aren't code)");
 
     std::string prefix = "bake_t";
     while (in.init.find (prefix) != std::string::npos || in.voice.find (prefix) != std::string::npos

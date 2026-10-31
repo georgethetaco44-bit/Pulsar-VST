@@ -30,6 +30,7 @@
 
 #include "engine/NodeOverrides.h"
 #include "patch/PatchTweaks.h"
+#include "ui/ModStrip.h"
 #include "ui/Theme.h"
 
 class VibeSynthAudioProcessor;
@@ -67,7 +68,9 @@ private:
     double cutoff = 0.5, res = 0.0, rate = 96000.0;
 };
 
-class ArgKnob final : public juce::Component, public juce::SettableTooltipClient
+class ArgKnob final : public juce::Component,
+                      public juce::SettableTooltipClient,
+                      public juce::DragAndDropTarget
 {
 public:
     ArgKnob (const LexiconArg& meta, int argIndex);
@@ -75,13 +78,22 @@ public:
 
     // The saved state of this argument (from the patch).
     void setState (ArgMode mode, double value, int macro, double lo, double hi, const juce::String& macroText);
+    void setModAssignment (const ModAssignment* mod);
     void setLive (double value);  // the effective value the function receives
 
     std::function<void (int mode, double value)> onTweak;   // mode 0 clears
     std::function<void (int macro, double lo, double hi)> onMap;
     std::function<void()> onUnmap;
+    std::function<void (ModSource, double)> onAssignMod;
+    std::function<void()> onRemoveMod;
     // Fills the right-click menu (the inspector knows the macro labels).
     std::function<void (juce::PopupMenu&)> buildMenu;
+
+    // DragAndDropTarget (dropping a modulator tile onto an inspector knob).
+    bool isInterestedInDragSource (const SourceDetails& dragSourceDetails) override;
+    void itemDragEnter (const SourceDetails&) override;
+    void itemDragExit (const SourceDetails&) override;
+    void itemDropped (const SourceDetails& dragSourceDetails) override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -93,7 +105,7 @@ public:
     int index() const noexcept { return argIndex; }
     double liveValue() const noexcept { return live; }
 
-    juce::Slider knob;
+    ModAwareSlider knob;
     juce::Slider mapRange;   // two-value: the macro map's min and max
 
 private:
@@ -117,6 +129,10 @@ private:
     double lo = 0.0, hi = 1.0;
     double live = 0.0;
     bool haveLive = false;
+    bool hasMod = false;
+    ModSource modSource = ModSource::Lfo1;
+    double modDepth = 0.0;
+    bool dragHover = false;
     juce::String macroText;
     bool updating = false;
     juce::Rectangle<int> toggleArea;  // the Offset | Replace segments (drawn here)
