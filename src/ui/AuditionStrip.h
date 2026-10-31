@@ -1,8 +1,9 @@
 #pragma once
 
 // M11 audition strip (SPEC §9.7). While a Mutate session is open it covers
-// the bottom page (Presets / Code / History): the original and the 4
-// variations as cards, filled in as each one finishes.
+// the bottom page (Presets / Code / History) in the node inspector's place
+// and frame (one of the two at a time): the original and the 4 variations
+// as cards, filled in as each one finishes.
 //
 //   [ORIGINAL]  [DARKER]  [MOVEMENT]  [BRIGHTER]  [WEIRDER]
 //    Reese       Dark Reese  Waiting · 9 s  Failed: ...  Testing
@@ -58,6 +59,20 @@ private:
     juce::Rectangle<int> titleRow;
     int hover = -2;
     int seconds = 0;
+};
+
+// A short hint over the node view while the strip is open ("Keep or
+// Discard the variation first"); the editor places it and hides it again.
+class HintBubble final : public juce::Component
+{
+public:
+    HintBubble();
+    void setText (const juce::String& t);
+    int widthForText() const;
+    void paint (juce::Graphics&) override;
+
+private:
+    juce::String text;
 };
 
 } // namespace vibesynth::ui

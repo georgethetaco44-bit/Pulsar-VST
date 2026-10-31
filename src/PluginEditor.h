@@ -7,9 +7,9 @@
 
 #include "PluginProcessor.h"
 #include "ui/AuditionStrip.h"
-#include "ui/ChangeNodePopup.h"
 #include "ui/CodeView.h"
 #include "ui/MacroPanel.h"
+#include "ui/NodeInspector.h"
 #include "ui/NodeView.h"
 #include "ui/PresetBrowser.h"
 #include "ui/PromptPanel.h"
@@ -26,11 +26,16 @@ namespace vibesynth::ui { class SnapshotDriver; }
     everything stays vector and HiDPI-clean.
 
       header   wordmark, prompt (Enter / Shift+Enter / Esc), Generate or
-               Cancel, status line (stage + elapsed, result, amber error
-               with the full reason on click)
+               Cancel, Mutate and Undo (M11), status line (stage +
+               elapsed, result, amber error with the full reason on click)
       left     8 macro knobs, Voice Mode, Glide
-      right    node visualizer (30 fps meters)
-      bottom   Presets / Code / History tabs, output meter, settings gear
+      right    node visualizer (30 fps meters and traces); click a node
+               for the inspector, right-click for its Change box
+      bottom   Presets / Code / History tabs, output meter, settings gear;
+               the page area also holds the node inspector (M10) or the
+               audition strip (M11), never both: Mutate closes the
+               inspector, and while the strip is open a node click shows
+               "Keep or Discard the variation first"
 
     Everything the editor shows lives in the processor, which notifies it
     through ChangeBroadcaster on the message thread; no worker calls the
@@ -54,7 +59,6 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
-    void mouseDown (const juce::MouseEvent&) override;  // M11: right-click on a node
 
     // Snapshot tool hooks.
     VibeSynthAudioProcessor& getProcessor() noexcept { return processor; }
@@ -69,12 +73,19 @@ public:
     void showSettingsForSnapshot (const juce::String& fakeKey, const VibeSynthAudioProcessor::KeyTest& result);
     void closeSettings() { settings.close(); }
     vibesynth::ui::NodeView& nodeView() noexcept { return nodes; }
+    // M10 node inspector (SPEC §9.6): opens over the page area (the audition
+    // strip's place; only one of the two is open). `focusChange`: a
+    // right-click, the "Change this node" box gets the keyboard focus.
+    vibesynth::ui::NodeInspector& nodeInspector() noexcept { return inspector; }
+    void openInspector (const vibesynth::NodeRef& node, bool focusChange = false);
+    void closeInspector();
     void tickMeters();          // one meter frame now
     // M11 snapshot hooks: a faked audition strip (nullopt: the real one),
-    // and the change popup opened on a node with some text.
+    // a faked "a change is running" (nullopt: the real state), and a click
+    // on a node as the user would make it (the strip's hint, the inspector).
     void setMutateOverride (std::optional<vibesynth::MutateView> view);
-    void openChangePopup (const juce::String& nodeId, const juce::String& text = {});
-    void closeChangePopup() { changePopup.close(); }
+    void setChangeRunningOverride (std::optional<bool> running);
+    void clickNode (const vibesynth::NodeRef& node, bool popupMenu);
 
     static constexpr int numPages = 3;
 
@@ -87,6 +98,9 @@ private:
     void layoutContent();
     void placeErrorDetail();
     void setFocusOrder();
+    void nodeClicked (const vibesynth::NodeRef& node, bool popupMenu);
+    void updateChangeBox();
+    void showHint (const juce::String& text);
 
     VibeSynthAudioProcessor& processor;
     vibesynth::ui::PulsarLookAndFeel lookAndFeel;  // outlives every child (declared first)
@@ -99,11 +113,12 @@ private:
     vibesynth::ui::PresetBrowser presets;
     vibesynth::ui::CodeView code;
     vibesynth::ui::HistoryPage history;
+    vibesynth::ui::NodeInspector inspector;
     vibesynth::ui::OutputMeter meter;
     vibesynth::ui::GearButton gear;
     vibesynth::ui::ErrorDetail errorDetail;
     vibesynth::ui::AuditionStrip strip;        // M11
-    vibesynth::ui::ChangeNodePopup changePopup; // M11
+    vibesynth::ui::HintBubble hint;            // M11: "Keep or Discard the variation first"
     vibesynth::ui::SettingsPanel settings;
     juce::TooltipWindow tooltips { this, 600 };
 
@@ -112,11 +127,15 @@ private:
     bool errorOpen = false;
     int shownPatchVersion = -1;
     int shownNodesVersion = -1;
+    int shownTweaksVersion = -1;
     juce::String shownSource;
     vibesynth::ui::HeaderState shownHeader;
     std::optional<vibesynth::ui::HeaderState> headerOverride;
     std::optional<bool> keyOverride;
     std::optional<vibesynth::MutateView> mutateOverride;  // M11
+    std::optional<bool> changeRunningOverride;
+    int changeSentPatchVersion = -1;  // a change was sent from the inspector at this patch version
+    double hintUntilMs = 0.0;
     int ticks = 0;
 
     std::unique_ptr<vibesynth::ui::SnapshotDriver> snapshot;

@@ -71,6 +71,8 @@ VibeSynthAudioProcessor::VibeSynthAudioProcessor()
     uiPatch = defaultPatch;
     probeRequested = true; // the default patch's nodes, once the worker runs
 
+    player.setNodeHooks (overrideTable.get(), traceBank.get());  // M10
+
     worker.startThread();
     generationWorker.startThread(); // idles until generate(); no network here
 }
@@ -495,6 +497,9 @@ void VibeSynthAudioProcessor::runGeneration (const vibesynth::GenerationRequest&
             note << "\nNo longer in the patch: " << juce::String (res.lostNodes);
         for (const auto& l : res.labelChanges)
             note << "\nMacro relabelled: " << juce::String (l);
+        // M10 merge: tweaks on surviving nodes are kept (res.patch has them).
+        for (const auto& t : res.droppedTweaks)
+            note << "\nTweak dropped (its node is gone): " << juce::String (t);
     }
     job.detail = note;
     postJob (std::move (job));
@@ -807,6 +812,7 @@ void VibeSynthAudioProcessor::handleAsyncUpdate()
         if (r.pushUndo)
             pushUndoForSwap(); // M11: before uiPatch, the macros and the source change
         uiPatch = r.patch;
+        applyTweaksFrom (r.patch);  // M10: the new patch's tweaks (none clears them)
         ++patchVersion;
         if (r.sourceKey.isNotEmpty())
             activeSource = r.sourceKey;

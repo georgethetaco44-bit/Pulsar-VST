@@ -171,9 +171,9 @@ set(VIBESYNTH_AI_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/PromptBuilder.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/ResponseParser.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/Generator.cpp")
-# M11 (SPEC §9.7): node ids for "Change this node", and Mutate.
+# M11 (SPEC §9.7): Mutate. (Node ids, src/ai/NodeId.cpp, are JUCE-free and
+# live in vibesynth_engine with the saved tweaks that use them.)
 list(APPEND VIBESYNTH_AI_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/NodeId.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/ai/Mutator.cpp")
 
 # M8: prompt resources (SPEC §6.1), embedded for the plugin and the CLI.
@@ -231,6 +231,7 @@ set(VIBESYNTH_UI_SOURCES
     src/ui/MacroPanel.cpp
     src/ui/NodeLayout.cpp
     src/ui/NodeView.cpp
+    src/ui/NodeInspector.cpp
     src/ui/PresetBrowser.cpp
     src/ui/CodeView.cpp
     src/ui/SettingsPanel.cpp
@@ -238,17 +239,18 @@ set(VIBESYNTH_UI_SOURCES
 
 target_sources(VibeSynthVST PRIVATE
     src/PluginProcessor.cpp
+    src/PluginProcessorTweaks.cpp
     src/PluginEditor.cpp
     ${VIBESYNTH_UI_SOURCES}
     ${VIBESYNTH_PATCH_SOURCES}
     ${VIBESYNTH_AI_SOURCES})
 
 # M11 (SPEC §9.7): Mutate, Change this node and Undo in the processor and
-# the editor (audition strip, change popup, their review snapshots).
+# the editor (audition strip, its review snapshots; "Change this node" is
+# the M10 inspector's text box).
 target_sources(VibeSynthVST PRIVATE
     src/ProcessorEdit.cpp
     src/ui/AuditionStrip.cpp
-    src/ui/ChangeNodePopup.cpp
     src/ui/SnapshotM11.cpp)
 
 target_include_directories(VibeSynthVST PRIVATE
@@ -290,7 +292,16 @@ add_library(vibesynth_engine STATIC
     src/engine/LexiconFn4.cpp
     src/engine/LexiconFn5.cpp
     src/engine/LexiconFn6.cpp
-    src/engine/LexiconReg.cpp)
+    src/engine/LexiconReg.cpp
+    src/engine/LexiconHooks.cpp
+    src/engine/NodeOverrides.cpp
+    src/ai/NodeId.cpp
+    src/patch/PatchTweaks.cpp
+    src/patch/PatchBake.cpp)
+# M10: the override maths must round like EEL2's separate multiply and add
+# (vibesynth_cli --bake output renders identically), so no FMA contraction.
+set_source_files_properties(src/engine/NodeOverrides.cpp PROPERTIES COMPILE_OPTIONS
+    "$<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:-ffp-contract=off>")
 target_include_directories(vibesynth_engine PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/WDL/WDL")
@@ -333,13 +344,17 @@ target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/SmokeM8.cpp
     tools/vibesynth_cli/Batch.cpp
     tools/vibesynth_cli/SmokeM9.cpp
+    tools/vibesynth_cli/SmokeM10.cpp
+    tools/vibesynth_cli/Bake.cpp
     src/ui/NodeLayout.cpp
     ${VIBESYNTH_PATCH_SOURCES}
     ${VIBESYNTH_AI_SOURCES})
-# M11: --change, --mutate, --change-batch and the M11 smoketests.
+# M11: --change, --mutate, --change-batch and the M11 smoketests; the
+# M10 + M11 merge checks.
 target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/Edit.cpp
-    tools/vibesynth_cli/SmokeM11.cpp)
+    tools/vibesynth_cli/SmokeM11.cpp
+    tools/vibesynth_cli/SmokeMerge.cpp)
 # --render writes WAV only: keep JUCE's bundled FLAC/Ogg Vorbis codecs (and
 # the Windows Media reader) out of the CLI.
 target_compile_definitions(vibesynth_cli PRIVATE

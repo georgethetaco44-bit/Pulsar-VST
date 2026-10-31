@@ -4,7 +4,6 @@
 
 #include <cmath>
 
-#include "ai/NodeId.h"
 
 namespace vibesynth::ui {
 
@@ -55,23 +54,113 @@ float meterLevel (float peak) noexcept
 NodeView::NodeView()
 {
     setTooltip ("Nodes: the module slots the patch's code really runs (found by the offline test). "
-                "They glow with their live level. Shapers without a slot are numbered by call order "
-                "(fx_sat #1 is the second fx_sat in a sample). Lines: the model's own description of the "
-                "signal flow.");
+                "They glow with their live level and draw their live output. Click one to shape it. "
+                "Shapers without a slot are numbered by call order (fx_sat #1 is the second fx_sat in a "
+                "sample). Lines: the model's own description of the signal flow.");
     setInterceptsMouseClicks (true, false);
 }
 
 void NodeView::setGraph (const TouchedNodes& nodes, bool isKnown, const std::string& graphJson)
 {
+    NodeRef keep;
+    const bool hadSelection = selected >= 0;
+    if (hadSelection)
+        keep = refOf ((size_t) selected);
     known = isKnown;
     layout = layoutNodeGraph (nodes, parseEdges (graphJson));
     levels.assign (layout.nodes.size(), 0.0f);
+    pillTraces.assign (layout.nodes.size(), {});
+    tweakState.assign (layout.nodes.size(), 0);
+    tweakKey.clear();
+    selected = hadSelection ? indexOf (keep) : -1;
     glowing = false;
     place();
     repaint();
 }
 
-void NodeView::tick (NodeMeterBank& bank, double nowMs)
+NodeRef NodeView::refOf (size_t i) const
+{
+    const auto& n = layout.nodes[i];
+    return { n.master ? RackKind::Master : RackKind::Voice, n.module, n.slot };
+}
+
+int NodeView::indexOf (const NodeRef& node) const
+{
+    for (size_t i = 0; i < layout.nodes.size(); ++i)
+        if (refOf (i) == node)
+            return (int) i;
+    return -1;
+}
+
+bool NodeView::hasNode (const NodeRef& node) const
+{
+    return indexOf (node) >= 0;
+}
+
+juce::Rectangle<float> NodeView::nodeBounds (const NodeRef& node) const
+{
+    const int i = indexOf (node);
+    return i >= 0 && i < (int) boxes.size() ? boxes[(size_t) i] : juce::Rectangle<float>();
+}
+
+void NodeView::setSelected (const NodeRef* node)
+{
+    const int s = node != nullptr ? indexOf (*node) : -1;
+    if (s != selected)
+    {
+        selected = s;
+        repaint();
+    }
+}
+
+void NodeView::setTweaks (const Patch& patch)
+{
+    std::string key;
+    for (const auto& t : patch.tweaks)
+        key += t.node + (t.bypass ? "!" : "") + (t.args.empty() ? "" : "*") + ";";
+    for (const auto& m : patch.macroMaps)
+        key += m.node + "*;";
+    if (key == tweakKey && tweakState.size() == layout.nodes.size())
+        return;
+    tweakKey = key;
+    tweakState.assign (layout.nodes.size(), 0);
+    for (size_t i = 0; i < layout.nodes.size(); ++i)
+    {
+        const std::string id = nodeIdString (refOf (i));
+        const auto* t = findNodeTweak (patch, id);
+        bool mapped = false;
+        for (const auto& m : patch.macroMaps)
+            mapped = mapped || m.node == id;
+        if (t != nullptr && t->bypass)
+            tweakState[i] = 2;
+        else if ((t != nullptr && ! t->args.empty()) || mapped)
+            tweakState[i] = 1;
+    }
+    repaint();
+}
+
+int NodeView::nodeIndexAt (juce::Point<float> p) const
+{
+    for (size_t i = 0; i < boxes.size(); ++i)
+        if (boxes[i].expanded (2.0f).contains (p))
+            return (int) i;
+    return -1;
+}
+
+void NodeView::mouseDown (const juce::MouseEvent& e)
+{
+    const int i = nodeIndexAt (e.position);
+    if (i >= 0 && onNodeClicked)
+        onNodeClicked (refOf ((size_t) i), e.mods.isPopupMenu());
+}
+
+void NodeView::mouseMove (const juce::MouseEvent& e)
+{
+    setMouseCursor (nodeIndexAt (e.position) >= 0 ? juce::MouseCursor::PointingHandCursor
+                                                  : juce::MouseCursor::NormalCursor);
+}
+
+void NodeView::tick (NodeMeterBank& bank, double nowMs, const TraceBank* traces)
 {
     const float decay = lastTickMs > 0.0 ? decayFactor (nowMs - lastTickMs) : 0.0f;
     lastTickMs = nowMs;
@@ -96,8 +185,42 @@ void NodeView::tick (NodeMeterBank& bank, double nowMs)
         levels[i] = level;
         any = any || level > 0.0f;
     }
+    // M10: new pill traces since the last frame.
+    bool traced = false;
+    if (traces != nullptr)
+    {
+        float buf[NodeTrace::kPoints];
+        for (size_t i = 0; i < layout.nodes.size() && i < pillTraces.size(); ++i)
+        {
+            const auto& n = layout.nodes[i];
+            const TraceSink& sink = n.master ? traces->master : traces->voice;
+            const NodeTrace& t = sink.nodes[(int) n.module][n.slot];
+            auto& pt = pillTraces[i];
+            const uint32_t stamp = t.lastBlock.load (std::memory_order_relaxed);
+            if (stamp == pt.stamp)
+                continue;
+            pt.stamp = stamp;
+            int count = 0;
+            bool ring = false;
+            if (! readNodeTrace (t, buf, count, ring) || count < 2)
+                continue;
+            float peak = 0.0f, lowest = 0.0f;
+            for (int k = 0; k < count; ++k)
+            {
+                peak = juce::jmax (peak, std::abs (buf[k]));
+                lowest = juce::jmin (lowest, buf[k]);
+            }
+            pt.unipolar = ring && lowest > -1.0e-3f;
+            pt.n = kPillPoints;
+            const float scale = peak > 1.0e-4f ? 1.0f / peak : 0.0f;
+            for (int k = 0; k < kPillPoints; ++k)
+                pt.y[(size_t) k] = buf[(k * (count - 1)) / (kPillPoints - 1)] * scale;
+            traced = true;
+        }
+    }
+
     // Silent and already drawn silent: nothing to repaint.
-    if (any || glowing)
+    if (any || glowing || traced)
         repaint (graphArea.expanded (Theme::grid * 2));
     glowing = any;
 }
@@ -130,19 +253,6 @@ std::vector<std::string> NodeView::placementProblems() const
                                     + NodeGraphLayout::label (layout.nodes[j]));
     }
     return problems;
-}
-
-bool NodeView::nodeAt (juce::Point<float> pos, std::string& id, juce::Rectangle<float>& pill) const
-{
-    for (size_t i = 0; i < boxes.size() && i < layout.nodes.size(); ++i)
-        if (boxes[i].contains (pos))
-        {
-            const auto& n = layout.nodes[i];
-            id = nodeIdString ({ n.master, n.module, n.slot });  // M11
-            pill = boxes[i];
-            return true;
-        }
-    return false;
 }
 
 void NodeView::resized()
@@ -418,11 +528,60 @@ void NodeView::paint (juce::Graphics& g)
                 g.fillRoundedRectangle (box.expanded (grow), box.getHeight() * 0.5f + grow);
             }
         }
+        const uint8_t tweak = i < tweakState.size() ? tweakState[i] : 0;
+        const bool bypassed = tweak == 2;
+        const bool isSelected = (int) i == selected;
         g.setColour (control.interpolatedWith (accent, 0.16f * level));
         g.fillRoundedRectangle (box, box.getHeight() * 0.5f);
-        g.setColour (level > 0.0f ? accent.withAlpha (0.35f + 0.65f * level) : border.brighter (0.25f));
-        g.drawRoundedRectangle (box.reduced (0.5f), box.getHeight() * 0.5f, level > 0.0f ? 1.5f : hairline);
-        g.setColour (text.withAlpha (0.78f + 0.22f * level));
+
+        // M10: the live trace, small and behind the label.
+        if (i < pillTraces.size() && pillTraces[i].n > 1)
+        {
+            const auto& pt = pillTraces[i];
+            const auto area = box.reduced (box.getHeight() * 0.45f, 5.0f);
+            juce::Path trace;
+            for (int k = 0; k < pt.n; ++k)
+            {
+                const float x = area.getX() + area.getWidth() * (float) k / (float) (pt.n - 1);
+                const float v = juce::jlimit (-1.0f, 1.0f, pt.y[(size_t) k]);
+                const float y = pt.unipolar ? area.getBottom() - v * area.getHeight()
+                                            : area.getCentreY() - v * area.getHeight() * 0.5f;
+                if (k == 0)
+                    trace.startNewSubPath (x, y);
+                else
+                    trace.lineTo (x, y);
+            }
+            g.setColour (accent.withAlpha ((isSelected ? 0.40f : 0.22f) * (bypassed ? 0.5f : 1.0f)));
+            g.strokePath (trace, juce::PathStrokeType (1.2f, juce::PathStrokeType::curved));
+        }
+
+        const float corner = box.getHeight() * 0.5f;
+        if (bypassed)
+        {
+            juce::Path outline, dashed;
+            outline.addRoundedRectangle (box.reduced (0.5f), corner);
+            const float dashes[] = { 3.0f, 2.5f };
+            juce::PathStrokeType (1.0f).createDashedStroke (dashed, outline, dashes, 2);
+            g.setColour (dimText);
+            g.fillPath (dashed);
+        }
+        else
+        {
+            g.setColour (level > 0.0f ? accent.withAlpha (0.35f + 0.65f * level) : border.brighter (0.25f));
+            g.drawRoundedRectangle (box.reduced (0.5f), corner, level > 0.0f ? 1.5f : hairline);
+        }
+        if (isSelected)
+        {
+            g.setColour (text.withAlpha (0.9f));
+            g.drawRoundedRectangle (box.expanded (2.5f), corner + 2.5f, 1.25f);
+        }
+        if (tweak == 1)
+        {
+            // A small accent dot: this node has tweaks or macro maps.
+            g.setColour (accent);
+            g.fillEllipse (box.getRight() - corner * 0.5f - 2.5f, box.getY() + 3.0f, 5.0f, 5.0f);
+        }
+        g.setColour (text.withAlpha ((0.78f + 0.22f * level) * (bypassed ? 0.55f : 1.0f)));
         g.setFont (labelFont);
         g.drawFittedText (juce::String (NodeGraphLayout::label (layout.nodes[i])), box.toNearestInt().reduced (3, 0),
                           juce::Justification::centred, 1, 0.8f);

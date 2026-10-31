@@ -8,6 +8,7 @@
 #include <mutex>
 #include <thread>
 
+#include "patch/PatchBake.h"
 #include "patch/PatchValidator.h"
 
 namespace vibesynth {
@@ -47,6 +48,29 @@ struct RateGate
 };
 
 } // namespace
+
+MutateBase prepareMutateBase (const Patch& active)
+{
+    MutateBase b;
+    b.patch = active;
+    b.hadTweaks = ! active.tweaks.empty() || ! active.macroMaps.empty();
+    if (! b.hadTweaks)
+        return b;
+    const BakeResult baked = bakePatch (active);
+    if (baked.ok)
+    {
+        b.patch = baked.patch;
+        b.baked = true;
+    }
+    else
+    {
+        b.note = "Your tweaks weren't included in the variations (they couldn't be written into the code: "
+               + baked.error + ").";
+    }
+    b.patch.tweaks.clear();
+    b.patch.macroMaps.clear();
+    return b;
+}
 
 bool Mutator::isRateLimit (const ChatReply& reply)
 {

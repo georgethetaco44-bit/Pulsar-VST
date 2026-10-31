@@ -19,10 +19,14 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <array>
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "engine/NodeMeters.h"
+#include "engine/NodeOverrides.h"
+#include "patch/PatchTweaks.h"
 #include "ui/NodeLayout.h"
 #include "ui/Theme.h"
 
@@ -39,7 +43,21 @@ public:
     // `known` false: the node list is still being computed.
     void setGraph (const TouchedNodes& nodes, bool known, const std::string& graphJson);
     // Takes the meters and advances the decay; repaints only if needed.
-    void tick (NodeMeterBank& bank, double nowMs);
+    // M10: also redraws each pill's live trace (behind its label) when the
+    // audio thread has written a new one.
+    void tick (NodeMeterBank& bank, double nowMs, const TraceBank* traces = nullptr);
+
+    // M10 (SPEC §9.6): clicking a pill opens the inspector. `popupMenu`:
+    // a right-click (M11: the inspector opens on its Change box).
+    std::function<void (const NodeRef&, bool popupMenu)> onNodeClicked;
+    // The inspected node (outlined), or none.
+    void setSelected (const NodeRef* node);
+    // Which nodes carry tweaks (a dot) or are bypassed (dashed, dimmed).
+    void setTweaks (const Patch& patch);
+    bool hasNode (const NodeRef& node) const;
+    juce::Rectangle<float> nodeBounds (const NodeRef& node) const;  // empty if absent
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -50,14 +68,27 @@ public:
     // all is well. pillFont() is the label size in use.
     std::vector<std::string> placementProblems() const;
     float pillFont() const noexcept { return pillFontSize; }
-    // M11: the node under `pos` (its id for "Change this node", e.g.
-    // "flt_lp:0" or "master/bus_sat#1", and its pill); false if none.
-    bool nodeAt (juce::Point<float> pos, std::string& id, juce::Rectangle<float>& pill) const;
 
 private:
     void place();
+    int nodeIndexAt (juce::Point<float> p) const;
+    int indexOf (const NodeRef& node) const;
+    NodeRef refOf (size_t i) const;
+
+    static constexpr int kPillPoints = 48;
+    struct PillTrace
+    {
+        std::array<float, kPillPoints> y {};  // -1..1 (bipolar) or 0..1 (unipolar), already scaled
+        int n = 0;
+        bool unipolar = false;
+        uint32_t stamp = 0;     // TraceSink::block at the last read
+    };
 
     NodeGraphLayout layout;
+    std::vector<PillTrace> pillTraces;           // per layout node
+    std::vector<uint8_t> tweakState;             // per layout node: 1 tweaked, 2 bypassed
+    int selected = -1;
+    std::string tweakKey;                         // the tweaks setTweaks() last saw
     bool known = false;
     std::vector<juce::Rectangle<float>> boxes;   // per layout node
     std::vector<float> levels;                   // per layout node, 0..1 after decay

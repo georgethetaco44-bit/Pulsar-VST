@@ -698,7 +698,9 @@ read-only.
   node" keeps the tweaks whose (module, slot) still exists. Mutate bakes the
   tweaks into the patch it sends (the model only sees code), so variations
   keep the user's shaping and start with no tweaks; if bake refuses, it sends
-  the unbaked patch and says so.
+  the unbaked patch and says so. Merge check (Oct 31): a macro map survived
+  in 4/4 variations; a cutoff offset was rewritten by the direction in all 4,
+  which is intended (a variation is meant to move things).
 - **Bake (developer tool).** `vibesynth_cli --bake in.pulsar out.pulsar`
   rewrites the code so that tweaks become part of it (overrides folded into
   the call arguments, bypassed calls replaced). Used to turn hand-shaped
@@ -994,6 +996,9 @@ Each milestone has an exit test. Don't start the next until it passes.
     become the LLM examples (via `--bake`). *Exit: the user keeps ≥ 10 of 15.*
 15. **Release polish.** README with Gatekeeper instructions, tagged GitHub
     release, demo video script. Code freeze the evening of Nov 3.
+    UI nits from the M10/M11 merge: the status line says "Generating:" during
+    a Change; the response readout shows "957.403 HZ" (should be "957 Hz");
+    slotless bus pills read "bus_mono_low 0".
 16. **[LATER]** extra libraries (§5.2 LATER list), editable wiring, Breed.
 
 **Schedule (deadline Nov 4, 6 PM PST):** Oct 31: M10 and M11 in parallel

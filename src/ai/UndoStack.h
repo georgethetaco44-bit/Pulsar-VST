@@ -22,24 +22,20 @@ struct PatchSnapshot
 {
     static constexpr int kNumMacros = 8;
 
-    Patch patch;                           // code, labels, defaults, trim
+    Patch patch;                           // code, labels, defaults, trim, tweaks, macro maps
     std::array<float, kNumMacros> macros {}; // the macro parameters' values
     std::string source;                    // the editor's highlight: "builtin:3", a file path, ...
     int program = -1;                      // the host program index then
     TouchedNodes nodes;                    // the node view's list, if known
     bool nodesKnown = false;
-    // M10 hook (SPEC §9.6): the node inspector's "tweaks" and "macroMaps"
-    // as their .pulsar JSON. Filled by the processor's captureSnapshot()
-    // and applied by applySnapshot(); empty until M10 is merged.
-    std::string tweaksJson;
-    std::string macroMapsJson;
+    // M10's tweaks and macro maps are part of `patch` (Patch::tweaks,
+    // macroMaps), so they need no field of their own.
 
     // Bit-exact (patch numbers and macro floats), for the smoketest.
     bool sameAs (const PatchSnapshot& o) const noexcept
     {
         return patch == o.patch && std::memcmp (macros.data(), o.macros.data(), sizeof (float) * kNumMacros) == 0
-            && source == o.source && program == o.program && nodes == o.nodes && nodesKnown == o.nodesKnown
-            && tweaksJson == o.tweaksJson && macroMapsJson == o.macroMapsJson;
+            && source == o.source && program == o.program && nodes == o.nodes && nodesKnown == o.nodesKnown;
     }
 };
 

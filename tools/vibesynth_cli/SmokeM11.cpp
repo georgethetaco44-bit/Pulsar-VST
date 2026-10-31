@@ -496,7 +496,8 @@ bool smokeUndoStack()
         s.program = i;
         s.nodes.voice[2] = (uint32_t) i;
         s.nodesKnown = true;
-        s.tweaksJson = i == 3 ? "{\"flt_lp:0\": {}}" : "";
+        if (i == 3)  // M10's tweaks ride in the patch
+            s.patch.tweaks.push_back ({ "flt_lp:0", false, { { "cutoff", ArgTweak::kOffset, 0.12 } } });
         return s;
     };
     for (int i = 0; i < 22; ++i)
@@ -508,8 +509,8 @@ bool smokeUndoStack()
     for (int i = 21; i >= 2 && stack.pop (out); --i)
         exact += out.sameAs (snap (i)) ? 1 : 0;
     ok = check (exact == 20 && ! stack.canUndo() && ! stack.pop (out),
-                "undo: pops newest first and restores patch, trim, macro values, source, nodes and the M10 tweak "
-                "hook bit-exactly (%d/20), then is empty", exact) && ok;
+                "undo: pops newest first and restores patch (with its tweaks), trim, macro values, source and "
+                "nodes bit-exactly (%d/20), then is empty", exact) && ok;
     PatchSnapshot a = snap (1), b = snap (1);
     b.macros[4] = std::nextafter (b.macros[4], 1.0f);
     ok = check (! a.sameAs (b), "undo: a macro one float step away counts as different") && ok;

@@ -93,6 +93,7 @@ PatchProgram* PatchPlayer::swapProgram (PatchProgram* next) noexcept
         return old;
     }
     program_->master().resetRacks();
+    configureHooks (false);  // held notes restart below: their init code sees the tweaks
 
     for (auto& v : voices_)
     {
@@ -496,6 +497,7 @@ void PatchPlayer::beginChunk (int n, const float targets[kNumMacros]) noexcept
     eventMw_ = mwCurrent_;
     eventBend_ = bendRatio_;
     std::fill (voiceSum_.begin(), voiceSum_.begin() + (size_t) n * (size_t) oversampling(), 0.0f);
+    configureHooks (true);
 }
 
 // Per host sample, between MIDI events, so a bend or CC1 takes effect at
@@ -516,9 +518,55 @@ void PatchPlayer::fillControls (int from, int to) noexcept
     }
 }
 
+void PatchPlayer::configureHooks (bool newChunk) noexcept
+{
+    if (program_ == nullptr)
+        return;
+    const bool trace = traces_ != nullptr && traces_->enabled.load (std::memory_order_relaxed);
+    const bool anyVoice = overrides_ != nullptr && overrides_->anyFor (RackKind::Voice);
+    const bool anyMaster = overrides_ != nullptr && overrides_->anyFor (RackKind::Master);
+
+    // The trace voice: the newest one sounding.
+    int newest = -1;
+    double newestFreq = 110.0;
+    uint64_t newestOrder = 0;
+    for (const auto& v : voices_)
+        if ((v.state == VoiceSlot::State::Active || (v.state == VoiceSlot::State::Fading && v.hasPending))
+            && (newest < 0 || v.startOrder >= newestOrder))
+        {
+            newest = v.index;
+            newestOrder = v.startOrder;
+            newestFreq = v.freq * bendRatio_;
+        }
+
+    for (int i = 0; i < kNumVoiceObjects; ++i)
+    {
+        auto& voice = program_->voice (i);
+        auto& rack = voice.rack();
+        rack.overrides = overrides_;
+        rack.capture = trace && i == newest ? &traces_->voice : nullptr;
+        voice.rackContext().hooked = anyVoice || rack.capture != nullptr;
+    }
+    auto& master = program_->master();
+    auto& mrack = master.voiceRack();
+    mrack.overrides = overrides_;
+    mrack.capture = trace ? &traces_->master : nullptr;
+    master.rackContext().hooked = anyMaster || mrack.capture != nullptr;
+
+    if (trace && newChunk)
+    {
+        const double f = newest >= 0 ? newestFreq : traces_->voice.freq;
+        traces_->voice.setTiming (voiceRate(), f);
+        traces_->master.setTiming (sampleRate_, f);
+        ++traces_->voice.block;
+        ++traces_->master.block;
+    }
+}
+
 // [start, end) are host samples; each runs `os` voice samples.
 void PatchPlayer::renderVoices (int start, int end) noexcept
 {
+    configureHooks (false);  // a note-on since the last segment changes the trace voice
     const int os = oversampling();
     const double vrate = voiceRate();
     const double voiceBeatStep = beatStep_ / os;

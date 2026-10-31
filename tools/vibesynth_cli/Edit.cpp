@@ -313,6 +313,10 @@ int runChange (int argc, char** argv, int oversampling)
                  res.promptTokens(), res.completionTokens());
     std::printf ("  nodes dropped: %s\n  labels changed: %s\n", res.lostNodes.empty() ? "none" : res.lostNodes.c_str(),
                  res.labelChanges.empty() ? "none" : joined (res.labelChanges).c_str());
+    if (! base.tweaks.empty() || ! base.macroMaps.empty())
+        std::printf ("  tweaks kept: %d node(s), %d macro map(s); dropped: %s\n", (int) res.patch.tweaks.size(),
+                     (int) res.patch.macroMaps.size(),
+                     res.droppedTweaks.empty() ? "none" : joined (res.droppedTweaks).c_str());
     return 0;
 }
 
@@ -347,6 +351,13 @@ int runMutate (int argc, char** argv, int oversampling)
         return 2;
     }
     req.baseNodesKnown = true;
+    // M10 merge (SPEC §9.6): the tweaks go into the code the model sees.
+    const MutateBase mb = prepareMutateBase (req.base);
+    if (mb.hadTweaks)
+    {
+        req.base = mb.patch;
+        req.baseNodesKnown = ! mb.baked;
+    }
     std::string keySource;
     if (! keyAndConfig (so, req.config, req.apiKey, keySource))
         return 2;
@@ -360,6 +371,8 @@ int runMutate (int argc, char** argv, int oversampling)
     log.line ("mutate: %s -> %s (model %s @ %.2f, retries @ %.2f; key from %s)", req.base.name.c_str(),
               outDir.getFullPathName().toRawUTF8(), req.config.mutateModel.c_str(), req.config.mutateTemperature,
               req.config.retryTemperature, keySource.c_str());
+    if (mb.hadTweaks)
+        log.line ("  tweaks: %s", mb.baked ? "baked into the code sent" : mb.note.c_str());
     const double t0 = juce::Time::getMillisecondCounterHiRes();
     const auto& dirs = PromptResources::embedded().mutateDirections;
     const MutateResult mr = Mutator::run (req, nullptr, {}, [&] (int slot, const GenerationResult& r)

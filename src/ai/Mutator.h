@@ -62,6 +62,22 @@ struct MutateResult
     int completionTokens() const noexcept;
 };
 
+// M10 merge (SPEC §9.6): the model only sees code, so Mutate first bakes
+// the active patch's tweaks and macro maps into it (patch/PatchBake.h, in
+// memory); the variations then carry the user's shaping in their code and
+// start with no tweaks. If bake refuses, the unbaked code is sent and
+// `note` says the tweaks weren't included. A patch without tweaks passes
+// through unchanged. Callers put `patch` in MutateRequest::base, with
+// baseNodesKnown false when `baked` (a bypassed call may have gone).
+struct MutateBase
+{
+    Patch patch;          // what to send (never has tweaks)
+    bool hadTweaks = false;
+    bool baked = false;
+    std::string note;     // empty unless bake refused
+};
+MutateBase prepareMutateBase (const Patch& active);
+
 class Mutator
 {
 public:

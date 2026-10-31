@@ -38,6 +38,7 @@ AuditionStrip::AuditionStrip()
     addAndMakeVisible (discardButton);
     addChildComponent (stopButton);
     setTitle ("Variations");
+    setOpaque (true);
 }
 
 void AuditionStrip::setView (const MutateView& v)
@@ -152,10 +153,12 @@ juce::String AuditionStrip::getTooltip()
 void AuditionStrip::paint (juce::Graphics& g)
 {
     using namespace Theme;
+    // The inspector's frame (they share the page area; one at a time).
     const auto bounds = getLocalBounds().toFloat();
+    g.fillAll (background);
     g.setColour (panel);
     g.fillRoundedRectangle (bounds, radius);
-    g.setColour (accent.withAlpha (0.35f));
+    g.setColour (border);
     g.drawRoundedRectangle (bounds.reduced (0.5f), radius, hairline);
 
     auto title = titleRow;
@@ -257,6 +260,37 @@ void AuditionStrip::paintCard (juce::Graphics& g, int card, juce::Rectangle<int>
     g.setFont (font (smallSize, failed || playing ? Weight::Medium : Weight::Regular));
     g.drawFittedText (line, textArea, failed ? juce::Justification::topLeft : juce::Justification::centredLeft,
                       lines, 1.0f);
+}
+
+//==============================================================================
+HintBubble::HintBubble()
+{
+    setInterceptsMouseClicks (false, false);
+}
+
+void HintBubble::setText (const juce::String& t)
+{
+    text = t;
+    repaint();
+}
+
+int HintBubble::widthForText() const
+{
+    return juce::GlyphArrangement::getStringWidthInt (Theme::font (Theme::smallSize, Theme::Weight::Medium), text)
+         + Theme::grid * 4;
+}
+
+void HintBubble::paint (juce::Graphics& g)
+{
+    using namespace Theme;
+    const auto b = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (panel);
+    g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+    g.setColour (accent);
+    g.drawRoundedRectangle (b, b.getHeight() * 0.5f, 1.0f);
+    g.setColour (Theme::text);
+    g.setFont (font (smallSize, Weight::Medium));
+    g.drawText (text, getLocalBounds(), juce::Justification::centred);
 }
 
 } // namespace vibesynth::ui

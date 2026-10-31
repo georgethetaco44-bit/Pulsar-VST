@@ -328,6 +328,10 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
         return;
     }
     collectVars (vm_, vars_);
+    // M10 macro maps read the VM's own m1..m8 (what the code reads).
+    static_assert (sizeof (EEL_F) == sizeof (double), "EEL_F must be double");
+    for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
+        rackStorage_.macroVars[i] = macro_[i];
 }
 
 EelVoice::~EelVoice()
@@ -422,6 +426,7 @@ EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
     rackStorage_.reverbCapacity = reverbCapacity_;
     rackStorage_.init (sampleRate > 0.0 ? sampleRate : 48000.0);
     voiceRackStorage_.init (sampleRate > 0.0 ? sampleRate : 48000.0, kRackSeed);
+    voiceRackStorage_.rackKind = 1;  // M10: the master's nodes (RackKind::Master)
     rackCtx_.voice = &voiceRackStorage_;
     rackCtx_.master = &rackStorage_;
 
@@ -482,6 +487,8 @@ EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
         return;
     }
     collectVars (vm_, vars_);
+    for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
+        voiceRackStorage_.macroVars[i] = macro_[i];
 }
 
 EelMaster::~EelMaster()

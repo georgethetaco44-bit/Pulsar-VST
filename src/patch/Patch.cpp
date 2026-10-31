@@ -68,6 +68,59 @@ bool readSection (const juce::var& code, const char* key, std::string& out, Pars
     return true;
 }
 
+double readNumber (const juce::var& v, double fallback)
+{
+    double d = isNumber (v) ? static_cast<double> (v) : fallback;
+    if (! isFiniteBitsD (d))
+        d = fallback;
+    return quantisePatchNumber (juce::jlimit (-1.0e6, 1.0e6, d));
+}
+
+// M10: "tweaks": [{"node": id, "bypass": bool, "args": {name: {"mode":
+// "offset"|"replace", "value": v}}}], "macroMaps": [{"macro": 1..8,
+// "node": id, "arg": name, "min": v, "max": v}]. Malformed entries are
+// skipped (lexicon names are checked where they are applied).
+void readTweaks (const juce::var& root, Patch& p)
+{
+    if (const auto* list = root.getProperty ("tweaks", juce::var()).getArray())
+        for (const auto& t : *list)
+        {
+            if (! t.isObject() || ! t.getProperty ("node", juce::var()).isString())
+                continue;
+            NodeTweak nt;
+            nt.node = t.getProperty ("node", "").toString().toStdString();
+            nt.bypass = static_cast<bool> (t.getProperty ("bypass", false));
+            if (auto* args = t.getProperty ("args", juce::var()).getDynamicObject())
+                for (const auto& kv : args->getProperties())
+                {
+                    const auto mode = kv.value.getProperty ("mode", "").toString();
+                    if (mode != "offset" && mode != "replace")
+                        continue;
+                    ArgTweak at;
+                    at.arg = kv.name.toString().toStdString();
+                    at.mode = mode == "offset" ? ArgTweak::kOffset : ArgTweak::kReplace;
+                    at.value = readNumber (kv.value.getProperty ("value", juce::var()), 0.0);
+                    nt.args.push_back (at);
+                }
+            if (! nt.node.empty() && (nt.bypass || ! nt.args.empty()))
+                p.tweaks.push_back (nt);
+        }
+    if (const auto* list = root.getProperty ("macroMaps", juce::var()).getArray())
+        for (const auto& m : *list)
+        {
+            if (! m.isObject() || ! isNumber (m.getProperty ("macro", juce::var())))
+                continue;
+            MacroMap mm;
+            mm.macro = static_cast<int> (m.getProperty ("macro", 0));
+            mm.node = m.getProperty ("node", "").toString().toStdString();
+            mm.arg = m.getProperty ("arg", "").toString().toStdString();
+            mm.min = readNumber (m.getProperty ("min", juce::var()), 0.0);
+            mm.max = readNumber (m.getProperty ("max", juce::var()), 1.0);
+            if (mm.macro >= 1 && mm.macro <= Patch::kMaxMacros && ! mm.node.empty() && ! mm.arg.empty())
+                p.macroMaps.push_back (mm);
+        }
+}
+
 } // namespace
 
 const char* patchStatusName (PatchStatus s) noexcept
@@ -170,6 +223,8 @@ ParseResult parsePatch (const std::string& textIn)
                                                        .withSpacing (juce::JSON::Spacing::none))
                           .toStdString();
 
+    readTweaks (root, p);
+
     const juce::var trim = root.getProperty ("trim", juce::var());
     double t = isNumber (trim) ? static_cast<double> (trim) : 1.0;
     if (! isFiniteBitsD (t) || t <= 0.0 || t > 1.0)
@@ -212,6 +267,48 @@ std::string serializePatch (const Patch& p)
     code->setProperty ("master", juce::String (p.master));
     root->setProperty ("code", juce::var (code));
     root->setProperty ("trim", p.trim);
+
+    // M10: only when present, so untweaked patches serialize as before.
+    if (! p.tweaks.empty())
+    {
+        juce::Array<juce::var> list;
+        for (const auto& t : p.tweaks)
+        {
+            auto* o = new juce::DynamicObject();
+            o->setProperty ("node", juce::String (t.node));
+            if (t.bypass)
+                o->setProperty ("bypass", true);
+            if (! t.args.empty())
+            {
+                auto* args = new juce::DynamicObject();
+                for (const auto& a : t.args)
+                {
+                    auto* ao = new juce::DynamicObject();
+                    ao->setProperty ("mode", a.mode == ArgTweak::kOffset ? "offset" : "replace");
+                    ao->setProperty ("value", a.value);
+                    args->setProperty (juce::Identifier (juce::String (a.arg)), juce::var (ao));
+                }
+                o->setProperty ("args", juce::var (args));
+            }
+            list.add (juce::var (o));
+        }
+        root->setProperty ("tweaks", list);
+    }
+    if (! p.macroMaps.empty())
+    {
+        juce::Array<juce::var> list;
+        for (const auto& m : p.macroMaps)
+        {
+            auto* o = new juce::DynamicObject();
+            o->setProperty ("macro", m.macro);
+            o->setProperty ("node", juce::String (m.node));
+            o->setProperty ("arg", juce::String (m.arg));
+            o->setProperty ("min", m.min);
+            o->setProperty ("max", m.max);
+            list.add (juce::var (o));
+        }
+        root->setProperty ("macroMaps", list);
+    }
 
     return juce::JSON::toString (rootVar, juce::JSON::FormatOptions{}
                                               .withSpacing (juce::JSON::Spacing::multiLine)

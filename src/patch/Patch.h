@@ -58,6 +58,48 @@ struct MacroSpec
     }
 };
 
+// M10 (SPEC §9.6): the inspector's tweaks, saved as the optional "tweaks"
+// and "macroMaps" keys. `node` is a node id (patch/PatchTweaks.h:
+// "flt_lp:0", "fx_sat#1", "master/bus_reverb"), `arg` an argument name
+// from the lexicon signature ("cutoff"). Values are quantised to 1e-6.
+struct ArgTweak
+{
+    static constexpr int kOffset = 1;   // ArgMode::Offset
+    static constexpr int kReplace = 2;  // ArgMode::Replace
+    std::string arg;
+    int mode = kOffset;
+    double value = 0.0;   // offset: normalized amount (semitones for hz); replace: the value
+
+    bool operator== (const ArgTweak& o) const
+    {
+        return arg == o.arg && mode == o.mode && samePatchNumber (value, o.value);
+    }
+};
+
+struct NodeTweak
+{
+    std::string node;
+    bool bypass = false;
+    std::vector<ArgTweak> args;
+
+    bool operator== (const NodeTweak& o) const { return node == o.node && bypass == o.bypass && args == o.args; }
+};
+
+struct MacroMap
+{
+    int macro = 1;        // 1..8 (m1..m8)
+    std::string node;
+    std::string arg;
+    double min = 0.0;     // the argument's value at macro 0 ...
+    double max = 1.0;     // ... and at macro 1
+
+    bool operator== (const MacroMap& o) const
+    {
+        return macro == o.macro && node == o.node && arg == o.arg && samePatchNumber (min, o.min)
+            && samePatchNumber (max, o.max);
+    }
+};
+
 struct Patch
 {
     static constexpr int kVersion = 1;
@@ -75,6 +117,8 @@ struct Patch
     std::string voice;
     std::string master;             // empty = inl/inr pass straight to outl/outr
     double trim = 1.0;              // output gain from the validator, 0 < trim <= 1
+    std::vector<NodeTweak> tweaks;  // M10: optional; empty = absent from the file
+    std::vector<MacroMap> macroMaps;
 
     // Design budget for the voice section per voice-sample (SPEC §4.2.1, M6):
     // a mono patch sounds one voice, so it gets 4x the poly figure.
@@ -97,7 +141,7 @@ struct Patch
         return version == o.version && name == o.name && prompt == o.prompt
             && macros == o.macros && voiceMode == o.voiceMode && graphJson == o.graphJson
             && init == o.init && voice == o.voice && master == o.master
-            && samePatchNumber (trim, o.trim);
+            && samePatchNumber (trim, o.trim) && tweaks == o.tweaks && macroMaps == o.macroMaps;
     }
 };
 
@@ -112,7 +156,9 @@ struct ParseResult
 
 // Parses .pulsar text. Validates version == 1, code.voice present and
 // non-empty, voiceMode, macro count and the SPEC §7.1 size limits; clamps
-// macro defaults to 0..1 and trim to (0, 1]; ignores unknown keys.
+// macro defaults to 0..1 and trim to (0, 1]; ignores unknown keys. M10:
+// reads the optional "tweaks" and "macroMaps" (malformed entries are
+// skipped, never an error, so a tweak can't make a patch unloadable).
 ParseResult parsePatch (const std::string& text);
 
 // Pretty JSON that parsePatch() reads back identically.

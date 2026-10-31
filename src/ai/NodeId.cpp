@@ -1,4 +1,4 @@
-// M11 node ids. See NodeId.h.
+// Node ids (M10 + M11). See NodeId.h.
 
 #include "ai/NodeId.h"
 
@@ -25,6 +25,12 @@ std::string lower (std::string s)
     return s;
 }
 
+// Bus effects with no slot argument: their id has no slot suffix.
+bool isSlotless (ModuleId m) noexcept
+{
+    return m == ModuleId::BusMonoLow || m == ModuleId::BusChorus || m == ModuleId::BusReverb;
+}
+
 const char* ordinal (int i)
 {
     static const char* const names[] = { "1st", "2nd", "3rd", "4th" };
@@ -42,7 +48,7 @@ bool parseNodeId (const std::string& idIn, NodeRef& out, std::string& error)
         const std::string p (prefix);
         if (id.rfind (p, 0) == 0)
         {
-            n.master = p[0] == 'm';
+            n.rack = p[0] == 'm' ? RackKind::Master : RackKind::Voice;
             id = trimmed (id.substr (p.size()));
             break;
         }
@@ -84,17 +90,23 @@ bool parseNodeId (const std::string& idIn, NodeRef& out, std::string& error)
 
 std::string nodeIdString (const NodeRef& node)
 {
-    return std::string (node.master ? "master/" : "") + moduleShortName (node.module)
-         + (isStatelessModule (node.module) ? "#" : ":") + std::to_string (node.slot);
+    std::string id = std::string (node.master() ? "master/" : "") + moduleShortName (node.module);
+    if (isStatelessModule (node.module))
+        id += "#" + std::to_string (node.slot);
+    else if (! isSlotless (node.module))
+        id += ":" + std::to_string (node.slot);
+    return id;
 }
 
 std::string describeNodeForPrompt (const NodeRef& node)
 {
     const std::string name = moduleShortName (node.module);
-    const std::string section = node.master ? "master" : "voice";
+    const std::string section = node.master() ? "master" : "voice";
     if (isStatelessModule (node.module))
         return nodeIdString (node) + ": the " + ordinal (node.slot) + " " + name + "(...) call in the " + section
              + " section, counting in the order the calls run each sample";
+    if (isSlotless (node.module))
+        return nodeIdString (node) + ": the " + name + "(...) call in the " + section + " section";
     return nodeIdString (node) + ": the " + name + "(" + std::to_string (node.slot) + ", ...) call in the "
          + section + " section";
 }
@@ -104,7 +116,7 @@ bool nodeIsTouched (const TouchedNodes& touched, const NodeRef& node) noexcept
     const int m = static_cast<int> (node.module);
     if (m < 0 || m >= kNumModules || node.slot < 0 || node.slot >= kMaxSlotsPerModule)
         return false;
-    const uint32_t bits = node.master ? touched.master[m] : touched.voice[m];
+    const uint32_t bits = node.master() ? touched.master[m] : touched.voice[m];
     return (bits & (1u << node.slot)) != 0u;
 }
 
@@ -115,7 +127,7 @@ std::string lostNodes (const TouchedNodes& before, const TouchedNodes& after)
         for (int m = 0; m < kNumModules; ++m)
             for (int s = 0; s < kMaxSlotsPerModule; ++s)
             {
-                NodeRef n { section == 1, static_cast<ModuleId> (m), s };
+                const NodeRef n { section == 1 ? RackKind::Master : RackKind::Voice, static_cast<ModuleId> (m), s };
                 if (nodeIsTouched (before, n) && ! nodeIsTouched (after, n))
                     out += (out.empty() ? "" : ", ") + nodeIdString (n);
             }

@@ -43,6 +43,7 @@
 
 #include "patch/Patch.h"
 #include "patch/PatchPlayer.h"
+#include "patch/PatchTweaks.h"
 #include "patch/PatchValidator.h"
 
 namespace vibesynth_cli {
@@ -292,6 +293,11 @@ int runRender (int argc, char** argv, int oversampling)
     player.prepare (sr, kBlock, targets);
     player.setHostTransport (bpm, false, false, 0.0); // beat runs on from 0
     player.setVoiceControls (mode, glide);
+    // M10: a patch's tweaks and macro maps play as in the plugin.
+    auto overrides = std::make_unique<vibesynth::OverrideTable>();
+    const int tweaks = vibesynth::applyPatchTweaks (patch, *overrides);
+    if (tweaks > 0)
+        player.setNodeHooks (overrides.get(), nullptr);
 
     const int total = (int) std::lround ((phrase.end + tail) * sr);
     juce::AudioBuffer<float> out (2, total);
@@ -339,11 +345,12 @@ int runRender (int argc, char** argv, int oversampling)
     writer.reset(); // flushes and closes the file
 
     std::printf ("rendered %s (%s, trim %+.1f dB) -> %s: %.2f s at %.0f Hz, %.0f bpm, "
-                 "%s phrase, %s (glide %.2f), voices %dx, 24-bit stereo, peak %+.1f dBFS, RMS %+.1f dBFS\n",
+                 "%s phrase, %s (glide %.2f), voices %dx, 24-bit stereo, peak %+.1f dBFS, RMS %+.1f dBFS%s\n",
                  patch.name.c_str(), builtin ? "built-in, stored trim" : "file, computed trim",
                  dbfs (patch.trim), outFile.getFullPathName().toRawUTF8(), total / sr, sr, bpm,
                  riff ? "riff" : "default", player.monoActive() ? "mono" : "poly", glide,
-                 program->oversampling(), dbfs (peak), dbfs (rms));
+                 program->oversampling(), dbfs (peak), dbfs (rms),
+                 tweaks > 0 ? (", " + std::to_string (tweaks) + " tweaks applied").c_str() : "");
     return 0;
 }
 

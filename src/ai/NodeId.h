@@ -1,42 +1,57 @@
 #pragma once
 
-// M11 (SPEC §9.6, §9.7): node ids for "Change this node".
+// Node ids (SPEC §9.6, §9.7): the one implementation, shared by the node
+// view, the inspector, saved tweaks (patch/PatchTweaks.h), bake, "Change
+// this node" and vibesynth_cli. JUCE-free, part of vibesynth_engine.
 //
-// A node is a (section, module, slot) the offline test saw a patch touch.
-// Its id is the graph.edges name with the section in front for master:
+// A node is a (rack, module, slot) the offline test saw a patch touch. Its
+// id is the graph.edges name with the region in front for master:
 //
 //   flt_lp:0             voice, slot 0
 //   fx_sat#1             voice, stateless shaper, call #1 (the 2nd call)
 //   master/bus_sat#1     master, stateless shaper
 //   master/flt_lp:0      master, slot 0
+//   master/bus_reverb    bus effects without a slot (bus_mono_low,
+//                        bus_chorus, bus_reverb) have no slot suffix
 //
-// parseNodeId also takes the node view's labels ("flt_lp 0", "fx_sat #1"),
-// a "voice/" prefix, and ':' or '#' on either kind of module, so the
-// inspector and the CLI can pass whatever the user sees. JUCE-free (the
-// node view and vibesynth_cli use it).
+// The module name is NodeMeters' moduleShortName (util_xover covers
+// util_xover_lo/_hi). parseNodeId also takes the node view's labels
+// ("flt_lp 0", "fx_sat #1"), any case, surrounding spaces, a "voice/"
+// prefix, a bare name (slot 0), the lexicon aliases moduleFromName accepts,
+// and ':' or '#' on either kind of module, so the inspector, saved files
+// and the CLI can pass whatever the user sees.
 
 #include <string>
 
 #include "engine/NodeMeters.h"
+#include "engine/NodeOverrides.h"
 
 namespace vibesynth {
 
 struct NodeRef
 {
-    bool master = false;
+    RackKind rack = RackKind::Voice;
     ModuleId module = ModuleId::Count;
     int slot = 0;
 
+    bool master() const noexcept { return rack == RackKind::Master; }
     bool operator== (const NodeRef& o) const noexcept
     {
-        return master == o.master && module == o.module && slot == o.slot;
+        return rack == o.rack && module == o.module && slot == o.slot;
     }
+    bool operator!= (const NodeRef& o) const noexcept { return ! (*this == o); }
 };
 
 // False (with `error` set) for an unknown module, a bad slot or junk.
 bool parseNodeId (const std::string& id, NodeRef& out, std::string& error);
+inline bool parseNodeId (const std::string& id, NodeRef& out)
+{
+    std::string error;
+    return parseNodeId (id, out, error);
+}
 
-// The canonical id ("flt_lp:0", "master/bus_sat#1").
+// The canonical id ("flt_lp:0", "master/bus_sat#1", "master/bus_reverb").
+// parseNodeId reads it back to the same node.
 std::string nodeIdString (const NodeRef& node);
 
 // One line for the model: which call in which section the id means.

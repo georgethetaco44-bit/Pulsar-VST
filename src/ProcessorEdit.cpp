@@ -16,9 +16,12 @@
 //            shown; undo() reloads the top entry compile-only (stored
 //            trim) with its exact macro values.
 //
-// M10 merge: captureSnapshot() / applySnapshot() are where the inspector's
-// tweaks and macro maps join the snapshot (PatchSnapshot::tweaksJson,
-// macroMapsJson).
+// M10 merge: the inspector's tweaks and macro maps live in the Patch
+// (Patch::tweaks, macroMaps), so a snapshot's patch carries them: Undo,
+// the Original card and Discard reload them exactly, and the load applies
+// them to the override table (handleAsyncUpdate -> applyTweaksFrom).
+// Change keeps those whose node survived (Generator); Mutate bakes them
+// into the code it sends (prepareMutateBase).
 
 #include "PluginProcessor.h"
 
@@ -60,9 +63,7 @@ vibesynth::PatchSnapshot VibeSynthAudioProcessor::captureSnapshot() const
     s.program = currentProgramIndex.load();
     s.nodes = uiNodes;
     s.nodesKnown = nodesKnown;
-    // M10 merge: s.tweaksJson / s.macroMapsJson = the active tweaks and
-    // macro maps (their .pulsar JSON).
-    return s;
+    return s;  // s.patch includes the tweaks and macro maps
 }
 
 void VibeSynthAudioProcessor::applySnapshot (const vibesynth::PatchSnapshot& s, const juce::String& verb)
@@ -80,8 +81,7 @@ void VibeSynthAudioProcessor::applySnapshot (const vibesynth::PatchSnapshot& s, 
     job.verb = verb;
     if (s.program >= 0 && s.program < getNumPrograms())
         currentProgramIndex = s.program;
-    // M10 merge: restore s.tweaksJson / s.macroMapsJson with the patch.
-    postJob (std::move (job));
+    postJob (std::move (job));  // the text carries the tweaks and macro maps
 }
 
 void VibeSynthAudioProcessor::pushUndoForSwap()
@@ -221,10 +221,14 @@ void VibeSynthAudioProcessor::startMutate()
         v.text = "Waiting for model";
     }
 
+    // M10 merge (SPEC §9.6): the tweaks are baked into the code sent, so the
+    // variations keep the user's shaping (and start with no tweaks).
+    const auto base = vibesynth::prepareMutateBase (uiPatch);
+    mutateNote = juce::String (base.note);
     vibesynth::MutateRequest req;
-    req.base = uiPatch;
+    req.base = base.patch;
     req.baseNodes = uiNodes;
-    req.baseNodesKnown = nodesKnown;
+    req.baseNodesKnown = nodesKnown && ! base.baked;
     req.config = settingsRef.config();
     req.apiKey = settingsRef.apiKey();
     const double rate = preparedRate.load();
@@ -232,7 +236,9 @@ void VibeSynthAudioProcessor::startMutate()
     mutateThread = std::make_unique<MutateThread> (*this, std::move (req), mutateSession);
     mutateThread->startThread();
     ++editVersion;
-    setStatus ("Mutating '" + juce::String (uiPatch.name) + "': 4 variations on their way");
+    setStatus ("Mutating '" + juce::String (uiPatch.name) + "': 4 variations on their way"
+                   + (mutateNote.isNotEmpty() ? " (without your tweaks)" : ""),
+               StatusKind::Info, mutateNote);
 }
 
 void VibeSynthAudioProcessor::MutateThread::run()
@@ -345,12 +351,14 @@ void VibeSynthAudioProcessor::applyMutateEvents()
             ready += v.state == State::Ready ? 1 : 0;
         if (ready > 0)
             status = { StatusKind::Success,
-                       juce::String (ready) + " of 4 variations ready: click one to hear it, Keep to use it", {} };
+                       juce::String (ready) + " of 4 variations ready: click one to hear it, Keep to use it",
+                       mutateNote };
         else if (mutateView.slots[0].state == State::Cancelled)
             status = { StatusKind::Info, "Mutate cancelled", {} };
         else
             status = { StatusKind::Error, "Mutate failed: " + juce::String (mutateView.slots[0].text),
-                       juce::String (mutateView.slots[0].detail) + "\n\nThe current patch is still playing." };
+                       juce::String (mutateView.slots[0].detail) + "\n\nThe current patch is still playing."
+                           + (mutateNote.isNotEmpty() ? "\n\n" + mutateNote : juce::String()) };
     }
     sendChangeMessage();
 }

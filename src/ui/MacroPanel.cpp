@@ -3,6 +3,8 @@
 #include "ui/MacroPanel.h"
 
 #include "PluginProcessor.h"
+#include "patch/LexiconLint.h"
+#include "patch/PatchTweaks.h"
 #include "ui/PulsarLookAndFeel.h"
 
 namespace vibesynth::ui {
@@ -39,14 +41,18 @@ MacroKnob::MacroKnob (juce::AudioProcessorValueTreeState& state, int i) : index 
     setPatchMacro ({}, 0.5);
 }
 
-void MacroKnob::setPatchMacro (const juce::String& newLabel, double defaultValue, bool isUsed)
+void MacroKnob::setPatchMacro (const juce::String& newLabel, double defaultValue, bool isUsed,
+                               const juce::String& drives, bool codeReads)
 {
     used = isUsed;
     label = newLabel.isNotEmpty() ? newLabel : "Macro " + juce::String (index + 1);
     slider.setDoubleClickReturnValue (true, defaultValue);
     const auto host = "Macro " + juce::String (index + 1);
-    slider.setTooltip (used ? label + "\nHost parameter: " + host + ". Double-click resets to the patch default ("
-                                  + juce::String (defaultValue, 2) + ")."
+    juce::String mapped;
+    if (drives.isNotEmpty())
+        mapped = (codeReads ? "\nThe patch code reads it, and it also drives " : "\nDrives ") + drives + ".";
+    slider.setTooltip (used ? label + mapped + "\nHost parameter: " + host
+                                  + ". Double-click resets to the patch default (" + juce::String (defaultValue, 2) + ")."
                             : "Unused by this patch\nHost parameter: " + host + ".");
     slider.setDescription (used ? label : "Unused by this patch");
     slider.setAlpha (used ? 1.0f : 0.3f);
@@ -157,6 +163,42 @@ void MacroPanel::setPatch (const juce::String& name, const juce::String& mode,
     for (int i = 0; i < 8; ++i)
         knobs[(size_t) i]->setPatchMacro (labels[(size_t) i], defaults[(size_t) i], ((readMask >> i) & 1u) != 0u);
     voiceMode.setPatchMode (mode);
+    updateGlide();
+    repaint();
+}
+
+void MacroPanel::showPatch (const vibesynth::Patch& patch)
+{
+    const unsigned read = vibesynth::macrosRead (patch);
+    std::array<juce::String, 8> labels, drives;
+    for (int i = 0; i < 8; ++i)
+        labels[(size_t) i] = i < (int) patch.macros.size() ? juce::String (patch.macros[(size_t) i].label)
+                                                           : juce::String();
+    for (const auto& m : patch.macroMaps)
+    {
+        const int i = m.macro - 1;
+        if (i < 0 || i >= 8)
+            continue;
+        vibesynth::NodeRef n;
+        const vibesynth::LexiconEntry* e = vibesynth::parseNodeId (m.node, n)
+                                               ? vibesynth::primaryLexiconEntry ((int) n.module) : nullptr;
+        const int k = e != nullptr ? vibesynth::lexiconArgIndex (*e, m.arg.c_str()) : -1;
+        const juce::String argLabel = k >= 0 ? juce::String (e->args[k].label) : juce::String (m.arg);
+        auto& d = drives[(size_t) i];
+        d += (d.isEmpty() ? "" : ", ") + juce::String (m.node) + " " + argLabel;
+        // An unused macro is named after the first argument it drives.
+        if (((read >> i) & 1u) == 0u && labels[(size_t) i].isEmpty())
+            labels[(size_t) i] = argLabel;
+    }
+    patchName = juce::String (patch.name);
+    patchMode = juce::String (patch.voiceMode);
+    for (int i = 0; i < 8; ++i)
+    {
+        const bool codeReads = ((read >> i) & 1u) != 0u;
+        knobs[(size_t) i]->setPatchMacro (labels[(size_t) i], patch.macroDefault (i),
+                                          codeReads || drives[(size_t) i].isNotEmpty(), drives[(size_t) i], codeReads);
+    }
+    voiceMode.setPatchMode (patchMode);
     updateGlide();
     repaint();
 }

@@ -121,6 +121,11 @@ struct GenerationResult
     // kept), and base macro labels it changed ("m2 Cutoff -> Wobble").
     std::string lostNodes;
     std::vector<std::string> labelChanges;
+    // Change (M10 merge, SPEC §9.6): `patch` keeps the base's tweaks and
+    // macro maps whose node survived; these are the ones dropped
+    // (patch/PatchTweaks.h carrySurvivingTweaks). Mutate variations and
+    // generations start with no tweaks.
+    std::vector<std::string> droppedTweaks;
 
     int promptTokens() const noexcept;
     int completionTokens() const noexcept;

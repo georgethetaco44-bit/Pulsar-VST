@@ -9,6 +9,7 @@
 #include "ai/NodeId.h"
 #include "ai/PromptBuilder.h"
 #include "ai/ResponseParser.h"
+#include "patch/PatchTweaks.h"
 #include "patch/PatchValidator.h"
 
 namespace vibesynth {
@@ -42,10 +43,14 @@ bool isBlank (const std::string& s)
     return s.find_first_not_of (" \t\r\n") == std::string::npos;
 }
 
-// M11: what an accepted edit dropped or relabelled (report only).
-void describeEdit (const Patch& base, const TouchedNodes& baseNodes, GenerationResult& res)
+// M11: what an accepted edit dropped or relabelled. A Change also keeps the
+// tweaks whose node survived (M10 merge); a Mutate base was baked first.
+void describeEdit (const Patch& base, const TouchedNodes& baseNodes, bool keepTweaks, GenerationResult& res)
 {
     res.lostNodes = lostNodes (baseNodes, res.touched);
+    res.droppedTweaks.clear();
+    if (keepTweaks)
+        res.droppedTweaks = carrySurvivingTweaks (base, res.touched, res.patch);
     res.labelChanges.clear();
     for (int i = 0; i < Patch::kMaxMacros; ++i)
     {
@@ -332,7 +337,7 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
         res.touched = vr.touched;
         res.reason.clear();
         if (isEdit)
-            describeEdit (request.base, baseNodes, res);
+            describeEdit (request.base, baseNodes, ! isMutate, res);
         return finish (res);
     }
 
@@ -346,7 +351,7 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
         res.touched = heavyTouched;
         res.reason = "kept the heavier version (the lighter retry failed: " + res.reason + ")";
         if (isEdit)
-            describeEdit (request.base, baseNodes, res);
+            describeEdit (request.base, baseNodes, ! isMutate, res);
     }
     return finish (res);
 }

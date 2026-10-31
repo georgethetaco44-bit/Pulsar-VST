@@ -4,6 +4,7 @@
 #include "engine/MasterRack.h"
 
 #include <cmath>
+#include <cstring>
 
 namespace vibesynth {
 
@@ -107,7 +108,16 @@ void VoiceRack::reset() noexcept
     for (int i = 0; i < kNumOscSlots; ++i)
     {
         oscSine[i].Reset (0.0f); oscSaw[i].Reset (0.0f);
-        oscTri[i].Reset (0.0f);  oscSquare[i].Reset (0.0f);
+        oscSquare[i].Reset (0.0f);
+        // M10 fix: DaisySP's triangle integrates into last_out_, which
+        // neither Init() nor Reset() sets, so osc_tri started from whatever
+        // was in memory (different per program build) and kept its state
+        // across patch swaps. Zero the object, then set it up as init() does.
+        std::memset (static_cast<void*> (&oscTri[i]), 0, sizeof (oscTri[i]));
+        oscTri[i].Init (sr);
+        oscTri[i].SetAmp (1.0f);
+        oscTri[i].SetWaveform (daisysp::Oscillator::WAVE_POLYBLEP_TRI);
+        oscTriCache[i] = OscCache();
     }
     for (int i = 0; i < kNumSupersawSlots; ++i)
         supersaw[i].reset();
