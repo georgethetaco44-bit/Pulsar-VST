@@ -20,7 +20,9 @@ public:
     MacroKnob (juce::AudioProcessorValueTreeState& state, int index);
 
     // The patch's label (empty = "Macro N") and default (double-click).
-    void setPatchMacro (const juce::String& label, double defaultValue);
+    // `used` false: the patch's code never reads this macro, so the knob is
+    // dimmed, with no label or value ("Unused by this patch" in the tooltip).
+    void setPatchMacro (const juce::String& label, double defaultValue, bool used = true);
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -30,6 +32,7 @@ public:
 private:
     const int index;
     juce::String label;
+    bool used = true;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
 };
 
@@ -57,9 +60,11 @@ class MacroPanel final : public juce::Component
 public:
     explicit MacroPanel (juce::AudioProcessorValueTreeState& state);
 
-    // A new patch: name, voice mode and the 8 labels + defaults.
+    // A new patch: name, voice mode, the 8 labels + defaults and which
+    // macros the code reads (bit i = m<i+1>, see macrosRead in LexiconLint.h).
     void setPatch (const juce::String& name, const juce::String& voiceMode,
-                   const std::array<juce::String, 8>& labels, const std::array<double, 8>& defaults);
+                   const std::array<juce::String, 8>& labels, const std::array<double, 8>& defaults,
+                   unsigned readMask);
 
     void paint (juce::Graphics&) override;
     void resized() override;

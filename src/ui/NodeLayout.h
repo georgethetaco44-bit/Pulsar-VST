@@ -5,12 +5,13 @@
 // picture doesn't move while the sound plays.
 //
 // Nodes are the touched (module, slot) pairs, voice first, then master,
-// each in ModuleId order. Edges are the patch's graph.edges ("flt_lp:0"
-// names; no ":slot" means slot 0) between real nodes. A name that is not
-// a node (fx_sat, out, the model's own variables) is contracted: A -> x ->
-// B becomes A -> B, so the descriptive flow survives through stateless
-// functions. A name resolves to the voice node if the voice touched it,
-// else to the master node.
+// each in ModuleId order. Stateless shapers (fx_sat, fx_fold, ...) are
+// nodes too, their slot being the call index in a sample ("fx_sat #1").
+// Edges are the patch's graph.edges ("flt_lp:0" names; no ":slot" means
+// slot 0, so "fx_sat" is fx_sat #0) between real nodes. A name that is not
+// a node (out, noise, the model's own variables) is contracted: A -> x ->
+// B becomes A -> B, so the descriptive flow survives. A name resolves to
+// the voice node if the voice touched it, else to the master node.
 //
 // Layout per region: nodes with at least one edge are layered by longest
 // path from the sources over the region's own edges, after a DFS in node
@@ -51,7 +52,7 @@ struct NodeGraphLayout
     int rows[2] = {};      // the tallest layer
     int loose[2] = {};     // nodes in the loose row
 
-    // "flt_lp 0"
+    // "flt_lp 0", or "fx_sat #0" for a stateless shaper
     static std::string label (const Node& n);
 };
 

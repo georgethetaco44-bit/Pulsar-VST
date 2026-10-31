@@ -9,11 +9,16 @@
 //   default@2x.png     the same at 2x pixel density (HiDPI check)
 //   generating.png     a fake generation in progress
 //   error.png          a fake generation error, reason expanded
+//   nokey.png          no API key: the inline "Add your Meta API key" card
+//   settings_key.png   Settings after a successful Test key (fake key)
+//   settings_key_error.png  Settings after a rejected key (the mapped 401)
 //   code.png           the Code tab
 //   presets.png        the Presets tab
 //   history.png        the History tab
 //   scale_075.png      720 x 480
 //   scale_150.png      1440 x 960
+//   nodes/<preset>.png the node view of each built-in, with a printed line
+//                      per preset (font size, cut-off or overlapping pills)
 //
 // No network is used and the audio device is not needed: the note is
 // rendered on the message thread with its own PatchProgram and
@@ -48,6 +53,7 @@ private:
     void playNote (double seconds);
     void shoot (const juce::String& name, float pixelScale = 1.0f);
     void runShots();
+    void checkNodeViews();
 
     VibeSynthAudioProcessorEditor& editor;
     juce::File dir;

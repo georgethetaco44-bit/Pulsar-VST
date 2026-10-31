@@ -13,14 +13,18 @@ constexpr const char* kModuleNames[kNumModules] = {
     "osc_sine", "osc_saw", "osc_tri", "osc_square", "osc_supersaw",
     "flt_lp", "flt_hp", "flt_bp", "flt_ladder",
     "env_adsr", "env_follow",
-    "fx_crush", "fx_comb", "fx_ott",
+    "fx_fold", "fx_sat", "fx_crush", "fx_comb", "fx_ott",
     "phys_resonator", "phys_string",
     "chaos_lorenz", "chaos_duffing",
-    "util_safe_fb", "util_xover",
+    "util_safe_fb", "util_xover", "util_bytebeat",
     "bus_sat", "bus_mono_low", "bus_chorus", "bus_reverb",
 };
 static_assert (static_cast<int> (ModuleId::BusReverb) == kNumModules - 1,
                "kModuleNames must list every ModuleId");
+// Spot checks that the table follows the enum order.
+static_assert (static_cast<int> (ModuleId::FxFold) == 11 && static_cast<int> (ModuleId::FxCrush) == 13
+                   && static_cast<int> (ModuleId::UtilBytebeat) == 22 && static_cast<int> (ModuleId::BusSat) == 23,
+               "kModuleNames is in ModuleId order");
 
 struct Alias
 {
@@ -51,6 +55,12 @@ const char* moduleShortName (ModuleId module) noexcept
 {
     const int m = static_cast<int> (module);
     return m >= 0 && m < kNumModules ? kModuleNames[m] : "";
+}
+
+bool isStatelessModule (ModuleId module) noexcept
+{
+    return module == ModuleId::FxFold || module == ModuleId::FxSat || module == ModuleId::UtilBytebeat
+        || module == ModuleId::BusSat;
 }
 
 bool moduleFromName (const std::string& name, ModuleId& module) noexcept

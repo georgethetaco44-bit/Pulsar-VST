@@ -4,7 +4,8 @@
 // SPEC §5.1/§5.2. Slot pools are PER FUNCTION NAME (amendment 1): e.g.
 // osc_sine(0,…) and osc_saw(0,…) are independent oscillators.
 // Every stateful call records |out| peak and a touched bit (relaxed
-// atomics). Wrappers never allocate. All state is pre-allocated in
+// atomics); stateless shapers record by call index (recordStateless).
+// Wrappers never allocate. All state is pre-allocated in
 // VoiceRack::init() / MasterRack::init() from prepareToPlay.
 //
 // Include order: DaisySP headers first (they pull <random>/<vector> via
@@ -16,6 +17,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 
 // DaisySP (MIT repo, pinned SHA; daisysp_mit target).
 #include "Synthesis/oscillator.h"
@@ -53,6 +55,8 @@ enum class ModuleId : int
     FltLadder,
     EnvAdsr,
     EnvFollow,
+    FxFold,      // stateless (fx_fold, fx_sat, util_bytebeat, bus_sat): the
+    FxSat,       // nth call in a sample meters as slot n (recordStateless)
     FxCrush,
     FxComb,
     FxOtt,
@@ -62,6 +66,7 @@ enum class ModuleId : int
     ChaosDuffing,
     UtilSafeFb,
     UtilXover,
+    UtilBytebeat,
     BusSat,      // master-bus functions (meter slot 0; stereo ones record
     BusMonoLow,  // max(|L|, |R|))
     BusChorus,
@@ -177,10 +182,13 @@ struct VoiceRack
 
     std::atomic<float> meters[kNumModules][kMaxSlotsPerModule];
     std::atomic<uint32_t> touched[kNumModules];
+    uint8_t statelessCalls[kNumModules] = {};
 
     void init (double newSampleRate, uint32_t voiceSeed);
     void reset() noexcept;
     void recordMeter (ModuleId module, int slot, float out) noexcept;
+    void beginSample() noexcept { std::memset (statelessCalls, 0, sizeof (statelessCalls)); }
+    void recordStateless (ModuleId module, float out) noexcept;
 };
 
 } // namespace vibesynth

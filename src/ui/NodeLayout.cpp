@@ -47,7 +47,8 @@ bool parseNodeName (const std::string& text, ModuleId& module, int& slot)
 
 std::string NodeGraphLayout::label (const Node& n)
 {
-    return std::string (moduleShortName (n.module)) + " " + std::to_string (n.slot);
+    return std::string (moduleShortName (n.module)) + (isStatelessModule (n.module) ? " #" : " ")
+         + std::to_string (n.slot);
 }
 
 NodeGraphLayout layoutNodeGraph (const TouchedNodes& touched,

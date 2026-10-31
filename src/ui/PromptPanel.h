@@ -4,7 +4,9 @@
 // (Enter generates, Shift+Enter adds a line, Esc cancels), one button that
 // is Generate or Cancel, and the status line: the generation stage with
 // its elapsed seconds, the last result, or an amber error whose full
-// reason is in the tooltip and opens below on click.
+// reason is in the tooltip and opens below on click. With no API key the
+// prompt row is an inline card instead ("Add your Meta API key to generate
+// sounds" and an [Add key] button that opens Settings on the key field).
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -74,16 +76,20 @@ public:
     std::function<void (const juce::String&)> onGenerate;
     std::function<void()> onCancel;
     std::function<void()> onToggleDetail;
+    std::function<void()> onAddKey;
 
     PromptEditor prompt;
     juce::TextButton actionButton;
+    juce::TextButton addKeyButton { "Add key" };
     StatusLine status;
 
 private:
     void actionClicked();
 
+    bool needsKey() const noexcept { return ! state.canGenerate && ! state.generating; }
+
     HeaderState state;
-    juce::Rectangle<int> wordmarkArea;
+    juce::Rectangle<int> wordmarkArea, keyCardArea;
 };
 
 // The expanded error reason, placed under the status line by the editor.

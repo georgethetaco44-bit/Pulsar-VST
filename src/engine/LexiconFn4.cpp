@@ -122,9 +122,11 @@ EEL_F NSEEL_CGEN_CALL fnUtilXoverHi (void* ctx, INT_PTR np, EEL_F** p)
 
 EEL_F NSEEL_CGEN_CALL fnUtilBytebeat (void* ctx, INT_PTR np, EEL_F** p)
 {
-    if (voiceRackOf (ctx) == nullptr || np < 2) return 0.0;
-    return static_cast<EEL_F> (bytebeatSample (argD (p, np, 0, 0.0),
-                                               argD (p, np, 1, 0.0)));
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr || np < 2) return 0.0;
+    const float out = bytebeatSample (argD (p, np, 0, 0.0), argD (p, np, 1, 0.0));
+    rack->recordStateless (ModuleId::UtilBytebeat, out);
+    return static_cast<EEL_F> (out);
 }
 
 } // namespace vibesynth

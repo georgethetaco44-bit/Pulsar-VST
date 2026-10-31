@@ -5,11 +5,14 @@
 #include <juce_core/juce_core.h>
 
 #include <cstdio>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "CliCheck.h"
+#include "ai/Generator.h"
+#include "ai/MetaClient.h"
 #include "engine/NodeMeters.h"
 #include "patch/PatchLibrary.h"
 #include "patch/PatchPlayer.h"
@@ -146,8 +149,10 @@ bool smokeNodeLayout()
     bool ok = true;
     ModuleId m = ModuleId::Count;
     ok = check (moduleFromName ("util_xover_hi", m) && m == ModuleId::UtilXover && moduleFromName ("BUS_REVERB_R", m)
-                    && m == ModuleId::BusReverb && ! moduleFromName ("fx_fold", m)
-                    && std::string (moduleShortName (ModuleId::FltLp)) == "flt_lp",
+                    && m == ModuleId::BusReverb && moduleFromName ("fx_fold", m) && m == ModuleId::FxFold
+                    && moduleFromName ("util_bytebeat", m) && m == ModuleId::UtilBytebeat && ! moduleFromName ("noise", m)
+                    && std::string (moduleShortName (ModuleId::FltLp)) == "flt_lp"
+                    && std::string (moduleShortName (ModuleId::FxSat)) == "fx_sat",
                 "M9 module names and aliases")
        && ok;
 
@@ -180,15 +185,33 @@ bool smokeNodeLayout()
         return -1;
     };
     const int lp = find (ModuleId::FltLp, 0), fb = find (ModuleId::UtilSafeFb, 0), saw = find (ModuleId::OscSupersaw, 0);
-    bool contracted = false, feedback = false;
-    for (const auto& e : a.edges)
+    const int sat = find (ModuleId::FxSat, 0), fold = find (ModuleId::FxFold, 0);
+    auto hasEdge = [&a] (int from, int to)
     {
-        contracted = contracted || (e.from == lp && e.to == fb);           // flt_lp -> fx_sat -> fx_fold -> util_safe_fb
-        feedback = feedback || (e.feedback && ((e.from == fb && e.to == saw) || (e.from == saw && e.to == lp)
-                                                || (e.from == lp && e.to == fb)));
+        for (const auto& e : a.edges)
+            if (e.from == from && e.to == to)
+                return true;
+        return false;
+    };
+    // The loop saw -> lp -> sat -> fold -> fb -> saw: one of its edges is the back edge.
+    const int loop[] = { saw, lp, sat, fold, fb, saw };
+    bool chain = true, feedback = false;
+    for (int i = 0; i + 1 < (int) std::size (loop); ++i)
+    {
+        chain = chain && hasEdge (loop[i], loop[i + 1]);
+        for (const auto& e : a.edges)
+            feedback = feedback || (e.feedback && e.from == loop[i] && e.to == loop[i + 1]);
     }
-    ok = check (lp >= 0 && fb >= 0 && saw >= 0 && contracted && feedback,
-                "M9 layout: edges contract through non-nodes; the safe_fb loop is marked feedback")
+    ok = check (lp >= 0 && fb >= 0 && saw >= 0 && sat >= 0 && fold >= 0 && chain && feedback,
+                "M9 layout: Reese shows flt_lp 0 -> fx_sat #0 -> fx_fold #0 -> util_safe_fb 0; the loop is marked feedback")
+       && ok;
+
+    // Reese's master calls bus_sat for L and R: two call-index nodes.
+    const bool busSat = touched.master[(int) ModuleId::BusSat] == 3u;
+    const bool satLabel = sat >= 0 && NodeGraphLayout::label (a.nodes[(size_t) sat]) == "fx_sat #0";
+    ok = check (busSat && satLabel, "M9 stateless shapers: Reese master bus_sat #0 and #1 (mask 0x%x), label '%s'",
+                touched.master[(int) ModuleId::BusSat],
+                sat >= 0 ? NodeGraphLayout::label (a.nodes[(size_t) sat]).c_str() : "none")
        && ok;
 
     // A touched node no edge mentions goes in the loose row; master nodes
@@ -244,6 +267,37 @@ bool smokePatchLibrary()
                 "M9 user save: refuses to overwrite unless asked, sets the name")
        && ok;
     dir.deleteRecursively();
+    return ok;
+}
+
+// The settings "Test key" verdict (ai/Generator.h keyTestPassed) over the
+// replies the service can give, and the no-key case without any network.
+bool smokeKeyTest()
+{
+    const std::string secret = "sk-test-secret-123";
+    const std::string good = R"({"choices":[{"finish_reason":"stop","message":{"content":"ok"}}]})";
+    const std::string thinking = R"({"choices":[{"finish_reason":"length","message":{"content":""}}],)"
+                                 R"("usage":{"completion_tokens":16}})";
+    const auto fine = MetaClient::interpret (200, good, "", secret);
+    const auto spent = MetaClient::interpret (200, thinking, "", secret);
+    const auto unauthorised = MetaClient::interpret (401, R"({"error":{"message":"bad key sk-test-secret-123"}})", "", secret);
+    const auto noModel = MetaClient::interpret (404, R"({"error":{"message":"model not found"}})", "", secret);
+    const auto down = MetaClient::interpret (503, "", "", secret);
+    const auto garbled = MetaClient::interpret (200, "<html>", "", secret);
+    bool ok = check (keyTestPassed (fine) && keyTestPassed (spent), "M9 key test: a reply, or a 200 that spent its tokens thinking, passes");
+    const auto shown = keyTestMessage (unauthorised);
+    ok = check (! keyTestPassed (unauthorised) && unauthorised.error == ChatError::Auth
+                    && shown.find (secret) == std::string::npos && shown.find ("Settings") == std::string::npos
+                    && keyTestMessage (fine) == "Key works",
+                "M9 key test: 401 fails with the auth message ('%s'), key not echoed", shown.c_str())
+         && ok;
+    ok = check (! keyTestPassed (noModel) && noModel.error == ChatError::Rejected && ! keyTestPassed (down)
+                    && ! keyTestPassed (garbled),
+                "M9 key test: bad model (%s), 5xx and a garbled 200 fail", noModel.message.c_str())
+         && ok;
+    const auto none = testApiKey (AiConfig(), "   ", nullptr);
+    ok = check (none.error == ChatError::NoKey && ! keyTestPassed (none), "M9 key test: no key fails at once, no request")
+         && ok;
     return ok;
 }
 

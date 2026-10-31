@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 
+#include "patch/LexiconLint.h"
 #include "ui/Snapshot.h"
 
 using namespace vibesynth::ui;
@@ -38,6 +39,7 @@ VibeSynthAudioProcessorEditor::VibeSynthAudioProcessorEditor (VibeSynthAudioProc
     header.onGenerate = [this] (const juce::String& prompt) { processor.generate (prompt); };
     header.onCancel = [this] { processor.cancelGeneration(); };
     header.onToggleDetail = [this] { setErrorDetailOpen (! errorOpen); };
+    header.onAddKey = [this] { settings.open(); };
     errorDetail.onClose = [this] { setErrorDetailOpen (false); };
 
     static const char* names[numPages] = { "Presets", "Code", "History" };
@@ -137,8 +139,8 @@ void VibeSynthAudioProcessorEditor::layoutContent()
         t.setBounds (row.removeFromLeft (g * 12));
     gear.setBounds (row.removeFromRight (g * 4));
     row.removeFromRight (g * 2);
-    meter.setBounds (row.removeFromRight (g * 10).reduced (0, g));
-    row.removeFromRight (g * 3);
+    meter.setBounds (row.removeFromRight (g * 14).reduced (0, g / 2));
+    row.removeFromRight (g * 2);
     row.removeFromLeft (g * 3);
     toolbarSlot = row;
     for (auto* bar : { &presets.toolbar(), &code.toolbar(), &history.toolbar() })
@@ -167,6 +169,7 @@ void VibeSynthAudioProcessorEditor::setFocusOrder()
     auto add = [&order] (juce::Component* c) { c->setExplicitFocusOrder (order++); };
     add (&header.prompt);
     add (&header.actionButton);
+    add (&header.addKeyButton);
     for (auto* c : macros.focusOrder())
         add (c);
     for (auto& t : tabs)
@@ -235,6 +238,18 @@ void VibeSynthAudioProcessorEditor::setHeaderOverride (std::optional<HeaderState
     refresh();
 }
 
+void VibeSynthAudioProcessorEditor::setKeyOverride (std::optional<bool> hasKey)
+{
+    keyOverride = hasKey;
+    refresh();
+}
+
+void VibeSynthAudioProcessorEditor::showSettingsForSnapshot (const juce::String& fakeKey,
+                                                              const VibeSynthAudioProcessor::KeyTest& result)
+{
+    settings.showForSnapshot (fakeKey, result);
+}
+
 HeaderState VibeSynthAudioProcessorEditor::headerState() const
 {
     if (headerOverride.has_value())
@@ -243,6 +258,8 @@ HeaderState VibeSynthAudioProcessorEditor::headerState() const
     const auto& st = processor.getStatus();
     s.generating = processor.isGenerating();
     s.canGenerate = const_cast<VibeSynthAudioProcessor&> (processor).canGenerate();
+    if (keyOverride.has_value())
+        s.canGenerate = *keyOverride;
     s.kind = kindOf (st.kind);
     s.text = st.text;
     s.detail = st.detail;
@@ -288,7 +305,8 @@ void VibeSynthAudioProcessorEditor::refresh()
                                                                : juce::String();
             defaults[(size_t) i] = patch.macroDefault (i);
         }
-        macros.setPatch (juce::String (patch.name), juce::String (patch.voiceMode), labels, defaults);
+        macros.setPatch (juce::String (patch.name), juce::String (patch.voiceMode), labels, defaults,
+                        vibesynth::macrosRead (patch));
         code.setCode (juce::String (patch.init), juce::String (patch.voice), juce::String (patch.master));
         shownNodesVersion = -1;
     }
@@ -303,6 +321,7 @@ void VibeSynthAudioProcessorEditor::refresh()
         presets.refresh();
     }
     history.refresh();
+    settings.setKeyTest (processor.getKeyTest());
 }
 
 void VibeSynthAudioProcessorEditor::tickMeters()

@@ -10,8 +10,12 @@
 // thread published since the last frame (relaxed atomics, the max over
 // sounding voices), keeps a ~150 ms visual decay, and repaints only while
 // something glows. Glow radius and brightness follow the peak in dB.
+// Pills are sized to their full labels (the font steps down only when a
+// patch has too many wide names for the view).
 //
-// OutputMeter is the small stereo meter in the bottom bar, same scheme.
+// OutputMeter is the stereo meter in the bottom bar: a framed L/R pair of
+// bars over dim tracks with tick marks at -36/-24/-12/-6/0 dBFS, a bright
+// peak-hold mark per channel and amber when the peak is hot.
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -41,6 +45,11 @@ public:
     void resized() override;
 
     int numNodes() const noexcept { return (int) layout.nodes.size(); }
+    // Snapshot tool: what is wrong with the current placement (a label wider
+    // than its pill, pills overlapping, a pill outside the view); empty if
+    // all is well. pillFont() is the label size in use.
+    std::vector<std::string> placementProblems() const;
+    float pillFont() const noexcept { return pillFontSize; }
 
 private:
     void place();
@@ -50,6 +59,7 @@ private:
     std::vector<juce::Rectangle<float>> boxes;   // per layout node
     std::vector<float> levels;                   // per layout node, 0..1 after decay
     juce::Rectangle<int> graphArea, voiceArea, masterArea;
+    float pillFontSize = 11.0f;                  // shrinks only if the full names don't fit
     float dividerX = 0.0f;
     double lastTickMs = 0.0;
     bool glowing = false;
@@ -64,7 +74,9 @@ public:
 
 private:
     float levels[2] = {};
-    float peaks[2] = {};
+    float holds[2] = {};         // peak-hold position, 0..1
+    double holdSetMs[2] = {};    // when the hold was last raised
+    bool hot[2] = {};            // the held peak was at or above -0.5 dBFS
     double lastTickMs = 0.0;
 };
 

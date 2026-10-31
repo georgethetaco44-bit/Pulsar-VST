@@ -39,14 +39,17 @@ MacroKnob::MacroKnob (juce::AudioProcessorValueTreeState& state, int i) : index 
     setPatchMacro ({}, 0.5);
 }
 
-void MacroKnob::setPatchMacro (const juce::String& newLabel, double defaultValue)
+void MacroKnob::setPatchMacro (const juce::String& newLabel, double defaultValue, bool isUsed)
 {
+    used = isUsed;
     label = newLabel.isNotEmpty() ? newLabel : "Macro " + juce::String (index + 1);
     slider.setDoubleClickReturnValue (true, defaultValue);
     const auto host = "Macro " + juce::String (index + 1);
-    slider.setTooltip (label + "\nHost parameter: " + host + ". Double-click resets to the patch default ("
-                       + juce::String (defaultValue, 2) + ").");
-    slider.setDescription (label);
+    slider.setTooltip (used ? label + "\nHost parameter: " + host + ". Double-click resets to the patch default ("
+                                  + juce::String (defaultValue, 2) + ")."
+                            : "Unused by this patch\nHost parameter: " + host + ".");
+    slider.setDescription (used ? label : "Unused by this patch");
+    slider.setAlpha (used ? 1.0f : 0.3f);
     repaint();
 }
 
@@ -58,6 +61,8 @@ constexpr int kKnobBlock = kKnobSize + 4 + 16 + 14; // knob, gap, label, value
 void MacroKnob::paint (juce::Graphics& g)
 {
     using namespace Theme;
+    if (! used)
+        return; // dimmed knob only: no label, no value
     auto r = getLocalBounds();
     r.removeFromTop (slider.getBottom() + 4);
     g.setColour (text);
@@ -144,12 +149,13 @@ MacroPanel::MacroPanel (juce::AudioProcessorValueTreeState& s)
 }
 
 void MacroPanel::setPatch (const juce::String& name, const juce::String& mode,
-                           const std::array<juce::String, 8>& labels, const std::array<double, 8>& defaults)
+                           const std::array<juce::String, 8>& labels, const std::array<double, 8>& defaults,
+                           unsigned readMask)
 {
     patchName = name;
     patchMode = mode;
     for (int i = 0; i < 8; ++i)
-        knobs[(size_t) i]->setPatchMacro (labels[(size_t) i], defaults[(size_t) i]);
+        knobs[(size_t) i]->setPatchMacro (labels[(size_t) i], defaults[(size_t) i], ((readMask >> i) & 1u) != 0u);
     voiceMode.setPatchMode (mode);
     updateGlide();
     repaint();

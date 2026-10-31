@@ -11,7 +11,9 @@
 namespace vibesynth {
 
 // bus_sat is valid on either rack type (it is stateless); the other bus_*
-// need the master rack.
+// need the master rack. It meters by call index through the VM's
+// VoiceRack (the master VM has one too, and both master racks feed the
+// master nodes), so L and R calls are separate nodes.
 EEL_F NSEEL_CGEN_CALL fnBusSat (void* ctx, INT_PTR np, EEL_F** p)
 {
     auto* voice = voiceRackOf (ctx);
@@ -21,10 +23,10 @@ EEL_F NSEEL_CGEN_CALL fnBusSat (void* ctx, INT_PTR np, EEL_F** p)
     const float out = satSample (
         sanitizeFloat (static_cast<float> (argD (p, np, 0, 0.0))),
         argD (p, np, 1, 0.0));
-    if (master != nullptr)
-        master->recordMeter (ModuleId::BusSat, 0, out);
+    if (voice != nullptr)
+        voice->recordStateless (ModuleId::BusSat, out);
     else
-        voice->recordMeter (ModuleId::BusSat, 0, out);
+        master->recordMeter (ModuleId::BusSat, 0, out);
     return static_cast<EEL_F> (out);
 }
 

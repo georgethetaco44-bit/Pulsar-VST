@@ -63,6 +63,7 @@
 #include "SmokeM8.h"
 #include "SmokeM9.h"
 #include "engine/OutputStage.h"
+#include "patch/LexiconLint.h"
 #include "patch/LoopNesting.h"
 #include "patch/Patch.h"
 #include "patch/PatchEngine.h"
@@ -658,41 +659,6 @@ bool smokeOutputStage()
 // examples rely on (a prompt, 4-8 macros, every macro labelled, and the
 // code reads exactly the macros it labels).
 
-bool isIdentChar (char c)
-{
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-        || c == '_' || c == '.';
-}
-
-// Bit i set when the code reads m<i+1> (comments skipped).
-unsigned macrosRead (const std::string& code)
-{
-    unsigned used = 0;
-    for (size_t i = 0; i < code.size(); ++i)
-    {
-        if (code.compare (i, 2, "//") == 0)
-        {
-            i = code.find ('\n', i);
-            if (i == std::string::npos)
-                break;
-        }
-        else if (code.compare (i, 2, "/*") == 0)
-        {
-            i = code.find ("*/", i + 2);
-            if (i == std::string::npos)
-                break;
-            ++i;
-        }
-        else if ((code[i] == 'm' || code[i] == 'M') && (i == 0 || ! isIdentChar (code[i - 1]))
-                 && i + 1 < code.size() && code[i + 1] >= '1' && code[i + 1] <= '8'
-                 && (i + 2 >= code.size() || ! isIdentChar (code[i + 2])))
-        {
-            used |= 1u << (code[i + 1] - '1');
-        }
-    }
-    return used;
-}
-
 // SPEC 9.4: a stored trim may differ from the computed one by up to 1 dB
 // (FMA on arm64 and chaotic or crushed signals move the exact peak).
 constexpr double kTrimToleranceDb = 1.0;
@@ -1191,6 +1157,7 @@ int runSmoketest()
     ok = vibesynth_cli::smokeMeterHarvest() && ok;
     ok = vibesynth_cli::smokeNodeLayout() && ok;
     ok = vibesynth_cli::smokePatchLibrary() && ok;
+    ok = vibesynth_cli::smokeKeyTest() && ok;
     std::printf (ok ? "SMOKETEST PASS\n" : "SMOKETEST FAIL\n");
     return ok ? 0 : 1;
 }

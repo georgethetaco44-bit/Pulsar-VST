@@ -59,6 +59,13 @@ public:
     void setPromptText (const juce::String& text) { header.setPrompt (text); }
     void showPage (int index);  // 0 Presets, 1 Code, 2 History
     void setErrorDetailOpen (bool open);
+    // Forces "has an API key" for the header (nullopt: the real state), so
+    // the snapshots don't depend on this machine's key.
+    void setKeyOverride (std::optional<bool> hasKey);
+    // Opens Settings with a made-up key and a faked key-test result.
+    void showSettingsForSnapshot (const juce::String& fakeKey, const VibeSynthAudioProcessor::KeyTest& result);
+    void closeSettings() { settings.close(); }
+    vibesynth::ui::NodeView& nodeView() noexcept { return nodes; }
     void tickMeters();          // one meter frame now
 
     static constexpr int numPages = 3;
@@ -98,6 +105,7 @@ private:
     juce::String shownSource;
     vibesynth::ui::HeaderState shownHeader;
     std::optional<vibesynth::ui::HeaderState> headerOverride;
+    std::optional<bool> keyOverride;
     int ticks = 0;
 
     std::unique_ptr<vibesynth::ui::SnapshotDriver> snapshot;

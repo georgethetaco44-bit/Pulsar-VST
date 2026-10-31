@@ -39,6 +39,12 @@ struct LintResult
 
 LintResult lintPatch (const Patch& patch);
 
+// M9: bit i set when the code reads macro m<i+1> (comments and strings are
+// blanked first). The editor dims the knobs a patch never reads; the
+// smoketests check that a patch reads exactly the macros it labels.
+unsigned macrosRead (const std::string& code);
+unsigned macrosRead (const Patch& patch);  // init | voice | master
+
 // One section on its own (smoketest cases). `section` is "init", "voice"
 // or "master" and decides where bus_* may appear.
 LintResult lintSection (const std::string& code, const std::string& section);
