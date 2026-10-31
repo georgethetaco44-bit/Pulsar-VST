@@ -248,6 +248,7 @@ public:
     const std::string& compileError() const noexcept { return compileError_; }
 
     VoiceRack& rack() noexcept { return rackStorage_; }
+    VmRackContext& rackContext() noexcept { return rackCtx_; }  // M10: the hooked flag
 
     // `transport` is what init code sees as bpm/beat; `mw` the mod wheel.
     void noteOn (double freq, double note, double vel,
@@ -304,6 +305,7 @@ public:
 
     MasterRack& rack() noexcept { return rackStorage_; }
     VoiceRack& voiceRack() noexcept { return voiceRackStorage_; }
+    VmRackContext& rackContext() noexcept { return rackCtx_; }  // M10: the hooked flag
 
     void renderSample (float inL, float inR, float& outL, float& outR,
                        const double macros[MacroSmoother::kNumMacros],

@@ -8,6 +8,7 @@
 #include "PluginProcessor.h"
 #include "ui/CodeView.h"
 #include "ui/MacroPanel.h"
+#include "ui/NodeInspector.h"
 #include "ui/NodeView.h"
 #include "ui/PresetBrowser.h"
 #include "ui/PromptPanel.h"
@@ -66,6 +67,10 @@ public:
     void showSettingsForSnapshot (const juce::String& fakeKey, const VibeSynthAudioProcessor::KeyTest& result);
     void closeSettings() { settings.close(); }
     vibesynth::ui::NodeView& nodeView() noexcept { return nodes; }
+    // M10 node inspector (SPEC §9.6): opens over the page area.
+    vibesynth::ui::NodeInspector& nodeInspector() noexcept { return inspector; }
+    void openInspector (const vibesynth::NodeRef& node);
+    void closeInspector();
     void tickMeters();          // one meter frame now
 
     static constexpr int numPages = 3;
@@ -91,6 +96,7 @@ private:
     vibesynth::ui::PresetBrowser presets;
     vibesynth::ui::CodeView code;
     vibesynth::ui::HistoryPage history;
+    vibesynth::ui::NodeInspector inspector;
     vibesynth::ui::OutputMeter meter;
     vibesynth::ui::GearButton gear;
     vibesynth::ui::ErrorDetail errorDetail;
@@ -102,6 +108,7 @@ private:
     bool errorOpen = false;
     int shownPatchVersion = -1;
     int shownNodesVersion = -1;
+    int shownTweaksVersion = -1;
     juce::String shownSource;
     vibesynth::ui::HeaderState shownHeader;
     std::optional<vibesynth::ui::HeaderState> headerOverride;

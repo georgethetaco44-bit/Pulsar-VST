@@ -10,6 +10,7 @@
 #include <array>
 #include <memory>
 
+#include "patch/Patch.h"
 #include "ui/Theme.h"
 
 namespace vibesynth::ui {
@@ -22,7 +23,10 @@ public:
     // The patch's label (empty = "Macro N") and default (double-click).
     // `used` false: the patch's code never reads this macro, so the knob is
     // dimmed, with no label or value ("Unused by this patch" in the tooltip).
-    void setPatchMacro (const juce::String& label, double defaultValue, bool used = true);
+    // M10: `drives` lists what macro maps this macro drives ("flt_lp:0
+    // Cutoff"); a mapped macro the code doesn't read counts as used.
+    void setPatchMacro (const juce::String& label, double defaultValue, bool used = true,
+                        const juce::String& drives = {}, bool codeReads = true);
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -65,6 +69,11 @@ public:
     void setPatch (const juce::String& name, const juce::String& voiceMode,
                    const std::array<juce::String, 8>& labels, const std::array<double, 8>& defaults,
                    unsigned readMask);
+    // M10 (SPEC §9.6): the same from the patch itself, with its macro maps.
+    // A macro the code never reads but a map drives is un-dimmed and named
+    // after the mapped argument; one the code reads keeps its label and its
+    // tooltip says what else it drives.
+    void showPatch (const vibesynth::Patch& patch);
 
     void paint (juce::Graphics&) override;
     void resized() override;

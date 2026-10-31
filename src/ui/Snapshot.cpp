@@ -8,6 +8,7 @@
 #include "ai/Generator.h"
 #include "ai/MetaClient.h"
 #include "patch/PatchPlayer.h"
+#include "patch/PatchTweaks.h"
 #include "patch/PatchValidator.h"
 
 namespace vibesynth::ui {
@@ -83,6 +84,8 @@ void SnapshotDriver::playNote (double seconds)
         player->setProgram (program.get());
         player->setHostTransport (140.0, false, false, 0.0);
         player->setVoiceControls (PatchPlayer::VoiceMode::Patch, 0.0);
+        // M10: the processor's tweaks and traces, as the audio thread uses them.
+        player->setNodeHooks (&p.nodeOverrides(), &p.nodeTraces());
     }
 
     std::vector<NoEvent> none;
@@ -118,6 +121,17 @@ void SnapshotDriver::playNote (double seconds)
     p.publishOutputPeak (0, peakL);
     p.publishOutputPeak (1, peakR);
     editor.tickMeters();
+}
+
+void SnapshotDriver::retrigger (double releaseSeconds)
+{
+    if (player == nullptr)
+        return;
+    const uint8_t noteOff[3] = { 0x80, 40, 0 };
+    player->handleMidi (noteOff, 3);
+    playNote (releaseSeconds);
+    const uint8_t noteOn[3] = { 0x90, 40, 100 };
+    player->handleMidi (noteOn, 3);
 }
 
 void SnapshotDriver::shoot (const juce::String& name, float pixelScale)
@@ -229,6 +243,41 @@ void SnapshotDriver::runShots()
     playNote (0.1);
     shoot ("scale_150");
     editor.setSize (w, h);
+
+    // M10 inspector: Reese's filter with a cutoff offset and its resonance
+    // mapped to the unused macro 5, a bypassed fold, then an envelope, an
+    // oscillator and the map-to-macro menu.
+    using vibesynth::NodeRef;
+    using vibesynth::RackKind;
+    auto& proc = editor.getProcessor();
+    proc.setNodeArg ("flt_lp:0", "cutoff", vibesynth::ArgTweak::kOffset, 0.12);
+    proc.setNodeMacroMap ("flt_lp:0", "res", 5, 0.1, 0.6);
+    proc.setNodeBypass ("fx_fold#0", true);
+    editor.setKeyOverride (true);  // refresh() now: no message loop runs between shots
+    playNote (0.4);
+    editor.openInspector (NodeRef { RackKind::Voice, ModuleId::FltLp, 0 });
+    playNote (0.3);
+    shoot ("inspector_flt_lp");
+    // Release, then a new note: the rolling trace shows the release tail,
+    // the attack, the decay and the sustain.
+    editor.openInspector (NodeRef { RackKind::Voice, ModuleId::EnvAdsr, 0 });
+    retrigger (0.6);
+    for (int i = 0; i < 12; ++i)
+        playNote (0.1);
+    shoot ("inspector_env_adsr");
+    editor.openInspector (NodeRef { RackKind::Voice, ModuleId::OscSupersaw, 0 });
+    playNote (0.2);
+    shoot ("inspector_osc");
+    editor.openInspector (NodeRef { RackKind::Voice, ModuleId::FltLp, 0 });
+    playNote (0.1);
+    editor.nodeInspector().showMapMenu (1);
+    shoot ("inspector_map_menu");
+    juce::PopupMenu::dismissAllActiveMenus();
+    editor.closeInspector();
+    proc.setNodeArg ("flt_lp:0", "cutoff", 0, 0.0);
+    proc.clearNodeMacroMap ("flt_lp:0", "res");
+    proc.setNodeBypass ("fx_fold#0", false);
+    editor.setKeyOverride (true);
 
     // Last: closing Settings leaves keyboard focus on the gear.
     using KeyTest = VibeSynthAudioProcessor::KeyTest;

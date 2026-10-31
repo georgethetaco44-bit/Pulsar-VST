@@ -47,6 +47,7 @@
 #include <vector>
 
 #include "engine/NodeMeters.h"
+#include "engine/NodeOverrides.h"
 #include "engine/OutputStage.h"
 #include "engine/Oversampler.h"
 #include "patch/PatchEngine.h"
@@ -79,7 +80,24 @@ public:
     // The program being played (not owned). setProgram() swaps it with no
     // voice handling (prepare/teardown only).
     PatchProgram* program() const noexcept { return program_; }
-    void setProgram (PatchProgram* p) noexcept { program_ = p; }
+    void setProgram (PatchProgram* p) noexcept
+    {
+        program_ = p;
+        configureHooks (false);
+    }
+
+    // M10 (SPEC §9.6): the processor's override table and trace bank (not
+    // owned; null = none). Off the audio thread, before rendering. Each
+    // chunk the player points every rack of the current program at the
+    // table (`hooked` only while the table has something for that rack),
+    // and the newest sounding voice and the master at the traces while
+    // traces->enabled.
+    void setNodeHooks (const OverrideTable* table, TraceBank* traces) noexcept
+    {
+        overrides_ = table;
+        traces_ = traces;
+        configureHooks (false);
+    }
 
     // Audio thread (SPEC 7.3): plays `next` from now on and returns the old
     // program. Held notes restart on their new voices (trig = 1, init
@@ -222,6 +240,8 @@ private:
     void clearHeld() noexcept { heldCount_ = 0; }
 
     void beginChunk (int n, const float targets[kNumMacros]) noexcept;
+    // M10: rack hook pointers for the current program (see setNodeHooks).
+    void configureHooks (bool newChunk) noexcept;
     // Smoothed mod wheel and pitch-bend ratio for host samples [from, to).
     void fillControls (int from, int to) noexcept;
     void renderVoices (int start, int end) noexcept;
@@ -262,6 +282,10 @@ private:
     double bendRatio_ = 1.0;
     double eventMw_ = 0.0;
     double eventBend_ = 1.0;
+
+    // M10 hooks (not owned).
+    const OverrideTable* overrides_ = nullptr;
+    TraceBank* traces_ = nullptr;
 };
 
 } // namespace vibesynth

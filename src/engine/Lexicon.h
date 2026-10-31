@@ -124,6 +124,9 @@ struct LorenzCache  { float rate = -1.0f; double dt = 0.0; int steps = 1; };
 struct DuffingCache { float hz = -1.0f; double rotCos = 1.0; double rotSin = 0.0;
                       double h = 0.0; int steps = 1; double dcR = 0.0; };
 
+struct OverrideTable;  // engine/NodeOverrides.h (M10)
+struct TraceSink;
+
 // ---------------------------------------------------------------------------
 // VoiceRack: all module state for one voice. init() pre-allocates (off the
 // audio thread); reset() clears state without allocating; recordMeter()
@@ -183,6 +186,18 @@ struct VoiceRack
     std::atomic<float> meters[kNumModules][kMaxSlotsPerModule];
     std::atomic<uint32_t> touched[kNumModules];
     uint8_t statelessCalls[kNumModules] = {};
+
+    // M10 hooks (SPEC §9.6; engine/LexiconHooks.h). PatchPlayer sets them
+    // per chunk from the processor's OverrideTable and TraceBank, never
+    // through a program; reset() leaves them alone. (The fast-path flag is
+    // VmRackContext::hooked.) `rackKind` is RackKind (0 voice, 1 master:
+    // the master VM's own VoiceRack). `macroVars` are the VM's m1..m8, set
+    // when the VM is built, for macro maps.
+    uint8_t rackKind = 0;
+    const OverrideTable* overrides = nullptr;
+    TraceSink* capture = nullptr;
+    const double* macroVars[8] = {};
+
 
     void init (double newSampleRate, uint32_t voiceSeed);
     void reset() noexcept;

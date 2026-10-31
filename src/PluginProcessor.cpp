@@ -71,6 +71,8 @@ VibeSynthAudioProcessor::VibeSynthAudioProcessor()
     uiPatch = defaultPatch;
     probeRequested = true; // the default patch's nodes, once the worker runs
 
+    player.setNodeHooks (overrideTable.get(), traceBank.get());  // M10
+
     worker.startThread();
     generationWorker.startThread(); // idles until generate(); no network here
 }
@@ -782,6 +784,7 @@ void VibeSynthAudioProcessor::handleAsyncUpdate()
             continue;
         }
         uiPatch = r.patch;
+        applyTweaksFrom (r.patch);  // M10: the new patch's tweaks (none clears them)
         ++patchVersion;
         if (r.sourceKey.isNotEmpty())
             activeSource = r.sourceKey;

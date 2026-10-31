@@ -226,6 +226,7 @@ set(VIBESYNTH_UI_SOURCES
     src/ui/MacroPanel.cpp
     src/ui/NodeLayout.cpp
     src/ui/NodeView.cpp
+    src/ui/NodeInspector.cpp
     src/ui/PresetBrowser.cpp
     src/ui/CodeView.cpp
     src/ui/SettingsPanel.cpp
@@ -233,6 +234,7 @@ set(VIBESYNTH_UI_SOURCES
 
 target_sources(VibeSynthVST PRIVATE
     src/PluginProcessor.cpp
+    src/PluginProcessorTweaks.cpp
     src/PluginEditor.cpp
     ${VIBESYNTH_UI_SOURCES}
     ${VIBESYNTH_PATCH_SOURCES}
@@ -277,7 +279,15 @@ add_library(vibesynth_engine STATIC
     src/engine/LexiconFn4.cpp
     src/engine/LexiconFn5.cpp
     src/engine/LexiconFn6.cpp
-    src/engine/LexiconReg.cpp)
+    src/engine/LexiconReg.cpp
+    src/engine/LexiconHooks.cpp
+    src/engine/NodeOverrides.cpp
+    src/patch/PatchTweaks.cpp
+    src/patch/PatchBake.cpp)
+# M10: the override maths must round like EEL2's separate multiply and add
+# (vibesynth_cli --bake output renders identically), so no FMA contraction.
+set_source_files_properties(src/engine/NodeOverrides.cpp PROPERTIES COMPILE_OPTIONS
+    "$<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:-ffp-contract=off>")
 target_include_directories(vibesynth_engine PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/WDL/WDL")
@@ -320,6 +330,8 @@ target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/SmokeM8.cpp
     tools/vibesynth_cli/Batch.cpp
     tools/vibesynth_cli/SmokeM9.cpp
+    tools/vibesynth_cli/SmokeM10.cpp
+    tools/vibesynth_cli/Bake.cpp
     src/ui/NodeLayout.cpp
     ${VIBESYNTH_PATCH_SOURCES}
     ${VIBESYNTH_AI_SOURCES})

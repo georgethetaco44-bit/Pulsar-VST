@@ -17,6 +17,11 @@
 //   history.png        the History tab
 //   scale_075.png      720 x 480
 //   scale_150.png      1440 x 960
+//   inspector_flt_lp.png    M10: the inspector on Reese's flt_lp:0 (response
+//                      curve; cutoff offset, res mapped to macro 5, fold bypassed)
+//   inspector_env_adsr.png  env_adsr:0 (rolling trace)
+//   inspector_osc.png  osc_supersaw:0
+//   inspector_map_menu.png  the right-click "Map to macro" menu
 //   nodes/<preset>.png the node view of each built-in, with a printed line
 //                      per preset (font size, cut-off or overlapping pills)
 //
@@ -51,6 +56,7 @@ public:
 private:
     void timerCallback() override;
     void playNote (double seconds);
+    void retrigger (double releaseSeconds);  // M10: note off, render, note on
     void shoot (const juce::String& name, float pixelScale = 1.0f);
     void runShots();
     void checkNodeViews();

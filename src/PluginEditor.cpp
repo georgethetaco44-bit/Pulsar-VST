@@ -31,6 +31,7 @@ VibeSynthAudioProcessorEditor::VibeSynthAudioProcessorEditor (VibeSynthAudioProc
       macros (p.apvts),
       presets (p),
       history (p),
+      inspector (p),
       settings (p)
 {
     setLookAndFeel (&lookAndFeel);
@@ -70,6 +71,9 @@ VibeSynthAudioProcessorEditor::VibeSynthAudioProcessorEditor (VibeSynthAudioProc
     content.addChildComponent (history.toolbar());
     content.addAndMakeVisible (meter);
     content.addAndMakeVisible (gear);
+    content.addChildComponent (inspector);  // M10
+    nodes.onNodeClicked = [this] (const vibesynth::NodeRef& n) { openInspector (n); };
+    inspector.onClose = [this] { closeInspector(); };
     content.addChildComponent (errorDetail);
     content.addChildComponent (settings);
     addAndMakeVisible (content);
@@ -79,6 +83,7 @@ VibeSynthAudioProcessorEditor::VibeSynthAudioProcessorEditor (VibeSynthAudioProc
     showPage (0);
     processor.addChangeListener (this);
     processor.wantNodes();
+    processor.wantTraces (true);  // M10: live node traces while an editor is open
     refresh();
 
     // Fixed aspect, 0.75x to 1.5x, starting at the last size used but never
@@ -106,6 +111,7 @@ VibeSynthAudioProcessorEditor::~VibeSynthAudioProcessorEditor()
 {
     snapshot.reset();
     stopTimer();
+    processor.wantTraces (false);
     processor.removeChangeListener (this);
     setLookAndFeel (nullptr);
 }
@@ -150,6 +156,7 @@ void VibeSynthAudioProcessorEditor::layoutContent()
     presets.setBounds (pageArea);
     code.setBounds (pageArea);
     history.setBounds (pageArea);
+    inspector.setBounds (pageArea);
 
     settings.setBounds (0, 0, Theme::baseWidth, Theme::baseHeight);
     placeErrorDetail();
@@ -185,8 +192,29 @@ void VibeSynthAudioProcessorEditor::setFocusOrder()
         t.setWantsKeyboardFocus (true);
 }
 
+void VibeSynthAudioProcessorEditor::openInspector (const vibesynth::NodeRef& node)
+{
+    inspector.setNode (node);
+    inspector.setVisible (true);
+    inspector.toFront (false);
+    errorDetail.toFront (false);
+    settings.toFront (false);
+    nodes.setSelected (&node);
+    for (auto& t : tabs)
+        t.setToggleState (false, juce::dontSendNotification);
+}
+
+void VibeSynthAudioProcessorEditor::closeInspector()
+{
+    inspector.setVisible (false);
+    nodes.setSelected (nullptr);
+    tabs[(size_t) page].setToggleState (true, juce::dontSendNotification);
+}
+
 void VibeSynthAudioProcessorEditor::showPage (int index)
 {
+    if (inspector.isVisible())
+        closeInspector();
     page = juce::jlimit (0, numPages - 1, index);
     juce::Component* pages[numPages] = { &presets, &code, &history };
     juce::Component* bars[numPages] = { &presets.toolbar(), &code.toolbar(), &history.toolbar() };
@@ -297,23 +325,26 @@ void VibeSynthAudioProcessorEditor::refresh()
     {
         shownPatchVersion = processor.getPatchVersion();
         const auto& patch = processor.getUiPatch();
-        std::array<juce::String, 8> labels;
-        std::array<double, 8> defaults {};
-        for (int i = 0; i < 8; ++i)
-        {
-            labels[(size_t) i] = i < (int) patch.macros.size() ? juce::String (patch.macros[(size_t) i].label)
-                                                               : juce::String();
-            defaults[(size_t) i] = patch.macroDefault (i);
-        }
-        macros.setPatch (juce::String (patch.name), juce::String (patch.voiceMode), labels, defaults,
-                        vibesynth::macrosRead (patch));
         code.setCode (juce::String (patch.init), juce::String (patch.voice), juce::String (patch.master));
         shownNodesVersion = -1;
+        shownTweaksVersion = -1;
     }
     if (processor.getNodesVersion() != shownNodesVersion)
     {
         shownNodesVersion = processor.getNodesVersion();
         nodes.setGraph (processor.getActiveNodes(), processor.areNodesKnown(), processor.getUiPatch().graphJson);
+        shownTweaksVersion = -1;
+        // M10: the inspected node went away with the old patch.
+        if (inspector.isVisible() && processor.areNodesKnown() && ! nodes.hasNode (inspector.node()))
+            closeInspector();
+    }
+    if (processor.getTweaksVersion() != shownTweaksVersion)
+    {
+        // M10: labels, dimming and tooltips follow the macro maps too.
+        shownTweaksVersion = processor.getTweaksVersion();
+        macros.showPatch (processor.getUiPatch());
+        nodes.setTweaks (processor.getUiPatch());
+        inspector.refreshFromPatch();
     }
     if (processor.getActiveSource() != shownSource)
     {
@@ -327,7 +358,8 @@ void VibeSynthAudioProcessorEditor::refresh()
 void VibeSynthAudioProcessorEditor::tickMeters()
 {
     const double now = juce::Time::getMillisecondCounterHiRes();
-    nodes.tick (processor.nodeMeters(), now);
+    nodes.tick (processor.nodeMeters(), now, &processor.nodeTraces());
+    inspector.tick();
     meter.tick (processor.takeOutputPeak (0), processor.takeOutputPeak (1), now);
 }
 

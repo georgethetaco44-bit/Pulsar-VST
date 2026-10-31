@@ -62,6 +62,7 @@
 #include "SmokeM7.h"
 #include "SmokeM8.h"
 #include "SmokeM9.h"
+#include "SmokeM10.h"
 #include "engine/OutputStage.h"
 #include "patch/LexiconLint.h"
 #include "patch/LoopNesting.h"
@@ -1158,6 +1159,7 @@ int runSmoketest()
     ok = vibesynth_cli::smokeNodeLayout() && ok;
     ok = vibesynth_cli::smokePatchLibrary() && ok;
     ok = vibesynth_cli::smokeKeyTest() && ok;
+    ok = vibesynth_cli::smokeM10() && ok;
     std::printf (ok ? "SMOKETEST PASS\n" : "SMOKETEST FAIL\n");
     return ok ? 0 : 1;
 }
@@ -1241,14 +1243,16 @@ int main (int argc, char** argvIn)
     const bool validate = argc == 3 && std::strcmp (argv[1], "--validate") == 0;
     const bool render = argc >= 4 && std::strcmp (argv[1], "--render") == 0;
     const bool batch = argc >= 3 && std::strcmp (argv[1], "--batch") == 0;
-    if (! smoke && ! self && ! bench && ! validate && ! render && ! batch)
+    const bool bake = argc == 4 && std::strcmp (argv[1], "--bake") == 0;  // M10
+    if (! smoke && ! self && ! bench && ! validate && ! render && ! batch && ! bake)
     {
         std::printf ("usage: vibesynth_cli (--smoketest | --selftest [--strict-cpu] | --bench | --validate file.pulsar\n"
                      "                     | --render <patch.pulsar | built-in> out.wav\n"
                      "                       [--sr HZ] [--seconds-tail S] [--bpm BPM] [--phrase default|riff]\n"
                      "                       [--mode patch|poly|mono] [--glide G] [--macro N=V]...\n"
                      "                     | --batch prompts.txt [--batch-limit N] [--out DIR] [--endpoint URL] [--model ID]\n"
-                     "                       [--effort low|minimal|medium|none])\n"
+                     "                       [--effort low|minimal|medium|none]\n"
+                     "                     | --bake in.pulsar out.pulsar)\n"
                      "                     [--os 1|2]  (bench/validate/render voice oversampling, default 2)\n");
         return 2;
     }
@@ -1278,6 +1282,8 @@ int main (int argc, char** argvIn)
         return jitOk ? vibesynth_cli::runRender (argc - 2, argv + 2, g_oversampling) : 2;
     if (batch)
         return jitOk ? vibesynth_cli::runBatch (argc - 2, argv + 2, g_oversampling) : 2;
+    if (bake)
+        return jitOk ? vibesynth_cli::runBake (argv[2], argv[3], g_oversampling) : 2;
 
     bool ok = check (jit, "execution mode is %s", mode);
     ok = check (initOk, "NSEEL_init") && ok;

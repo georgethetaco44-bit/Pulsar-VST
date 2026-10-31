@@ -66,6 +66,10 @@ struct VmRackContext
 {
     VoiceRack* voice = nullptr;
     MasterRack* master = nullptr;
+    // M10: true while the VM's racks have overrides to apply or a trace to
+    // write (PatchPlayer, per chunk). False keeps every lexicon call on the
+    // unchanged fast path: the thunk's one load and one branch.
+    bool hooked = false;
 };
 
 // Registers every SPEC §5.2 MVP native function (once, off the audio

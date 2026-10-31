@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -14,6 +15,7 @@
 #include "ai/AiSettings.h"
 #include "ai/Generator.h"
 #include "engine/NodeMeters.h"
+#include "engine/NodeOverrides.h"
 #include "patch/Patch.h"
 #include "patch/PatchEngine.h"
 #include "patch/PatchPlayer.h"
@@ -172,6 +174,22 @@ public:
     {
         vibesynth::NodeMeterBank::raise (outputPeak[channel != 0 ? 1 : 0], peak);
     }
+
+    // M10 node inspector (SPEC §9.6; PluginProcessorTweaks.cpp). Message
+    // thread. Each edit updates the active patch's tweaks (saved with the
+    // state and by Save) and the override table the audio thread reads,
+    // then notifies the editor (getTweaksVersion bumps). Node ids and
+    // argument names as in patch/PatchTweaks.h.
+    void setNodeBypass (const std::string& node, bool on);
+    void setNodeArg (const std::string& node, const std::string& arg, int mode, double value);  // mode 0 clears
+    void setNodeMacroMap (const std::string& node, const std::string& arg, int macro, double min, double max);
+    void clearNodeMacroMap (const std::string& node, const std::string& arg);
+    int getTweaksVersion() const noexcept { return tweaksVersion; }
+    // Live traces for the node pills and the inspector (written only while
+    // an editor wants them).
+    vibesynth::TraceBank& nodeTraces() noexcept { return *traceBank; }
+    const vibesynth::OverrideTable& nodeOverrides() const noexcept { return *overrideTable; }
+    void wantTraces (bool on) noexcept { traceBank->enabled = on; }
 
     // M9: the editor's size as a scale of 960 x 640, kept across editor
     // reopenings and saved with the state.
@@ -417,6 +435,14 @@ private:
     int nodesVersion = 0;
     juce::String generationStage;
     double generationStartMs = 0.0;
+
+    // M10: what the inspector set and what it draws (processor-owned; the
+    // player points the racks at them, never through a program).
+    void applyTweaksFrom (const vibesynth::Patch& patch);
+    void editTweaks (const std::function<void (vibesynth::Patch&)>& edit);
+    std::unique_ptr<vibesynth::OverrideTable> overrideTable { std::make_unique<vibesynth::OverrideTable>() };
+    std::unique_ptr<vibesynth::TraceBank> traceBank { std::make_unique<vibesynth::TraceBank>() };
+    int tweaksVersion = 0;
 
     // M9 meters and editor size (any thread; relaxed atomics).
     vibesynth::NodeMeterBank meterBank;
