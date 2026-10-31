@@ -74,6 +74,16 @@ std::string firstEelBlock (const std::string& text)
     return s.upToFirstOccurrenceOf ("```", false, false).toStdString();
 }
 
+// "lint: <reason> | ok" for a [FAIL] line: which stage each attempt ended
+// at and why.
+std::string attemptSummary (const GenerationResult& res)
+{
+    std::string s;
+    for (const auto& a : res.attempts)
+        s += (s.empty() ? "" : " | ") + a.stage + (a.reason.empty() ? "" : ": " + a.reason);
+    return s.empty() ? "no attempts" : s;
+}
+
 const char* kReplyOk =
     "Here you go.\n"
     "```json\n{\"name\": \"T\", \"voiceMode\": \"mono\", \"macros\": ["
@@ -92,9 +102,11 @@ const char* kReplyOk =
 // (signature = arity, slot pool, voice/master), and exactly the EEL2
 // built-ins the lint allows.
 
-bool smokeApiReference()
+namespace {
+
+bool checkApiReference (const PromptResources& res)
 {
-    const juce::String doc = "\n" + juce::String (PromptResources::embedded().apiReference) + "\n";
+    const juce::String doc = "\n" + juce::String (res.apiReference) + "\n";
     bool ok = check (doc.length() > 1000, "api_reference.md is embedded (%d chars)", doc.length());
 
     struct Doc { std::string params; int slots; std::string scope; int count = 0; };
@@ -181,6 +193,33 @@ bool smokeApiReference()
     return ok;
 }
 
+// Every recipe's first ```eel block lints clean.
+bool checkRecipes (const PromptResources& res)
+{
+    const auto& recipes = res.recipes;
+    int recipesClean = 0;
+    for (const auto& rec : recipes)
+    {
+        const std::string code = firstEelBlock (rec.text);
+        const bool master = code.find ("// master") == 0;
+        const LintResult lr = lintSection (code, master ? "master" : "voice");
+        if (lr.ok() && ! code.empty())
+            ++recipesClean;
+        else
+            check (false, "recipe %s example lints clean: %s", rec.file.c_str(),
+                   code.empty() ? "no ```eel block" : lr.message().c_str());
+    }
+    return check (recipesClean == (int) recipes.size() && recipes.size() >= 10,
+                  "%d/%d recipe examples lint clean", recipesClean, (int) recipes.size());
+}
+
+} // namespace
+
+bool smokeApiReference()
+{
+    return checkApiReference (PromptResources::embedded());
+}
+
 // ---------------------------------------------------------------------------
 // SPEC §6.4 lint: one case per rule, then the validator path and the
 // shipped presets and recipes.
@@ -254,28 +293,28 @@ bool smokeLint()
     }
     ok = check (clean == numBuiltinPresets(), "%d/%d built-in presets lint clean", clean, numBuiltinPresets()) && ok;
 
-    const auto& recipes = PromptResources::embedded().recipes;
-    int recipesClean = 0;
-    for (const auto& rec : recipes)
-    {
-        const std::string code = firstEelBlock (rec.text);
-        const bool master = code.find ("// master") == 0;
-        const LintResult lr = lintSection (code, master ? "master" : "voice");
-        if (lr.ok() && ! code.empty())
-            ++recipesClean;
-        else
-            check (false, "recipe %s example lints clean: %s", rec.file.c_str(), lr.message().c_str());
-    }
-    ok = check (recipesClean == (int) recipes.size() && recipes.size() >= 10,
-                "%d/%d recipe examples lint clean", recipesClean, (int) recipes.size()) && ok;
+    ok = checkRecipes (PromptResources::embedded()) && ok;
     return ok;
 }
 
 // ---------------------------------------------------------------------------
 // SPEC §6.2 parser.
 
-bool smokeResponseParser()
+namespace {
+
+std::string withCrlf (const std::string& text)
 {
+    return juce::String (normaliseLineEndings (text)).replace ("\n", "\r\n").toStdString();
+}
+
+// `crlf`: every reply goes in with Windows line endings; the results must
+// be the same.
+bool checkResponseParser (bool crlf)
+{
+    auto parseResponse = [crlf] (const std::string& reply)
+    {
+        return vibesynth::parseResponse (crlf ? withCrlf (reply) : reply);
+    };
     bool ok = true;
     ResponseParseResult r = parseResponse (kReplyOk);
     ok = check (r.ok() && r.patch.name == "T" && r.patch.voiceMode == "mono" && r.patch.macros.size() == 8
@@ -328,14 +367,24 @@ bool smokeResponseParser()
     return ok;
 }
 
+} // namespace
+
+bool smokeResponseParser()
+{
+    return checkResponseParser (false);
+}
+
 // ---------------------------------------------------------------------------
 // SPEC §6.1: the few-shot examples parse, have 8 labelled macros that the
 // code all reads, pass the offline test, and stay lean (cost reported).
 
-bool smokePromptExamples()
+namespace {
+
+// `measure`: also report each example's CPU cost.
+bool checkPromptExamples (const PromptResources& res, bool measure)
 {
     bool ok = true;
-    const auto& examples = PromptResources::embedded().examples;
+    const auto& examples = res.examples;
     std::map<std::string, int> categories;
     for (const auto& e : examples)
     {
@@ -359,6 +408,8 @@ bool smokePromptExamples()
         const ValidationResult vr = validatePatch (p, kRate);
         ok = check (vr.ok(), "example %s passes the offline test%s%s", e.file.c_str(), vr.ok() ? "" : ": ",
                     vr.error.c_str()) && ok;
+        if (! measure)
+            continue;
         const PresetCost cost = measurePresetCost (p, 3, 24000, PatchProgram::kDefaultOversampling);
         std::printf ("[INFO] example %s (%s): voice %.0f ns (poly budget %.0f), master %.0f ns (budget %.0f)\n",
                      e.file.c_str(), p.voiceMode.c_str(), cost.voiceNs, Patch::kPolyVoiceBudgetNs, cost.masterNs,
@@ -368,6 +419,13 @@ bool smokePromptExamples()
                     && categories["texture"] == 1,
                 "3 examples: a bass, a pluck and a texture (%d found)", (int) examples.size()) && ok;
     return ok;
+}
+
+} // namespace
+
+bool smokePromptExamples()
+{
+    return checkPromptExamples (PromptResources::embedded(), true);
 }
 
 // ---------------------------------------------------------------------------
@@ -528,10 +586,18 @@ bool smokeSelfHeal()
     const std::string good = PromptResources::embedded().examples.at (0).reply;
     const std::string invented = juce::String (good).replace ("osc_supersaw(0,", "osc_wavetable(0,").toStdString();
 
+    // The weight hint reads an injected voice cost, not a timing, so these
+    // cases run the same on any machine (Rosetta included): a patch marked
+    // "heavy_marker" costs 100x its budget, anything else a tenth of it.
     std::vector<ChatRequest> seen;
     std::vector<std::string> replies;
     GenerationRequest gr;
     gr.prompt = "dark reese";
+    gr.measureVoice = [] (const Patch& p)
+    {
+        const bool heavy = p.voice.find ("heavy_marker") != std::string::npos;
+        return p.voiceBudgetNs() * (heavy ? 100.0 : 0.1);
+    };
     gr.transport = [&] (const ChatRequest& c)
     {
         seen.push_back (c);
@@ -551,15 +617,16 @@ bool smokeSelfHeal()
                     && retryText.find ("unknown function osc_wavetable") != std::string::npos
                     && res.patch.prompt == "dark reese" && res.patch.trim > 0.0 && res.patch.trim <= 1.0
                     && res.promptTokens() == 2000 && res.completionTokens() == 800,
-                "self-heal: lint failure -> retry at 0.15 with the reply and reason -> passes (%d attempts, trim %.3f)",
-                (int) res.attempts.size(), res.patch.trim) && ok;
+                "self-heal: lint failure -> retry at 0.15 with the reply and reason -> passes (%d attempts, trim %.3f: %s)",
+                (int) res.attempts.size(), res.patch.trim, attemptSummary (res).c_str()) && ok;
 
     seen.clear();
     replies = { "no blocks at all" };
     res = Generator::run (gr, nullptr);
     ok = check (! res.ok && res.attempts.size() == 3 && seen.size() == 3 && res.attempts[2].stage == "parse"
                     && res.reason.find ("no ```json") == 0,
-                "self-heal: 3 bad replies -> fails after 2 retries: \"%s\"", res.reason.c_str()) && ok;
+                "self-heal: 3 bad replies -> fails after 2 retries: \"%s\" (%s)", res.reason.c_str(),
+                attemptSummary (res).c_str()) && ok;
 
     seen.clear();
     gr.transport = [&] (const ChatRequest& c)
@@ -572,12 +639,13 @@ bool smokeSelfHeal()
     };
     res = Generator::run (gr, nullptr);
     ok = check (! res.ok && res.attempts.size() == 1 && res.attempts[0].stage == "request" && seen.size() == 1,
-                "self-heal: a request error is not retried: \"%s\"", res.reason.c_str()) && ok;
+                "self-heal: a request error is not retried: \"%s\" (%s)", res.reason.c_str(),
+                attemptSummary (res).c_str()) && ok;
 
-    // Weight hint: a poly patch spending ~1 us per voice-sample.
+    // Weight hint: the poly pluck, marked heavy (the injected cost above).
     const std::string heavy = juce::String (PromptResources::embedded().examples.at (1).reply)
                                   .replace ("out = fx_sat(x, 0.25) * env * vel;",
-                                            "z = 0; loop(64, z += sin(z + x));\nout = fx_sat(x + z * 0.000001, 0.25) * env * vel;")
+                                            "heavy_marker = 1;\nout = fx_sat(x, 0.25) * env * vel * heavy_marker;")
                                   .toStdString();
     const std::string light = PromptResources::embedded().examples.at (1).reply;
     seen.clear();
@@ -591,23 +659,74 @@ bool smokeSelfHeal()
     replies = { heavy, light };
     res = Generator::run (gr, nullptr);
     ok = check (res.ok && res.attempts.size() == 2 && res.attempts[0].stage == "weight"
-                    && res.attempts[0].reason.find ("too heavy: ") == 0
-                    && res.attempts[0].reason.find ("budget 300 (poly); simplify") != std::string::npos
-                    && res.patch.voice.find ("loop(64") == std::string::npos,
-                "self-heal: weight hint \"%s\" -> the lighter retry is kept (%.0f ns)",
-                res.attempts.empty() ? "" : res.attempts[0].reason.c_str(), res.voiceNs) && ok;
+                    && res.attempts[0].reason == "too heavy: 30000 ns per voice-sample, budget 300 (poly); simplify"
+                    && res.patch.voice.find ("heavy_marker") == std::string::npos,
+                "self-heal: weight hint \"%s\" -> the lighter retry is kept (%.0f ns; %d attempts: %s)",
+                res.attempts.empty() ? "" : res.attempts[0].reason.c_str(), res.voiceNs, (int) res.attempts.size(),
+                attemptSummary (res).c_str()) && ok;
     seen.clear();
     replies = { heavy, "broken", "broken" };
     res = Generator::run (gr, nullptr);
-    ok = check (res.ok && res.attempts.size() == 3 && res.patch.voice.find ("loop(64") != std::string::npos
+    ok = check (res.ok && res.attempts.size() == 3 && res.patch.voice.find ("heavy_marker") != std::string::npos
                     && res.reason.find ("kept the heavier version") == 0,
-                "self-heal: if the lighter retries fail, the heavy patch that passed is accepted: \"%s\"",
-                res.reason.c_str()) && ok;
+                "self-heal: if the lighter retries fail, the heavy patch that passed is accepted: \"%s\" (%s)",
+                res.reason.c_str(), attemptSummary (res).c_str()) && ok;
 
     // Cancel before the first request.
     std::atomic<bool> cancel { true };
     res = Generator::run (gr, &cancel);
     ok = check (res.cancelled && ! res.ok, "self-heal: a cancelled run reports cancelled") && ok;
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// Windows checkouts and editors: the resource, reply and .pulsar parsers
+// read CRLF text exactly as they read LF.
+
+bool smokeCrlf()
+{
+    auto files = PromptResources::embeddedFiles();
+    int converted = 0;
+    for (auto& [name, text] : files)
+    {
+        text = withCrlf (text);
+        converted += text.find ("\r\n") != std::string::npos ? 1 : 0;
+    }
+    const PromptResources crlf = PromptResources::fromFiles (files);
+    const PromptResources& lf = PromptResources::embedded();
+
+    CheckPrefix prefix ("CRLF ");
+    bool ok = check (converted == (int) files.size() && converted > 0, "%d/%d prompt resources converted to CRLF",
+                     converted, (int) files.size());
+    bool same = crlf.systemPrompt == lf.systemPrompt && crlf.apiReference == lf.apiReference
+                && crlf.recipes.size() == lf.recipes.size() && crlf.examples.size() == lf.examples.size();
+    std::string differ;
+    for (size_t i = 0; same && i < lf.recipes.size(); ++i)
+        if (crlf.recipes[i].text != lf.recipes[i].text || crlf.recipes[i].keywords != lf.recipes[i].keywords
+            || crlf.recipes[i].title != lf.recipes[i].title)
+            differ += " " + lf.recipes[i].file;
+    for (size_t i = 0; same && i < lf.examples.size(); ++i)
+        if (crlf.examples[i].reply != lf.examples[i].reply || crlf.examples[i].prompt != lf.examples[i].prompt
+            || crlf.examples[i].keywords != lf.examples[i].keywords
+            || crlf.examples[i].category != lf.examples[i].category)
+            differ += " " + lf.examples[i].file;
+    ok = check (same && differ.empty(), "prompt resources parse the same as LF%s%s",
+                differ.empty() ? (same ? "" : " (system prompt, API reference or counts differ)") : ": differ in",
+                differ.c_str()) && ok;
+
+    ok = checkApiReference (crlf) && ok;
+    ok = checkRecipes (crlf) && ok;
+    ok = checkPromptExamples (crlf, false) && ok;
+    ok = checkResponseParser (true) && ok;
+
+    // A .pulsar saved with CRLF line endings, its code strings too.
+    const std::string text = builtinPresetText (0);
+    const std::string crlfText = juce::String (withCrlf (text)).replace ("\\n", "\\r\\n").toStdString();
+    const ParseResult a = parsePatch (text);
+    const ParseResult b = parsePatch (crlfText);
+    ok = check (a.ok() && b.ok() && a.patch == b.patch && crlfText.find ("\\r\\n") != std::string::npos,
+                ".pulsar %s with CRLF lines and \\r\\n in its code reads back identically%s%s",
+                builtinPresetFile (0), b.ok() ? "" : ": ", b.error.c_str()) && ok;
     return ok;
 }
 

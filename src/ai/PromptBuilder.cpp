@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "PulsarPromptData.h"
+#include "patch/Patch.h"
 
 namespace vibesynth {
 
@@ -79,70 +80,78 @@ std::vector<int> ranked (const std::string& prompt, const std::vector<std::vecto
 
 } // namespace
 
+std::vector<std::pair<std::string, std::string>> PromptResources::embeddedFiles()
+{
+    std::vector<std::pair<std::string, std::string>> files;
+    for (int i = 0; i < PulsarPromptData::namedResourceListSize; ++i)
+        files.emplace_back (PulsarPromptData::originalFilenames[i], resourceText (i).toStdString());
+    return files;
+}
+
 const PromptResources& PromptResources::embedded()
 {
-    static const PromptResources res = []
-    {
-        PromptResources r;
-        std::vector<std::pair<std::string, juce::String>> files;
-        for (int i = 0; i < PulsarPromptData::namedResourceListSize; ++i)
-            files.emplace_back (PulsarPromptData::originalFilenames[i], resourceText (i));
-        std::sort (files.begin(), files.end(), [] (const auto& a, const auto& b) { return a.first < b.first; });
-
-        for (const auto& [file, text] : files)
-        {
-            if (file == "system_prompt.md")
-            {
-                r.systemPrompt = text.trim().toStdString();
-                continue;
-            }
-            if (file == "api_reference.md")
-            {
-                r.apiReference = text.trim().toStdString();
-                continue;
-            }
-            juce::StringArray lines;
-            lines.addLines (text);
-            if (lines.size() > 0 && lines[0].startsWith ("category:"))
-            {
-                PromptExample e;
-                e.file = file;
-                int i = 0;
-                for (; i < lines.size() && lines[i].trim() != "---"; ++i)
-                {
-                    const auto& l = lines[i];
-                    if (l.startsWith ("category:"))
-                        e.category = l.fromFirstOccurrenceOf (":", false, false).trim().toStdString();
-                    else if (l.startsWith ("keywords:"))
-                        e.keywords = keywordList (l);
-                    else if (l.startsWith ("prompt:"))
-                        e.prompt = l.fromFirstOccurrenceOf (":", false, false).trim().toStdString();
-                }
-                juce::StringArray body;
-                for (++i; i < lines.size(); ++i)
-                    body.add (lines[i]);
-                e.reply = body.joinIntoString ("\n").trim().toStdString();
-                r.examples.push_back (e);
-                continue;
-            }
-            PromptRecipe rec;
-            rec.file = file;
-            juce::StringArray body;
-            for (const auto& l : lines)
-            {
-                if (l.startsWith ("keywords:"))
-                    rec.keywords = keywordList (l);
-                else
-                    body.add (l);
-                if (l.startsWith ("# ") && rec.title.empty())
-                    rec.title = l.substring (2).trim().toStdString();
-            }
-            rec.text = body.joinIntoString ("\n").trim().toStdString();
-            r.recipes.push_back (rec);
-        }
-        return r;
-    }();
+    static const PromptResources res = fromFiles (embeddedFiles());
     return res;
+}
+
+PromptResources PromptResources::fromFiles (std::vector<std::pair<std::string, std::string>> files)
+{
+    PromptResources r;
+    std::sort (files.begin(), files.end(), [] (const auto& a, const auto& b) { return a.first < b.first; });
+
+    for (const auto& [file, raw] : files)
+    {
+        const juce::String text (normaliseLineEndings (raw));
+        if (file == "system_prompt.md")
+        {
+            r.systemPrompt = text.trim().toStdString();
+            continue;
+        }
+        if (file == "api_reference.md")
+        {
+            r.apiReference = text.trim().toStdString();
+            continue;
+        }
+        juce::StringArray lines;
+        lines.addLines (text);
+        if (lines.size() > 0 && lines[0].startsWith ("category:"))
+        {
+            PromptExample e;
+            e.file = file;
+            int i = 0;
+            for (; i < lines.size() && lines[i].trim() != "---"; ++i)
+            {
+                const auto& l = lines[i];
+                if (l.startsWith ("category:"))
+                    e.category = l.fromFirstOccurrenceOf (":", false, false).trim().toStdString();
+                else if (l.startsWith ("keywords:"))
+                    e.keywords = keywordList (l);
+                else if (l.startsWith ("prompt:"))
+                    e.prompt = l.fromFirstOccurrenceOf (":", false, false).trim().toStdString();
+            }
+            juce::StringArray body;
+            for (++i; i < lines.size(); ++i)
+                body.add (lines[i]);
+            e.reply = body.joinIntoString ("\n").trim().toStdString();
+            r.examples.push_back (e);
+            continue;
+        }
+        PromptRecipe rec;
+        rec.file = file;
+        juce::StringArray body;
+        for (const auto& l : lines)
+        {
+            if (l.startsWith ("keywords:"))
+                rec.keywords = keywordList (l);
+            else
+                body.add (l);
+            if (l.startsWith ("# ") && rec.title.empty())
+                rec.title = l.substring (2).trim().toStdString();
+        }
+        rec.text = body.joinIntoString ("\n").trim().toStdString();
+        r.recipes.push_back (rec);
+    }
+    return r;
 }
 
 std::vector<int> PromptBuilder::chooseRecipes (const std::string& userPrompt) const

@@ -101,7 +101,7 @@ double pct (int n, int total)
 
 } // namespace
 
-int runBatch (int argc, char** argv, double cpuScale, int oversampling)
+int runBatch (int argc, char** argv, int oversampling)
 {
     using namespace vibesynth;
     if (argc < 1)
@@ -140,7 +140,7 @@ int runBatch (int argc, char** argv, double cpuScale, int oversampling)
     }
     std::vector<std::string> prompts;
     juce::StringArray lines;
-    promptsFile.readLines (lines);
+    lines.addLines (juce::String (normaliseLineEndings (promptsFile.loadFileAsString().toStdString())));
     for (const auto& l : lines)
         if (l.trim().isNotEmpty() && ! l.trim().startsWith ("#"))
             prompts.push_back (l.trim().toStdString());
@@ -199,7 +199,6 @@ int runBatch (int argc, char** argv, double cpuScale, int oversampling)
         req.prompt = prompt;
         req.config = cfg;
         req.apiKey = key;
-        req.cpuScale = cpuScale;
         const GenerationResult res = Generator::run (req, nullptr);
 
         for (size_t k = 0; k < res.attempts.size(); ++k)
@@ -254,7 +253,7 @@ int runBatch (int argc, char** argv, double cpuScale, int oversampling)
             std::string a0 = patchFile.getFullPathName().toStdString(), a1 = wav.getFullPathName().toStdString();
             std::string a2 = "--phrase", a3 = riff ? "riff" : "default";
             char* rargs[] = { a0.data(), a1.data(), a2.data(), a3.data() };
-            const int rc = runRender (4, rargs, cpuScale, oversampling);
+            const int rc = runRender (4, rargs, oversampling);
             rendered = rc == 0 ? (riff ? "riff" : "default") : "render failed";
         }
         else

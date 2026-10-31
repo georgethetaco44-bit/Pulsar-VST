@@ -163,7 +163,7 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
         Patch patch = pr.patch;
         patch.prompt = request.prompt;
         progress (GenerationStage::Testing, n);
-        const ValidationResult vr = validatePatch (patch, request.sampleRate, cancel, request.cpuScale);
+        const ValidationResult vr = validatePatch (patch, request.sampleRate, cancel);
         if (vr.cancelled)
         {
             res.cancelled = true;
@@ -182,11 +182,12 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
             continue;
         }
         patch.trim = vr.trim;
-        const double voiceNs = measureVoiceNs (patch, request.sampleRate);
+        const double voiceNs = request.measureVoice ? request.measureVoice (patch)
+                                                    : measureVoiceNs (patch, request.sampleRate);
         a.voiceNs = voiceNs;
         const double budget = patch.voiceBudgetNs();
 
-        if (voiceNs > kWeightHintFactor * budget * request.cpuScale && ! weightHintUsed && n < kMaxRetries)
+        if (voiceNs > kWeightHintFactor * budget * validatorCpuScale() && ! weightHintUsed && n < kMaxRetries)
         {
             a.stage = "weight";
             a.status = "heavy";

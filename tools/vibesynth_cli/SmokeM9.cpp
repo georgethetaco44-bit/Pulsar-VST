@@ -51,13 +51,17 @@ bool smokeTouchedNodes()
     {
         const auto parsed = parsePatch (builtinPresetText (i));
         if (! parsed.ok())
+        {
+            ok = check (false, "M9 nodes %s parses: %s", builtinPresetFile (i), parsed.error.c_str());
             continue;
+        }
         const auto vr = validatePatch (parsed.patch, kRate);
         const auto probe = probeTouchedNodes (parsed.patch, kRate);
         const bool sub = subsetOf (probe, vr.touched);
         ok = check (vr.ok() && vr.touched.any() && probe.any() && sub,
-                    "M9 nodes %-22s validator %2d, probe %2d%s", builtinPresetFile (i), vr.touched.count(),
-                    probe.count(), sub ? (probe == vr.touched ? "" : " (subset)") : " NOT A SUBSET")
+                    "M9 nodes %-22s validator %2d, probe %2d%s%s%s", builtinPresetFile (i), vr.touched.count(),
+                    probe.count(), sub ? (probe == vr.touched ? "" : " (subset)") : " NOT A SUBSET",
+                    vr.ok() ? "" : "; validator: ", vr.error.c_str())
            && ok;
         equal += probe == vr.touched ? 1 : 0;
     }
@@ -75,7 +79,10 @@ bool smokeTouchedNodes()
 bool smokeMeterHarvest()
 {
     const auto patch = parsePatch (builtinPresetText (0)).patch;
-    const auto touched = validatePatch (patch, kRate).touched;
+    const auto vr = validatePatch (patch, kRate);
+    const auto& touched = vr.touched;
+    if (! vr.ok())
+        return check (false, "M9 harvest: Reese passes the offline test (%s)", vr.error.c_str());
     std::string error;
     auto program = PatchProgram::build (patch, kRate, error);
     if (program == nullptr)
@@ -146,7 +153,9 @@ bool smokeNodeLayout()
 
     // Reese: the touched set from the validator and its own graph.edges.
     const auto patch = parsePatch (builtinPresetText (0)).patch;
-    const auto touched = validatePatch (patch, kRate).touched;
+    const auto vr = validatePatch (patch, kRate);
+    const auto& touched = vr.touched;
+    ok = check (vr.ok(), "M9 layout: Reese passes the offline test%s%s", vr.ok() ? "" : ": ", vr.error.c_str()) && ok;
     std::vector<std::pair<std::string, std::string>> edges;
     const auto graph = juce::JSON::parse (juce::String (patch.graphJson));
     if (const auto* list = graph.getProperty ("edges", {}).getArray())

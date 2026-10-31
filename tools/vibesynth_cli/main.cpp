@@ -95,11 +95,10 @@ bool runningUnderRosetta()
     return false;
 }
 
-// Validator CPU scale: 1 natively; 10 under Rosetta (see validatePatch).
-double validatorCpuScale()
-{
-    return runningUnderRosetta() ? 10.0 : 1.0;
-}
+// Validator CPU scale (vibesynth::setValidatorCpuScale): 1 natively, 10
+// under Rosetta. Set once in main(); the smoketest, selftest, batch,
+// render and validate all read it through vibesynth::validatorCpuScale().
+constexpr double kRosettaCpuScale = 10.0;
 
 // --os (M7): voice oversampling for --bench, --validate and --render.
 int g_oversampling = vibesynth::PatchProgram::kDefaultOversampling;
@@ -737,7 +736,7 @@ bool selftestPreset (int index, bool strictCpu)
     ok = check (read == listed, "%s reads exactly its labelled macros m1-m%d (read mask 0x%02x)",
                 file, numMacros, read) && ok;
 
-    const ValidationResult vr = validatePatch (patch, kSampleRate, nullptr, validatorCpuScale());
+    const ValidationResult vr = validatePatch (patch, kSampleRate);
     if (! check (vr.ok(), "%s passes the offline test%s%s", file, vr.ok() ? "" : ": ",
                  vr.error.c_str()))
         return false;
@@ -826,7 +825,7 @@ bool smokeBrokenPatches()
         }
         else
         {
-            const ValidationResult vr = validatePatch (pr.patch, kSampleRate, nullptr, validatorCpuScale());
+            const ValidationResult vr = validatePatch (pr.patch, kSampleRate);
             status = vr.status;
             reason = vr.error;
             wallMs = vr.wallMs;
@@ -928,7 +927,7 @@ bool smokeLoopNesting()
                 error.c_str()) && ok;
 
     const ParseResult two = parsePatch (testPatchText ("ok_nested.pulsar"));
-    const ValidationResult vr = two.ok() ? validatePatch (two.patch, kSampleRate, nullptr, validatorCpuScale())
+    const ValidationResult vr = two.ok() ? validatePatch (two.patch, kSampleRate)
                                          : ValidationResult();
     ok = check (two.ok() && vr.ok() && vr.peak > 0.0,
                 "ok_nested.pulsar (two levels, one inside a function) passes in %.0f ms%s%s",
@@ -949,7 +948,7 @@ public:
     ValidateThread (const vibesynth::Patch& p, std::atomic<bool>& c)
         : juce::Thread ("Pulsar validate test"), patch (p), cancel (c) {}
 
-    void run() override { result = vibesynth::validatePatch (patch, kSampleRate, &cancel, validatorCpuScale()); }
+    void run() override { result = vibesynth::validatePatch (patch, kSampleRate, &cancel); }
 
     vibesynth::ValidationResult result;
 
@@ -1187,6 +1186,7 @@ int runSmoketest()
     ok = vibesynth_cli::smokePromptBuilder() && ok;
     ok = vibesynth_cli::smokeClient() && ok;
     ok = vibesynth_cli::smokeSelfHeal() && ok;
+    ok = vibesynth_cli::smokeCrlf() && ok;
     ok = vibesynth_cli::smokeTouchedNodes() && ok;
     ok = vibesynth_cli::smokeMeterHarvest() && ok;
     ok = vibesynth_cli::smokeNodeLayout() && ok;
@@ -1221,7 +1221,7 @@ int runValidate (const char* path)
         return 1;
     }
     const vibesynth::ValidationResult vr = vibesynth::validatePatch (pr.patch, kSampleRate, nullptr,
-                                                                     validatorCpuScale(), g_oversampling);
+                                                                     g_oversampling);
     if (! vr.ok())
     {
         std::printf ("REJECTED (%s): %s [%.0f ms]\n", vibesynth::patchStatusName (vr.status),
@@ -1286,6 +1286,9 @@ int main (int argc, char** argvIn)
         return 2;
     }
 
+    if (runningUnderRosetta())
+        vibesynth::setValidatorCpuScale (kRosettaCpuScale);
+
     const char* mode = vibesynth::eelExecutionMode();
     std::printf ("mode: %s\n", mode);
     const bool jit = std::strcmp (mode, "portable") != 0;
@@ -1305,9 +1308,9 @@ int main (int argc, char** argvIn)
     if (validate)
         return jitOk ? runValidate (argv[2]) : 2;
     if (render)
-        return jitOk ? vibesynth_cli::runRender (argc - 2, argv + 2, validatorCpuScale(), g_oversampling) : 2;
+        return jitOk ? vibesynth_cli::runRender (argc - 2, argv + 2, g_oversampling) : 2;
     if (batch)
-        return jitOk ? vibesynth_cli::runBatch (argc - 2, argv + 2, validatorCpuScale(), g_oversampling) : 2;
+        return jitOk ? vibesynth_cli::runBatch (argc - 2, argv + 2, g_oversampling) : 2;
 
     bool ok = check (jit, "execution mode is %s", mode);
     ok = check (initOk, "NSEEL_init") && ok;

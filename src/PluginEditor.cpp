@@ -89,9 +89,9 @@ VibeSynthAudioProcessorEditor::VibeSynthAudioProcessorEditor (VibeSynthAudioProc
     float scale = juce::jlimit (0.75f, 1.5f, processor.getEditorScale());
     if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
     {
-        const auto area = display->userArea;
-        const float fit = juce::jmin ((float) (area.getHeight() - kWindowChrome) / (float) Theme::baseHeight,
-                                      (float) area.getWidth() / (float) Theme::baseWidth);
+        const auto area = display->userBounds;
+        const float fit = juce::jmin ((area.getHeight() - (float) kWindowChrome) / (float) Theme::baseHeight,
+                                      area.getWidth() / (float) Theme::baseWidth);
         scale = juce::jlimit (0.75f, 1.5f, juce::jmin (scale, fit));
     }
     setSize (juce::roundToInt ((float) Theme::baseWidth * scale), juce::roundToInt ((float) Theme::baseHeight * scale));

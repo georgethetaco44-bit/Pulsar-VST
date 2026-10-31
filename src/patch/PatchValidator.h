@@ -94,14 +94,18 @@ struct ValidationResult
 // deadline after every voice sample. A configuration whose voice + master
 // rendering takes more than 50 % of real time (500 ms for its 1 s) is
 // rejected as too slow: a runaway guard, not the §4.2.1 design budget.
-// `cpuScale` multiplies the CPU limit and the deadline; the plugin always
-// uses 1. Only vibesynth_cli raises it, when it runs as x86_64 under
-// Rosetta, where JIT code is ~8x slower (SPEC §4.2.1) and no patch runs in
-// real time anyway.
+// The CPU limit and the deadline are multiplied by validatorCpuScale().
 ValidationResult validatePatch (const Patch& patch, double sampleRate,
                                 const std::atomic<bool>* cancel = nullptr,
-                                double cpuScale = 1.0,
                                 int oversampling = PatchProgram::kDefaultOversampling);
+
+// Process-wide CPU allowance for the validator's limit and deadline and
+// the Generator's weight hint. The plugin never changes it (1). Only
+// vibesynth_cli raises it, once at startup, when it runs as x86_64 under
+// Rosetta, where JIT code is ~8-10x slower (SPEC §4.2.1) and no patch runs
+// in real time anyway. Values below 1 are taken as 1. Any thread.
+void setValidatorCpuScale (double scale) noexcept;
+double validatorCpuScale() noexcept;
 
 // M8 weight hint (SPEC §6.4): the voice section's cost in ns per
 // (oversampled) voice-sample, measured as the selftest and --bench do: one

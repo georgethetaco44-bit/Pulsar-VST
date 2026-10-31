@@ -10,7 +10,8 @@
 // Weight hint: a patch that passes but whose measured voice cost is over
 // 1.5x its budget (poly 300 / mono 1,200 ns) gets one "too heavy" retry if
 // one is left; if that retry fails, the heavy patch is still accepted
-// (CPU is never a hard reject beyond the §7.1 runaway rule). An empty,
+// (CPU is never a hard reject beyond the §7.1 runaway rule). The budget is
+// multiplied by validatorCpuScale() (vibesynth_cli under Rosetta). An empty,
 // garbled or timed-out reply uses up an attempt and is asked again; other
 // request errors (no key, auth, rate limit, network, server, bad model)
 // end the run at once: retrying can't fix them.
@@ -37,9 +38,11 @@ struct GenerationRequest
     AiConfig config;
     std::string apiKey;           // held in memory only
     double sampleRate = 48000.0;  // the validator's rate
-    double cpuScale = 1.0;        // validator CPU allowance (CLI under Rosetta)
     // Replaces MetaClient::send (the smoketest's offline self-heal cases).
     std::function<ChatReply (const ChatRequest&)> transport;
+    // Replaces measureVoiceNs (the smoketest's weight-hint cases), so the
+    // hint fires on the same patches on any machine.
+    std::function<double (const Patch&)> measureVoice;
 };
 
 enum class GenerationStage

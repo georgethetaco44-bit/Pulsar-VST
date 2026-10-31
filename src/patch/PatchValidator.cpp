@@ -112,15 +112,25 @@ ValidationResult reject (ValidationResult r, PatchStatus status, std::string mes
     return r;
 }
 
+std::atomic<double> cpuScaleSetting { 1.0 };
+
 } // namespace
 
+void setValidatorCpuScale (double scale) noexcept
+{
+    cpuScaleSetting.store (scale >= 1.0 ? scale : 1.0, std::memory_order_relaxed);
+}
+
+double validatorCpuScale() noexcept
+{
+    return cpuScaleSetting.load (std::memory_order_relaxed);
+}
+
 ValidationResult validatePatch (const Patch& patch, double sampleRate,
-                                const std::atomic<bool>* cancel, double cpuScale,
-                                int oversampling)
+                                const std::atomic<bool>* cancel, int oversampling)
 {
     ValidationResult result;
-    const double scale = cpuScale >= 1.0 ? cpuScale : 1.0;
-    const double deadlineMs = kDeadlineMs * scale;
+    const double deadlineMs = kDeadlineMs * validatorCpuScale();
     const auto wallStart = Clock::now();
     const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
     const int os = std::clamp (oversampling, 1, PatchProgram::kMaxOversampling);

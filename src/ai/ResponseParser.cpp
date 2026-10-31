@@ -172,7 +172,8 @@ ResponseParseResult parseResponse (const std::string& replyText)
 {
     if (replyText.size() > Patch::kMaxFileBytes)
         return fail (PatchStatus::TooLarge, "reply too large (max 256 KB)");
-    const auto reply = juce::String::fromUTF8 (replyText.data(), (int) replyText.size());
+    const std::string text = normaliseLineEndings (replyText);
+    const auto reply = juce::String::fromUTF8 (text.data(), (int) text.size());
     const auto blocks = fencedBlocks (reply);
 
     const Block* json = nullptr;

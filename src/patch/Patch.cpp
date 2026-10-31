@@ -42,7 +42,8 @@ bool isBlank (const std::string& s)
 }
 
 // Reads code.<key> into out. Absent = empty; anything but a string is an
-// error; larger than kMaxSectionBytes is TooLarge.
+// error; larger than kMaxSectionBytes is TooLarge. Escaped "\r\n" in the
+// string becomes "\n", like the file's own line endings.
 bool readSection (const juce::var& code, const char* key, std::string& out, ParseResult& err)
 {
     const juce::var v = code.getProperty (key, juce::var());
@@ -56,7 +57,7 @@ bool readSection (const juce::var& code, const char* key, std::string& out, Pars
         err = fail (PatchStatus::BadField, "code." + juce::String (key) + " must be a string");
         return false;
     }
-    out = v.toString().toStdString();
+    out = normaliseLineEndings (v.toString().toStdString());
     if (out.size() > Patch::kMaxSectionBytes)
     {
         err = fail (PatchStatus::TooLarge, "code." + juce::String (key) + " too large ("
@@ -90,11 +91,12 @@ const char* patchStatusName (PatchStatus s) noexcept
     return "unknown";
 }
 
-ParseResult parsePatch (const std::string& text)
+ParseResult parsePatch (const std::string& textIn)
 {
-    if (text.size() > Patch::kMaxFileBytes)
-        return fail (PatchStatus::TooLarge, "patch file too large (" + kilobytes (text.size())
+    if (textIn.size() > Patch::kMaxFileBytes)
+        return fail (PatchStatus::TooLarge, "patch file too large (" + kilobytes (textIn.size())
                                                 + ", max " + kilobytes (Patch::kMaxFileBytes) + ")");
+    const std::string text = normaliseLineEndings (textIn);
 
     juce::var root;
     const auto parsed = juce::JSON::parse (juce::String::fromUTF8 (text.data(), (int) text.size()), root);
@@ -127,7 +129,7 @@ ParseResult parsePatch (const std::string& text)
     p.name = root.getProperty ("name", "").toString().trim().toStdString();
     if (p.name.empty())
         p.name = "Untitled";
-    p.prompt = root.getProperty ("prompt", "").toString().toStdString();
+    p.prompt = normaliseLineEndings (root.getProperty ("prompt", "").toString().toStdString());
 
     const juce::var macros = root.getProperty ("macros", juce::var());
     if (! macros.isVoid() && ! macros.isUndefined())

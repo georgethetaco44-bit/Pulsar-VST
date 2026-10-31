@@ -11,6 +11,6 @@ namespace vibesynth_cli {
 // and the raw replies, and prints per-prompt lines and totals. Needs an
 // API key (VIBESYNTH_API_KEY or the settings file). Returns 0 when the
 // batch ran (whatever the pass rate), 2 on bad arguments or no key.
-int runBatch (int argc, char** argv, double cpuScale, int oversampling);
+int runBatch (int argc, char** argv, int oversampling);
 
 } // namespace vibesynth_cli

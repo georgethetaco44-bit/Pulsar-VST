@@ -21,6 +21,7 @@
 // Compiled into the plugin and vibesynth_cli. Worker thread or the CLI.
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "ai/MetaClient.h"
@@ -53,6 +54,11 @@ struct PromptResources
 
     // The embedded files (parsed once, then shared).
     static const PromptResources& embedded();
+
+    // (file name, text) of every embedded file, and the parse of such a
+    // list (line endings normalised first; the smoketest feeds CRLF copies).
+    static std::vector<std::pair<std::string, std::string>> embeddedFiles();
+    static PromptResources fromFiles (std::vector<std::pair<std::string, std::string>> files);
 };
 
 struct RetryContext

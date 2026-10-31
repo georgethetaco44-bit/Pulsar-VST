@@ -1,0 +1,10 @@
+# Keep LF everywhere, including on Windows checkouts: embedded resources
+# (prompts, presets, test patches) are parsed byte-for-byte.
+* text=auto eol=lf
+
+*.png binary
+*.ttf binary
+*.otf binary
+*.wav binary
+*.zip binary
+*.obj binary

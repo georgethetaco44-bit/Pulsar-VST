@@ -147,7 +147,7 @@ double dbfs (double v)
 
 } // namespace
 
-int runRender (int argc, char** argv, double cpuScale, int oversampling)
+int runRender (int argc, char** argv, int oversampling)
 {
     if (argc < 2)
         return 2;
@@ -247,8 +247,7 @@ int runRender (int argc, char** argv, double cpuScale, int oversampling)
     vibesynth::Patch patch = pr.patch;
     if (! builtin)
     {
-        const vibesynth::ValidationResult vr = vibesynth::validatePatch (patch, sr, nullptr, cpuScale,
-                                                                         oversampling);
+        const vibesynth::ValidationResult vr = vibesynth::validatePatch (patch, sr, nullptr, oversampling);
         if (! vr.ok())
         {
             std::printf ("REJECTED (%s): %s\n", vibesynth::patchStatusName (vr.status), vr.error.c_str());

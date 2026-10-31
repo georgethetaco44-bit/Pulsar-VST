@@ -118,6 +118,26 @@ ParseResult parsePatch (const std::string& text);
 // Pretty JSON that parsePatch() reads back identically.
 std::string serializePatch (const Patch& patch);
 
+// "\r\n" (Windows) and a lone "\r" -> "\n". Every text parser runs this
+// once where its input comes in (.pulsar files, model replies, the
+// embedded prompt resources, the --batch prompt list), so a CRLF checkout
+// or an editor's line endings never change what is parsed.
+inline std::string normaliseLineEndings (std::string text)
+{
+    if (text.find ('\r') == std::string::npos)
+        return text;
+    std::string out;
+    out.reserve (text.size());
+    for (size_t i = 0; i < text.size(); ++i)
+    {
+        if (text[i] != '\r')
+            out += text[i];
+        else if (i + 1 >= text.size() || text[i + 1] != '\n')
+            out += '\n';
+    }
+    return out;
+}
+
 // Rounds to 1e-6 (the precision .pulsar numbers are stored with).
 inline double quantisePatchNumber (double v) noexcept
 {
