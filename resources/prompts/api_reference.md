@@ -48,6 +48,8 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 - `fx_crush(slot, in, bits, rate)` · 2 slots · both — bits 0-1 (0 clean, 1 ≈ 2 bits); rate 0-1 (1 full rate, 0 ≈ 1 kHz sample-and-hold).
 - `fx_comb(slot, in, hz, feedback)` · 2 slots · both — comb tuned to hz (min 10 Hz), feedback 0-0.95; rings at hz and its harmonics, louder with feedback.
 - `fx_ott(slot, in, depth)` · 2 slots · both — 3-band (120 Hz / 2.5 kHz) upward + downward compressor, depth 0-1 (0 = bypass). In master use slot 0 for L, 1 for R [85].
+- `fx_phaser(slot, in, pos, depth, feedback)` · 2 slots · both — 8-stage phaser; `pos` 0-1 sweeps the notches (100 Hz-5 kHz; move it with an LFO), depth 0-1 (0 = dry), feedback 0-1 [50].
+- `fx_fshift(slot, in, shift)` · 1 slot · both — frequency shifter: moves every partial by the same Hz (inharmonic, metallic); `shift` 0.5 = none, toward 0/1 = down/up to 2 kHz, exponential (0.6 ≈ +6 Hz, 0.75 ≈ +60 Hz).
 
 ### Physical models (driven by any exciter signal)
 - `phys_resonator(slot, exciter, hz, structure, brightness, damping)` · 1 slot · both — modal resonator; structure, brightness, damping 0-1 [190].
@@ -71,12 +73,16 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 - `bus_chorus_r()` · no slot · master — R from the last bus_chorus.
 - `bus_reverb(l, r, size, mix)` · no slot · master — small FDN reverb; returns L.
 - `bus_reverb_r()` · no slot · master — R from the last bus_reverb.
+- `bus_delay(l, r, beats, feedback, mix)` · no slot · master — tempo-synced ping-pong delay; beats 0.0625-4 (0.75 = dotted 1/8), feedback 0-1, mix 0-1; echoes are band-passed 150 Hz-6 kHz, so the sub stays dry; returns L.
+- `bus_delay_r()` · no slot · master — R from the last bus_delay.
+- `bus_width(l, r, amount)` · no slot · master — stereo width above 150 Hz (0 = mono, 0.5 = unchanged, 1 = wide); the low end is untouched. inl == inr, so it widens only what a stereo effect before it made (bus_chorus, bus_delay, bus_reverb); returns L.
+- `bus_width_r()` · no slot · master — R from the last bus_width.
 
 The master has its own slots: voice functions called there are separate instances from the voices' ones.
 
 ## EEL2 built-ins
 `sin(x)` `cos(x)` `tan(x)` `asin(x)` `acos(x)` `atan(x)` `atan2(y, x)` `sqrt(x)` `sqr(x)` `invsqrt(x)` `pow(x, y)` `exp(x)` `log(x)` `log10(x)` `abs(x)` `sign(x)` `min(a, b)` `max(a, b)` `floor(x)` `ceil(x)` `rand(x)` (0..x) `sigmoid(x, k)` `band(a, b)` `bor(a, b)` `loop(n, code)` `while(code)` `exec2(a, b)` `exec3(a, b, c)` `memset(dest, value, n)` `memcpy(dest, src, n)` `mem_set_values(i, v1, v2)` `mem_get_values(i, v1, v2)` `mem_multiply_sum(a, b, n)`.
-Nothing else exists: no tanh (use fx_sat), clamp (use min/max), round (floor(x + 0.5)), fmod (x - floor(x / y) * y), lerp, delay or lfo functions.
+Nothing else exists: no tanh (use fx_sat), clamp (use min/max), round (floor(x + 0.5)), fmod (x - floor(x / y) * y) or lerp; delays in voice code are built in mem[] (bus_delay is master only).
 
 ## Limits
 - `mem[]`: 65,536 slots per VM (each voice and the master have their own), zeroed on load; use it for delay lines and tables (`mem[i]`, `buf = 1000; buf[i]`).

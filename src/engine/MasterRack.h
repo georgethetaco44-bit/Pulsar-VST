@@ -11,7 +11,8 @@ namespace vibesynth {
 // ---------------------------------------------------------------------------
 // MasterRack: bus module state (M4 runs it at 1×; same struct works for any
 // rate passed to init). Own FDN reverb (DaisySP ReverbSc is LGPL — SPEC §5.2
-// forbids it) + own LR4 mono-low + 2× DaisySP ChorusEngine for stereo in/out.
+// forbids it) + own LR4 mono-low + 2× DaisySP ChorusEngine for stereo in/out,
+// and (M12 Tier 2) the ping-pong delay and the width stage (Utilities6.h).
 
 struct FdnReverbState
 {
@@ -47,6 +48,18 @@ struct MasterRack
     int reverbCapacity = 0;
     float reverbRight = 0.0f; // cached by bus_reverb for bus_reverb_r()
     float chorusRight = 0.0f; // cached by bus_chorus for bus_chorus_r()
+
+    // M12 Tier 2. The delay buffer is owned by EelMaster (allocated off the
+    // audio thread, 2 x DelayBusState::framesFor(sr) floats, only when the
+    // master code calls bus_delay); init() carves it up. `bpm` is the
+    // host tempo, set per sample by EelMaster::renderSample.
+    DelayBusState delay;
+    float* delayStorage = nullptr;
+    int delayFrames = 0;
+    float delayRight = 0.0f;  // cached by bus_delay for bus_delay_r()
+    WidthBusState width;
+    float widthRight = 0.0f;  // cached by bus_width for bus_width_r()
+    double bpm = 120.0;
 
     std::atomic<float> meters[kNumModules][kMaxSlotsPerModule];
     std::atomic<uint32_t> touched[kNumModules];

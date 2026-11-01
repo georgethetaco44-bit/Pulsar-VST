@@ -36,6 +36,7 @@
 #include "engine/Utilities3.h"
 #include "engine/Utilities4.h"
 #include "engine/Utilities5.h"
+#include "engine/Utilities6.h"
 #include "engine/Wavetables.h"
 
 namespace vibesynth {
@@ -71,6 +72,8 @@ enum class ModuleId : int
     FxCrush,
     FxComb,
     FxOtt,
+    FxPhaser,
+    FxFshift,
     PhysResonator,
     PhysString,
     ChaosLorenz,
@@ -82,6 +85,8 @@ enum class ModuleId : int
     BusMonoLow,  // max(|L|, |R|))
     BusChorus,
     BusReverb,
+    BusDelay,
+    BusWidth,
     Count
 };
 
@@ -191,6 +196,8 @@ struct VoiceRack
     float combBuf[kNumCombSlots][kCombCapacity];
 
     OttState ott[kNumOttSlots];
+    PhaserState fxPhaser[kNumPhaserSlots];
+    FshiftState fxFshift[kNumFshiftSlots];
 
     daisysp::Resonator resonator[kNumResonatorSlots];
     ResonCache resonCache[kNumResonatorSlots];

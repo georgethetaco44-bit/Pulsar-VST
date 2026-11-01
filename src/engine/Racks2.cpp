@@ -1,4 +1,5 @@
-// M4 — Racks2.cpp: MasterRack + FdnReverbState init/reset/metering.
+// M4 — Racks2.cpp: MasterRack + FdnReverbState init/reset/metering
+// (M12 Tier 2: bus_delay and bus_width state too).
 
 #include "engine/Lexicon.h"
 #include "engine/MasterRack.h"
@@ -82,6 +83,9 @@ void MasterRack::init (double newSampleRate)
         offset += need;
     }
 
+    delay.init (sampleRate, delayStorage, delayFrames);
+    width.init (sampleRate);
+
     reset();
 }
 
@@ -96,6 +100,10 @@ void MasterRack::reset() noexcept
     reverb.reset();
     reverbRight = 0.0f;
     chorusRight = 0.0f;
+    delay.reset();  // O(1): stale buffer contents are never read
+    delayRight = 0.0f;
+    width.reset();
+    widthRight = 0.0f;
     for (int m = 0; m < kNumModules; ++m)
     {
         for (int s = 0; s < kMaxSlotsPerModule; ++s)

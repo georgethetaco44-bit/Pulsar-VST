@@ -19,7 +19,8 @@ inline bool statelessModule (int m) noexcept
 bool isMasterRackModule (int m) noexcept
 {
     return m == static_cast<int> (ModuleId::BusMonoLow) || m == static_cast<int> (ModuleId::BusChorus)
-        || m == static_cast<int> (ModuleId::BusReverb);
+        || m == static_cast<int> (ModuleId::BusReverb) || m == static_cast<int> (ModuleId::BusDelay)
+        || m == static_cast<int> (ModuleId::BusWidth);
 }
 
 } // namespace

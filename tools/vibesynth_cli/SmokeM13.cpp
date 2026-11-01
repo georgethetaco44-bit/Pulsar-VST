@@ -761,8 +761,8 @@ bool smokeBoundsNoNaN()
 }
 
 //==============================================================================
-// Merge M12 x M13: LFO 1 on one argument of each M12 function, through the
-// generic hook path. Each render must be finite and differ from the same
+// Merge M12 x M13: LFO 1 on one argument of each M12 function (Tier 1 and
+// Tier 2, voice and master), through the generic hook path. Each render must be finite and differ from the same
 // patch without the assignment (so the modulation reached the function).
 bool smokeM12FunctionsModulated()
 {
@@ -783,15 +783,23 @@ bool smokeM12FunctionsModulated()
         "s = flt_notch(0, s, 0.5, 0.3);\n"
         "s = flt_peak(0, s, 0.4, 0.6, 0.3);\n"
         "s = flt_tilt(0, s, 0.5 + l * 0.3);\n"
+        "s = fx_phaser(0, s, 0.4, 0.7, 0.3);\n"
+        "s = fx_fshift(0, s, 0.5);\n"
         "env = env_adsr(0, gate, 0.01, 0.3, 0.8, 0.2);\n"
         "out = s * env * vel * 0.4;";
-    base.master = "outl = inl;\noutr = inr;";
+    base.master =
+        "d = bus_delay(inl, inr, 0.25, 0.4, 0.4);\n"
+        "dr = bus_delay_r();\n"
+        "outl = bus_width(d, dr, 0.5);\n"
+        "outr = bus_width_r();";
 
     struct Target { const char* node; const char* arg; };
     const Target targets[] = {
         { "osc_wt:0", "pos" },      { "osc_fm:0", "index" },    { "osc_sync:0", "ratio" },
         { "fx_shape#0", "drive" },  { "flt_formant:0", "vowel" }, { "flt_notch:0", "cutoff" },
         { "flt_peak:0", "gain" },   { "flt_tilt:0", "tilt" },   { "mod_lfo:0", "beats" },
+        { "fx_phaser:0", "pos" },   { "fx_fshift:0", "shift" }, { "master/bus_delay", "feedback" },
+        { "master/bus_width", "amount" },
     };
 
     ModLfoSpec lfo;
@@ -830,7 +838,8 @@ bool smokeM12FunctionsModulated()
     }
     return check (passed == (int) std::size (targets),
                   "M12 x M13: LFO 1 on one argument of each M12 function (osc_wt pos, osc_fm index, osc_sync ratio, "
-                  "fx_shape drive, flt_formant vowel, flt_notch cutoff, flt_peak gain, flt_tilt tilt, mod_lfo beats) "
+                  "fx_shape drive, flt_formant vowel, flt_notch cutoff, flt_peak gain, flt_tilt tilt, mod_lfo beats, "
+                  "fx_phaser pos, fx_fshift shift, bus_delay feedback, bus_width amount) "
                   "renders finite and changes the output: %d/%d%s",
                   passed, (int) std::size (targets), failed.empty() ? "" : (" failed:" + failed).c_str());
 }

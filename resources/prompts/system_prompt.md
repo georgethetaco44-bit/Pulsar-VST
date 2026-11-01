@@ -43,6 +43,7 @@ Reply with exactly these blocks, in this order, and no code anywhere else:
 - Movement is tempo-synced with `mod_lfo(slot, beats, shape)` or `beat` (1/4, 1/8, 1/16 notes).
 - m1 is the hero and transforms the sound (clean to snarling, steady to chopped). Every macro is audible and musical across its whole range, ordered by importance; the defaults already sound good.
 - Keys, plucks, pads: no sub split.
+- Most patches benefit from a little space and width on the master: bus_delay or bus_reverb at a low mix (0.1-0.25), then bus_width; the sub stays mono and dry.
 
 ## CPU budget (a patch that is far too heavy is sent back)
 - poly: one filter + one shaper + 2-3 oscillators (at most one supersaw) per voice; the rest goes in master.

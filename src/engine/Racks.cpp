@@ -174,6 +174,10 @@ void VoiceRack::reset() noexcept
 
     for (int i = 0; i < kNumOttSlots; ++i)
         ott[i].reset();
+    for (int i = 0; i < kNumPhaserSlots; ++i)
+        fxPhaser[i].reset();
+    for (int i = 0; i < kNumFshiftSlots; ++i)
+        fxFshift[i].reset();
 
     for (int i = 0; i < kNumResonatorSlots; ++i)
     {

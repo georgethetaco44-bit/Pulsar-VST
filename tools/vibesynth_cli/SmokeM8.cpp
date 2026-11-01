@@ -180,7 +180,9 @@ bool checkApiReference (const PromptResources& res)
     return ok;
 }
 
-// Every recipe's first ```eel block lints clean.
+// Every recipe's first ```eel block lints clean. A block that starts
+// with "// master" is master code; a later line starting "// master"
+// switches the rest of the block to master (voice part, then master part).
 bool checkRecipes (const PromptResources& res)
 {
     const auto& recipes = res.recipes;
@@ -189,7 +191,13 @@ bool checkRecipes (const PromptResources& res)
     {
         const std::string code = firstEelBlock (rec.text);
         const bool master = code.find ("// master") == 0;
-        const LintResult lr = lintSection (code, master ? "master" : "voice");
+        const size_t split = master ? std::string::npos : code.find ("\n// master");
+        LintResult lr = lintSection (code.substr (0, split), master ? "master" : "voice");
+        if (split != std::string::npos)
+        {
+            const LintResult lm = lintSection (code.substr (split + 1), "master");
+            lr.issues.insert (lr.issues.end(), lm.issues.begin(), lm.issues.end());
+        }
         if (lr.ok() && ! code.empty())
             ++recipesClean;
         else

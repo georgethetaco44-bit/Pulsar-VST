@@ -331,6 +331,7 @@ private:
     VoiceRack voiceRackStorage_;
     float* reverbStorage_ = nullptr;
     int reverbCapacity_ = 0;
+    float* delayStorage_ = nullptr;  // M12 Tier 2: only when the code calls bus_delay
     VmRackContext rackCtx_;
     EEL_F* inl_ = nullptr;
     EEL_F* inr_ = nullptr;

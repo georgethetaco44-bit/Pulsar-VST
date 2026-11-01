@@ -62,6 +62,9 @@ const BenchCase kBenchCases[] = {
     { "fx_crush", "out = fx_crush(0, osc_saw(1, freq), 0.5, 0.5);", "outl = inl; outr = inr;", false },
     { "fx_comb", "out = fx_comb(0, osc_saw(1, freq), 220.0, 0.5);", "outl = inl; outr = inr;", false },
     { "fx_ott", "out = fx_ott(0, osc_saw(1, freq) * 0.3, 0.8);", "outl = inl; outr = inr;", false },
+    { "fx_phaser", "out = fx_phaser(0, osc_saw(1, freq), 0.4, 0.8, 0.5);", "outl = inl; outr = inr;", false },
+    { "fx_phaser (swept)", "out = fx_phaser(0, osc_saw(1, freq), 0.5 + 0.4 * osc_sine(2, 0.5), 0.8, 0.5);", "outl = inl; outr = inr;", false },
+    { "fx_fshift", "out = fx_fshift(0, osc_saw(1, freq), 0.6);", "outl = inl; outr = inr;", false },
     { "resonator", "out = phys_resonator(0, osc_saw(1, freq), 220.0, 0.5, 0.5, 0.5) * 0.25;", "outl = inl; outr = inr;", false },
     { "string", "out = phys_string(0, noise() * 0.2, 220.0, 0.5, 0.5);", "outl = inl; outr = inr;", false },
     { "lorenz", "out = chaos_lorenz(0, 0.5, 0.0);", "outl = inl; outr = inr;", false },
@@ -76,6 +79,8 @@ const BenchCase kBenchCases[] = {
     { "bus_chorus", "out = osc_saw(0, freq);", "outl = bus_chorus(inl, inr, 0.4, 0.4); outr = bus_chorus_r();", true },
     { "fx_ott (master, 2 slots)", "out = osc_saw(0, freq);", "outl = fx_ott(0, inl, 0.8); outr = fx_ott(1, inr, 0.8);", true },
     { "bus_reverb", "out = osc_saw(0, freq);", "outl = bus_reverb(inl, inr, 0.5, 0.3); outr = bus_reverb_r();", true },
+    { "bus_delay", "out = osc_saw(0, freq);", "outl = bus_delay(inl, inr, 0.75, 0.4, 0.25); outr = bus_delay_r();", true },
+    { "bus_width", "out = osc_saw(0, freq);", "outl = bus_width(inl, inr, 0.8); outr = bus_width_r();", true },
 };
 
 const int kNumBenchCases = static_cast<int> (sizeof (kBenchCases) / sizeof (kBenchCases[0]));
@@ -618,8 +623,14 @@ int runBench (int oversampling)
           "out = fx_sat(osc_saw(0, freq), 0.5);", 60.0 },
         { "fx_shape (ADAA)", "out = osc_saw(0, freq);",
           "out = fx_shape(osc_saw(0, freq), 0.6, 0.2);", 60.0 },
+        { "fx_phaser", "out = osc_saw(1, freq);",
+          "out = fx_phaser(0, osc_saw(1, freq), 0.4, 0.8, 0.5);", 60.0 },
+        { "fx_phaser (swept)", "p = 0.5 + 0.4 * osc_sine(2, 0.5); out = osc_saw(1, freq);",
+          "p = 0.5 + 0.4 * osc_sine(2, 0.5); out = fx_phaser(0, osc_saw(1, freq), p, 0.8, 0.5);", 60.0 },
+        { "fx_fshift", "out = osc_saw(1, freq);",
+          "out = fx_fshift(0, osc_saw(1, freq), 0.6);", 60.0 },
     };
-    std::printf ("\n-- M12 modules per call at %.0f kHz (median of 9 interleaved with/without pairs) --\n",
+    std::printf ("\n-- M12 modules (Tier 1 and 2) per call at %.0f kHz (median of 9 interleaved with/without pairs) --\n",
                  voiceRate / 1000.0);
     for (const OwnCase& oc : m12Own)
     {

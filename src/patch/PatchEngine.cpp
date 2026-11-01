@@ -4,6 +4,7 @@
 
 #include "patch/PatchEngine.h"
 
+#include <cctype>
 #include <cmath>
 #include <mutex>
 
@@ -153,6 +154,24 @@ EEL_F* mustRegVar (NSEEL_VMCTX vm, const char* name, bool& ok) noexcept
 const char* kMacroNames[8] = {
     "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"
 };
+
+// True when `code` contains `word` in any case (a cheap over-approximation
+// of "the code calls it": a comment that names it counts too).
+bool mentionsIgnoringCase (const char* code, const char* word) noexcept
+{
+    if (code == nullptr || word == nullptr || *word == '\0')
+        return false;
+    for (const char* p = code; *p != '\0'; ++p)
+    {
+        size_t i = 0;
+        for (; word[i] != '\0' && p[i] != '\0'; ++i)
+            if (std::tolower ((unsigned char) p[i]) != std::tolower ((unsigned char) word[i]))
+                break;
+        if (word[i] == '\0')
+            return true;
+    }
+    return false;
+}
 
 // True when `code` has no statements: empty, whitespace, or comments only
 // (EEL2 // and /* */ comments). Such init/master sections are skipped.
@@ -426,6 +445,17 @@ EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
 
     rackStorage_.reverbStorage = reverbStorage_;
     rackStorage_.reverbCapacity = reverbCapacity_;
+
+    // M12 Tier 2: bus_delay's two lines (4 beats at 40 bpm at this rate,
+    // ~2.3 MB at 48 kHz), only for a master that names bus_delay (EEL2
+    // resolves names case-insensitively, so the check does too).
+    if (mentionsIgnoringCase (patch.master, "bus_delay"))
+    {
+        const int frames = DelayBusState::framesFor (sampleRate > 0.0 ? sampleRate : 48000.0);
+        delayStorage_ = new (std::nothrow) float[(size_t) frames * 2u]();
+        rackStorage_.delayStorage = delayStorage_;
+        rackStorage_.delayFrames = delayStorage_ != nullptr ? frames : 0;
+    }
     rackStorage_.init (sampleRate > 0.0 ? sampleRate : 48000.0);
     voiceRackStorage_.init (sampleRate > 0.0 ? sampleRate : 48000.0, kRackSeed);
     voiceRackStorage_.rackKind = 1;  // M10: the master's nodes (RackKind::Master)
@@ -500,6 +530,8 @@ EelMaster::~EelMaster()
     if (gram_ != nullptr) { NSEEL_VM_FreeGRAM (&gram_); gram_ = nullptr; }
     delete[] reverbStorage_;
     reverbStorage_ = nullptr;
+    delete[] delayStorage_;
+    delayStorage_ = nullptr;
 }
 
 void EelMaster::renderSample (float inL, float inR, float& outL, float& outR,
@@ -524,6 +556,7 @@ void EelMaster::renderSample (float inL, float inR, float& outL, float& outR,
     if (outl_ != nullptr) *outl_ = inL;
     if (outr_ != nullptr) *outr_ = inR;
     voiceRackStorage_.currentBeat = transport.beat;
+    rackStorage_.bpm = transport.bpm;
     voiceRackStorage_.beginSample();
     NSEEL_code_execute (masterCode_);
     outL = rawOutput (*outl_);

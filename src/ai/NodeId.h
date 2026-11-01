@@ -12,7 +12,8 @@
 //   master/bus_sat#1     master, stateless shaper
 //   master/flt_lp:0      master, slot 0
 //   master/bus_reverb    bus effects without a slot (bus_mono_low,
-//                        bus_chorus, bus_reverb) have no slot suffix
+//                        bus_chorus, bus_reverb, bus_delay, bus_width)
+//                        have no slot suffix
 //
 // The module name is NodeMeters' moduleShortName (util_xover covers
 // util_xover_lo/_hi). parseNodeId also takes the node view's labels

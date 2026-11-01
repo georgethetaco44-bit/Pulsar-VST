@@ -295,6 +295,7 @@ add_library(vibesynth_engine STATIC
     src/engine/LexiconFn4.cpp
     src/engine/LexiconFn5.cpp
     src/engine/LexiconFn6.cpp
+    src/engine/LexiconFn7.cpp
     src/engine/LexiconReg.cpp
     src/engine/LexiconHooks.cpp
     src/engine/NodeOverrides.cpp
@@ -359,6 +360,7 @@ target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/Edit.cpp
     tools/vibesynth_cli/SmokeM11.cpp
     tools/vibesynth_cli/SmokeM12.cpp
+    tools/vibesynth_cli/SmokeM12b.cpp
     tools/vibesynth_cli/SmokeMerge.cpp
     tools/vibesynth_cli/SmokeM13.cpp)
 # --render writes WAV only: keep JUCE's bundled FLAC/Ogg Vorbis codecs (and

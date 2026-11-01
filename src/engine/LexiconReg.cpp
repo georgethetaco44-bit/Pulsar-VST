@@ -48,6 +48,8 @@ EEL_F NSEEL_CGEN_CALL fnFxShape (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxCrush (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxComb (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxOtt (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnFxPhaser (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnFxFshift (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnPhysResonator (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnPhysString (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnChaosLorenz (void*, INT_PTR, EEL_F**);
@@ -65,6 +67,10 @@ EEL_F NSEEL_CGEN_CALL fnBusChorus (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnBusChorusR (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnBusReverb (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnBusReverbR (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnBusDelay (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnBusDelayR (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnBusWidth (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnBusWidthR (void*, INT_PTR, EEL_F**);
 
 namespace {
 
@@ -120,7 +126,8 @@ constexpr LexiconArg kPitch = hz ("hz", "Pitch", 20.0, 20000.0);
 // physical models (sound sources) output 0; util_safe_fb outputs 0
 // (feedback off); filters, fx_* and the crossover pass their input;
 // envelopes and bus_mono_low (two outputs, no input to pass) have none;
-// bus_chorus and bus_reverb run with mix 0 (both channels dry).
+// bus_chorus, bus_reverb and bus_delay run with mix 0 (both channels dry),
+// bus_width with amount 0.5 (unchanged, bit for bit).
 constexpr Registration kRegistrations[] = {
     { { "osc_sine", "slot, hz", 2, kNumOscSlots, kBoth, mod (ModuleId::OscSine), true, kZero, 0, 0.0, kAudio, 0,
         { aSlot, kPitch } }, &fnOscSine },
@@ -182,6 +189,12 @@ constexpr Registration kRegistrations[] = {
       &fnFxComb },
     { { "fx_ott", "slot, in, depth", 3, kNumOttSlots, kBoth, mod (ModuleId::FxOtt), true, kPass, 1, 0.0, kAudio, 0,
         { aSlot, audio ("in"), norm ("depth", "Depth") } }, &fnFxOtt },
+    { { "fx_phaser", "slot, in, pos, depth, feedback", 5, kNumPhaserSlots, kBoth, mod (ModuleId::FxPhaser), true,
+        kPass, 1, 0.0, kAudio, 0,
+        { aSlot, audio ("in"), norm ("pos", "Position"), norm ("depth", "Depth"), norm ("feedback", "Feedback") } },
+      &fnFxPhaser },
+    { { "fx_fshift", "slot, in, shift", 3, kNumFshiftSlots, kBoth, mod (ModuleId::FxFshift), true, kPass, 1, 0.0,
+        kAudio, 0, { aSlot, audio ("in"), norm ("shift", "Shift") } }, &fnFxFshift },
     { { "phys_resonator", "slot, exciter, hz, structure, brightness, damping", 6, kNumResonatorSlots, kBoth,
         mod (ModuleId::PhysResonator), true, kZero, 0, 0.0, kAudio, 0,
         { aSlot, audio ("exciter"), hz ("hz", "Pitch", 20.0, 8000.0), norm ("structure", "Structure"),
@@ -216,6 +229,16 @@ constexpr Registration kRegistrations[] = {
         { audio ("l"), audio ("r"), norm ("size", "Size"), norm ("mix", "Mix") } }, &fnBusReverb },
     { { "bus_reverb_r", "", 0, 0, kMaster, mod (ModuleId::BusReverb), false, kNoBypass, 0, 0.0, kNoTrace, 0, {} },
       &fnBusReverbR },
+    { { "bus_delay", "l, r, beats, feedback, mix", 5, 0, kMaster, mod (ModuleId::BusDelay), true, kForce, 4, 0.0,
+        kAudio, 0,
+        { audio ("l"), audio ("r"), beats ("beats", "Time", DelayBusState::kMinBeats, DelayBusState::kMaxBeats),
+          norm ("feedback", "Feedback"), norm ("mix", "Mix") } }, &fnBusDelay },
+    { { "bus_delay_r", "", 0, 0, kMaster, mod (ModuleId::BusDelay), false, kNoBypass, 0, 0.0, kNoTrace, 0, {} },
+      &fnBusDelayR },
+    { { "bus_width", "l, r, amount", 3, 0, kMaster, mod (ModuleId::BusWidth), true, kForce, 2, 0.5, kAudio, 0,
+        { audio ("l"), audio ("r"), norm ("amount", "Width") } }, &fnBusWidth },
+    { { "bus_width_r", "", 0, 0, kMaster, mod (ModuleId::BusWidth), false, kNoBypass, 0, 0.0, kNoTrace, 0, {} },
+      &fnBusWidthR },
 };
 
 constexpr int kNumRegistrations = static_cast<int> (sizeof (kRegistrations) / sizeof (kRegistrations[0]));

@@ -15,17 +15,17 @@ constexpr const char* kModuleNames[kNumModules] = {
     "flt_lp", "flt_hp", "flt_bp", "flt_ladder",
     "flt_formant", "flt_notch", "flt_peak", "flt_tilt",
     "env_adsr", "env_follow", "mod_lfo",
-    "fx_fold", "fx_sat", "fx_shape", "fx_crush", "fx_comb", "fx_ott",
+    "fx_fold", "fx_sat", "fx_shape", "fx_crush", "fx_comb", "fx_ott", "fx_phaser", "fx_fshift",
     "phys_resonator", "phys_string",
     "chaos_lorenz", "chaos_duffing",
     "util_safe_fb", "util_xover", "util_bytebeat",
-    "bus_sat", "bus_mono_low", "bus_chorus", "bus_reverb",
+    "bus_sat", "bus_mono_low", "bus_chorus", "bus_reverb", "bus_delay", "bus_width",
 };
-static_assert (static_cast<int> (ModuleId::BusReverb) == kNumModules - 1,
+static_assert (static_cast<int> (ModuleId::BusWidth) == kNumModules - 1,
                "kModuleNames must list every ModuleId");
 // Spot checks that the table follows the enum order.
 static_assert (static_cast<int> (ModuleId::FxFold) == 19 && static_cast<int> (ModuleId::FxCrush) == 22
-                   && static_cast<int> (ModuleId::UtilBytebeat) == 31 && static_cast<int> (ModuleId::BusSat) == 32,
+                   && static_cast<int> (ModuleId::UtilBytebeat) == 33 && static_cast<int> (ModuleId::BusSat) == 34,
                "kModuleNames is in ModuleId order");
 
 struct Alias
@@ -40,6 +40,8 @@ constexpr Alias kAliases[] = {
     { "bus_mono_low_r", ModuleId::BusMonoLow },
     { "bus_chorus_r", ModuleId::BusChorus },
     { "bus_reverb_r", ModuleId::BusReverb },
+    { "bus_delay_r", ModuleId::BusDelay },
+    { "bus_width_r", ModuleId::BusWidth },
 };
 
 bool sameIgnoringCase (const std::string& a, const char* b) noexcept

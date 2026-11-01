@@ -68,6 +68,7 @@
 #include "SmokeM10.h"
 #include "SmokeM11.h"
 #include "SmokeM12.h"
+#include "SmokeM12b.h"
 #include "SmokeM13.h"
 #include "SmokeMerge.h"
 #include "engine/OutputStage.h"
@@ -1169,6 +1170,7 @@ int runSmoketest()
     ok = vibesynth_cli::smokeM10() && ok;
     ok = vibesynth_cli::smokeM11() && ok;
     ok = vibesynth_cli::smokeM12() && ok;
+    ok = vibesynth_cli::smokeM12b() && ok;
     ok = vibesynth_cli::smokeMerge() && ok;
     ok = vibesynth_cli::smokeM13() && ok;
     std::printf (ok ? "SMOKETEST PASS\n" : "SMOKETEST FAIL\n");

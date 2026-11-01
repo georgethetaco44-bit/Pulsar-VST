@@ -996,12 +996,21 @@ Each milestone has an exit test. Don't start the next until it passes.
     osc_fm snaps the ratio to an integer within ±0.12 (ratio ≥ 1). batch30:
     26/30 first try, 30/30 with retries; 24/30 used a new function. ~4.4k
     system+API tokens, ~6.0k prompt per request. Listening pack in
-    build/adaa_ab/. Tier 2 not started.
+    build/adaa_ab/. **Tier 2 done (Nov 1):** fx_phaser, fx_fshift,
+    bus_delay (echoes filtered 150 Hz–6 kHz, 1/16–4 beats, buffer allocated
+    at patch build only when used) and bus_width (above 150 Hz; it only acts
+    on a stereo master, i.e. after chorus/reverb/delay). The system prompt
+    asks for light space and width; ~4.8k tokens per example request. The
+    examples are left for M14. batch30 still to run.
 13. **[Stretch] MOD strip** (§9.8). Cut first if behind (envelopes before
     LFOs).
     **Built (Oct 31):** both LFOs and both envelopes shipped. The strip sits
     under the macros. Merged with a CPU fix: the first build cost +275 ns per
-    voice-sample; the target is ≤ +60 ns.
+    voice-sample; it now costs +54 to +57 ns (+46 to +64 through the player,
+    where a modulated cutoff recomputes the filter). Modulators step every 16
+    voice samples with per-sample ramps (this replaces "no stepping"), so
+    S&H, square and saw jumps can land up to 0.17 ms late. Only assigned
+    sources step. With the editor open, only the displayed voice steps.
 14. **Sound pass 2.** The user designs presets by hand with M10–M12; the best
     become the LLM examples (via `--bake`). *Exit: the user keeps ≥ 10 of 15.*
 15. **Release polish.** README with Gatekeeper instructions, tagged GitHub

@@ -357,6 +357,69 @@ void SnapshotDriver::runShots()
         editor.closeInspector();
     }
 
+    // M12 Tier 2 inspector snapshots: fx_phaser (voice), master/bus_delay
+    // (a Beats knob) and master/bus_width, each at 1x, 0.75x and 1.5x.
+    {
+        const auto t2File = dir.getChildFile ("_m12t2_temp.pulsar");
+        vibesynth::Patch t2Patch;
+        t2Patch.name = "Phased Echo Pad";
+        t2Patch.prompt = "wide phased pad with ping-pong echoes";
+        t2Patch.voiceMode = "poly";
+        t2Patch.trim = 0.75;
+        t2Patch.macros = {
+            { "Sweep", 0.5 }, { "Depth", 0.7 }, { "Feedback", 0.4 }, { "Shift", 0.5 },
+            { "Echo", 0.3 }, { "Repeats", 0.4 }, { "Width", 0.7 }, { "Bright", 0.5 }
+        };
+        t2Patch.init = "0;";
+        t2Patch.voice =
+            "lfo = mod_lfo(0, 4.0, 0.0);\n"
+            "s = osc_saw(0, freq) * 0.5 + osc_saw(1, freq * 1.006) * 0.5;\n"
+            "s = fx_phaser(0, s, 0.2 + lfo * 0.6 * m1, m2, m3);\n"
+            "s = fx_fshift(0, s, 0.5 + (m4 - 0.5) * 0.2);\n"
+            "s = flt_lp(0, s, 0.5 + m8 * 0.4, 0.2);\n"
+            "env = env_adsr(0, gate, 0.4, 0.5, 0.8, 0.6);\n"
+            "out = s * env * vel * 0.35;";
+        t2Patch.master =
+            "d = bus_delay(inl, inr, 0.75, m6 * 0.8, m5 * 0.5);\n"
+            "dr = bus_delay_r();\n"
+            "outl = bus_width(d, dr, m7);\n"
+            "outr = bus_width_r();";
+        t2File.replaceWithText (vibesynth::serializePatch (t2Patch));
+        const int prevVer = proc.getPatchVersion();
+        proc.loadPatchFile (t2File);
+        for (int i = 0; i < 500 && (proc.getPatchVersion() == prevVer || ! proc.areNodesKnown()); ++i)
+        {
+            juce::Thread::sleep (10);
+            proc.deliverPendingResults();
+        }
+        t2File.deleteFile();
+        program.reset();
+        player.reset();
+        noteStarted = false;
+        editor.setKeyOverride (true);
+        playNote (0.6);
+        const std::pair<NodeRef, const char*> t2Shots[] = {
+            { NodeRef { RackKind::Voice, ModuleId::FxPhaser, 0 }, "inspector_fx_phaser" },
+            { NodeRef { RackKind::Master, ModuleId::BusDelay, 0 }, "inspector_bus_delay" },
+            { NodeRef { RackKind::Master, ModuleId::BusWidth, 0 }, "inspector_bus_width" }
+        };
+        for (const auto& [node, name] : t2Shots)
+        {
+            editor.setSize (w, h);
+            editor.openInspector (node);
+            playNote (0.3);
+            shoot (name);
+            editor.setSize (w * 3 / 4, h * 3 / 4);
+            playNote (0.1);
+            shoot (juce::String (name) + "_075");
+            editor.setSize (w * 3 / 2, h * 3 / 2);
+            playNote (0.1);
+            shoot (juce::String (name) + "_150");
+        }
+        editor.setSize (w, h);
+        editor.closeInspector();
+    }
+
     checkNodeViews();
 }
 
