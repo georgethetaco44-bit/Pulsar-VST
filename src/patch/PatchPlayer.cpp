@@ -493,11 +493,45 @@ void PatchPlayer::beginChunk (int n, const float targets[kNumMacros]) noexcept
     beatStep_ = transport_.beatStep (sampleRate_);
     eventTransport_.bpm = transport_.bpm;
     eventTransport_.beat = chunkBeat_;
-    for (int i = 0; i < n; ++i)
+
+    const uint8_t rangeMask = overrides_ != nullptr
+                                  ? overrides_->macroRangeActive.load (std::memory_order_acquire)
+                                  : 0u;
+    if (rangeMask == 0u)
     {
-        smoother_.step (targets);
-        std::copy (smoother_.current, smoother_.current + kNumMacros,
-                   macroBlock_.data() + (size_t) i * (size_t) kNumMacros);
+        for (int i = 0; i < n; ++i)
+        {
+            smoother_.step (targets);
+            std::copy (smoother_.current, smoother_.current + kNumMacros,
+                       macroBlock_.data() + (size_t) i * (size_t) kNumMacros);
+        }
+    }
+    else
+    {
+        double lo[kNumMacros], hi[kNumMacros];
+        for (int m = 0; m < kNumMacros; ++m)
+        {
+            if ((rangeMask & (1u << m)) != 0u)
+            {
+                lo[m] = overrides_->macroRangeMin[m].load (std::memory_order_relaxed);
+                hi[m] = overrides_->macroRangeMax[m].load (std::memory_order_relaxed);
+            }
+            else
+            {
+                lo[m] = 0.0;
+                hi[m] = 1.0;
+            }
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            smoother_.step (targets);
+            double* dest = macroBlock_.data() + (size_t) i * (size_t) kNumMacros;
+            for (int m = 0; m < kNumMacros; ++m)
+            {
+                const double v = smoother_.current[m];
+                dest[m] = ((rangeMask & (1u << m)) != 0u) ? (lo[m] + v * (hi[m] - lo[m])) : v;
+            }
+        }
     }
     eventMw_ = mwCurrent_;
     eventBend_ = bendRatio_;

@@ -50,7 +50,73 @@ MacroKnob::MacroKnob (juce::AudioProcessorValueTreeState& state, int i) : index 
             onAssignMod (src, d);
     };
     addAndMakeVisible (slider);
+
+    rangeSlider.setSliderStyle (juce::Slider::TwoValueHorizontal);
+    rangeSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    rangeSlider.setRange (0.0, 1.0, 0.01);
+    rangeSlider.setMinAndMaxValues (0.0, 1.0, juce::dontSendNotification);
+    rangeSlider.setMouseClickGrabsKeyboardFocus (false);
+    rangeSlider.setTooltip ("Macro range: min and max values sent to the synth code");
+    rangeSlider.onValueChange = [this]
+    {
+        if (updatingRange)
+            return;
+        rangeMin = rangeSlider.getMinValue();
+        rangeMax = rangeSlider.getMaxValue();
+        hasRange = (rangeMin > 0.001 || rangeMax < 0.999);
+        updateSliderRangeProps();
+        if (onRangeChanged)
+            onRangeChanged (rangeMin, rangeMax);
+        repaint();
+    };
+    addChildComponent (rangeSlider);
+
     setPatchMacro ({}, 0.5);
+}
+
+void MacroKnob::updateSliderRangeProps()
+{
+    if (hasRange)
+    {
+        slider.getProperties().set ("macroRangeMin", rangeMin);
+        slider.getProperties().set ("macroRangeMax", rangeMax);
+    }
+    else
+    {
+        slider.getProperties().remove ("macroRangeMin");
+        slider.getProperties().remove ("macroRangeMax");
+    }
+    slider.repaint();
+}
+
+void MacroKnob::setMacroRange (double min, double max)
+{
+    min = juce::jlimit (0.0, 1.0, min);
+    max = juce::jlimit (0.0, 1.0, max);
+    if (max < min)
+        std::swap (min, max);
+    rangeMin = min;
+    rangeMax = max;
+    hasRange = (min > 0.001 || max < 0.999);
+    updatingRange = true;
+    rangeSlider.setMinAndMaxValues (rangeMin, rangeMax, juce::dontSendNotification);
+    updatingRange = false;
+    updateSliderRangeProps();
+    repaint();
+}
+
+void MacroKnob::openRangeEditor()
+{
+    rangeSlider.setVisible (true);
+    resized();
+    repaint();
+}
+
+void MacroKnob::closeRangeEditor()
+{
+    rangeSlider.setVisible (false);
+    resized();
+    repaint();
 }
 
 void MacroKnob::setPatchMacro (const juce::String& newLabel, double defaultValue, bool isUsed,
@@ -101,7 +167,17 @@ void MacroKnob::setLiveModValue (double liveValue)
 void MacroKnob::showModMenu()
 {
     juce::PopupMenu m;
-    m.addSectionHeader ("Modulate " + (label.isNotEmpty() ? label : "Macro " + juce::String (index + 1)));
+    m.addSectionHeader (label.isNotEmpty() ? label : "Macro " + juce::String (index + 1));
+    if (rangeSlider.isVisible())
+        m.addItem (1, "Hide range slider");
+    else
+        m.addItem (1, "Set range…");
+
+    if (hasRange)
+        m.addItem (2, "Reset range (0.00 – 1.00)");
+
+    m.addSeparator();
+    m.addSectionHeader ("Modulation");
     static const char* kMenuItems[] = {
         "Modulate with LFO 1",
         "Modulate with LFO 2",
@@ -123,7 +199,20 @@ void MacroKnob::showModMenu()
                      {
                          if (safe == nullptr || result == 0)
                              return;
-                         if (result >= 100 && result < 100 + kNumModSources)
+                         if (result == 1)
+                         {
+                             if (safe->rangeSlider.isVisible())
+                                 safe->closeRangeEditor();
+                             else
+                                 safe->openRangeEditor();
+                         }
+                         else if (result == 2)
+                         {
+                             safe->setMacroRange (0.0, 1.0);
+                             if (safe->onResetRange)
+                                 safe->onResetRange();
+                         }
+                         else if (result >= 100 && result < 100 + kNumModSources)
                          {
                              const auto src = static_cast<ModSource> (result - 100);
                              const double d = safe->hasMod ? safe->modDepth : 0.5;
@@ -186,16 +275,26 @@ void MacroKnob::paint (juce::Graphics& g)
         g.setColour (accent.withAlpha (0.35f));
         g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), 4.0f, 1.5f);
     }
-    if (! used && ! hasMod)
+    if (! used && ! hasMod && ! hasRange)
         return; // dimmed knob only: no label, no value
     auto r = getLocalBounds();
     r.removeFromTop (slider.getBottom() + 1);
     g.setColour (text);
     g.setFont (font (smallSize, Weight::Medium));
     g.drawFittedText (label, r.removeFromTop (13), juce::Justification::centred, 1, 0.85f);
-    g.setColour (hasMod ? modSourceColour (modSource) : dimText);
-    g.setFont (font (captionSize));
-    g.drawText (juce::String (slider.getValue(), 2), r.removeFromTop (12), juce::Justification::centred);
+    if (rangeSlider.isVisible())
+    {
+        g.setColour (accent);
+        g.setFont (font (10.0f, Weight::Medium));
+        const juce::String rangeStr = juce::String (rangeMin, 2) + " " + juce::String::fromUTF8 ("\xe2\x80\x93") + " " + juce::String (rangeMax, 2);
+        g.drawText (rangeStr, r.removeFromTop (12), juce::Justification::centred);
+    }
+    else
+    {
+        g.setColour (hasMod ? modSourceColour (modSource) : (hasRange ? accent : dimText));
+        g.setFont (font (captionSize));
+        g.drawText (juce::String (slider.getValue(), 2), r.removeFromTop (12), juce::Justification::centred);
+    }
 }
 
 void MacroKnob::resized()
@@ -203,6 +302,11 @@ void MacroKnob::resized()
     // The knob, its label and value as one block, centred in the cell.
     const int top = juce::jmax (0, (getHeight() - kKnobBlock) / 2);
     slider.setBounds ((getWidth() - kKnobSize) / 2, top, kKnobSize, kKnobSize);
+    if (rangeSlider.isVisible())
+    {
+        const int sliderW = juce::jmin (getWidth() - 10, 72);
+        rangeSlider.setBounds ((getWidth() - sliderW) / 2, slider.getBottom() + 14, sliderW, 14);
+    }
 }
 
 //==============================================================================
@@ -266,6 +370,16 @@ MacroPanel::MacroPanel (juce::AudioProcessorValueTreeState& s, VibeSynthAudioPro
         {
             if (processor != nullptr)
                 processor->clearMacroMod (i + 1);
+        };
+        knobs[(size_t) i]->onRangeChanged = [this, i] (double min, double max)
+        {
+            if (processor != nullptr)
+                processor->setMacroRange (i + 1, min, max);
+        };
+        knobs[(size_t) i]->onResetRange = [this, i]
+        {
+            if (processor != nullptr)
+                processor->clearMacroRange (i + 1);
         };
         addAndMakeVisible (*knobs[(size_t) i]);
     }
@@ -332,10 +446,27 @@ void MacroPanel::showPatch (const vibesynth::Patch& patch)
         knobs[(size_t) i]->setPatchMacro (labels[(size_t) i], patch.macroDefault (i),
                                           codeReads || drives[(size_t) i].isNotEmpty() || mod != nullptr,
                                           drives[(size_t) i], codeReads);
+        const auto* r = vibesynth::findMacroRange (patch, i + 1);
+        if (r != nullptr)
+            knobs[(size_t) i]->setMacroRange (r->min, r->max);
+        else
+            knobs[(size_t) i]->setMacroRange (0.0, 1.0);
     }
     voiceMode.setPatchMode (patchMode);
     updateGlide();
     repaint();
+}
+
+void MacroPanel::openMacroRange (int index)
+{
+    if (index >= 0 && index < 8)
+        knobs[(size_t) index]->openRangeEditor();
+}
+
+void MacroPanel::closeMacroRange (int index)
+{
+    if (index >= 0 && index < 8)
+        knobs[(size_t) index]->closeRangeEditor();
 }
 
 void MacroPanel::tick (const OverrideTable& overrides)

@@ -98,7 +98,10 @@ void OverrideTable::clear() noexcept
         for (int src = 0; src < kNumModSources; ++src)
             macroModDepth[m][src].store (0.0, std::memory_order_relaxed);
         liveMacroValue[m].store (0.5f, std::memory_order_relaxed);
+        macroRangeMin[m].store (0.0, std::memory_order_relaxed);
+        macroRangeMax[m].store (1.0, std::memory_order_relaxed);
     }
+    macroRangeActive.store (0u, std::memory_order_relaxed);
     for (int src = 0; src < kNumModSources; ++src)
     {
         liveModPhase[src].store (0.0f, std::memory_order_relaxed);
@@ -107,6 +110,36 @@ void OverrideTable::clear() noexcept
     liveVoiceActive.store (false, std::memory_order_relaxed);
     modSourceMask.store (0u, std::memory_order_release);
     anyModActive.store (0u, std::memory_order_release);
+    clearMacroRanges();
+}
+
+void OverrideTable::setMacroRange (int macroIndex, double lo, double hi) noexcept
+{
+    if (macroIndex < 0 || macroIndex >= 8)
+        return;
+    lo = std::clamp (lo, 0.0, 1.0);
+    hi = std::clamp (hi, 0.0, 1.0);
+    if (hi < lo)
+        std::swap (lo, hi);
+    macroRangeMin[macroIndex].store (lo, std::memory_order_relaxed);
+    macroRangeMax[macroIndex].store (hi, std::memory_order_relaxed);
+    const bool isDefault = (lo <= 1.0e-6 && hi >= 1.0 - 1.0e-6);
+    uint8_t mask = macroRangeActive.load (std::memory_order_relaxed);
+    if (isDefault)
+        mask &= static_cast<uint8_t> (~(1u << macroIndex));
+    else
+        mask |= static_cast<uint8_t> (1u << macroIndex);
+    macroRangeActive.store (mask, std::memory_order_release);
+}
+
+void OverrideTable::clearMacroRanges() noexcept
+{
+    for (int m = 0; m < 8; ++m)
+    {
+        macroRangeMin[m].store (0.0, std::memory_order_relaxed);
+        macroRangeMax[m].store (1.0, std::memory_order_relaxed);
+    }
+    macroRangeActive.store (0u, std::memory_order_release);
 }
 
 void OverrideTable::refresh (int r, int m, int s) noexcept

@@ -43,7 +43,8 @@ enum class PatchStatus
     TooLoud,       // peak above +12 dBFS before the limiter
     DcOffset,      // |mean| above 0.1 over the last 0.5 s
     Silent,        // all 9 configurations below -80 dBFS
-    TooSlow        // CPU over 10 % of real time, or the 100 ms deadline
+    TooSlow,       // CPU over 10 % of real time, or the 100 ms deadline
+    MacroNoise     // M14a: macro at 1 turns sound into noise
 };
 
 // Short stable name for logs and tests ("compile_error", "nan", ...).
@@ -102,6 +103,19 @@ struct MacroMap
     }
 };
 
+// M14a: no-code macro range. The code sees min + knob * (max - min).
+struct MacroRange
+{
+    int macro = 1;        // 1..8 (m1..m8)
+    double min = 0.0;     // 0..1
+    double max = 1.0;     // 0..1
+
+    bool operator== (const MacroRange& o) const
+    {
+        return macro == o.macro && samePatchNumber (min, o.min) && samePatchNumber (max, o.max);
+    }
+};
+
 struct Patch
 {
     static constexpr int kVersion = 1;
@@ -122,6 +136,7 @@ struct Patch
     std::vector<NodeTweak> tweaks;  // M10: optional; empty = absent from the file
     std::vector<MacroMap> macroMaps;
     PatchMods mods;                 // M13: optional "mods" key; empty = absent from the file
+    std::vector<MacroRange> macroRanges; // M14a: optional "macroRanges" key; empty = absent from the file
 
     // Design budget for the voice section per voice-sample (SPEC §4.2.1, M6):
     // a mono patch sounds one voice, so it gets 4x the poly figure.
@@ -139,13 +154,22 @@ struct Patch
         return i >= 0 && i < static_cast<int> (macros.size()) ? macros[(size_t) i].defaultValue : 0.5;
     }
 
+    // M14a: maps knob value 0..1 to lo..hi if a range is set for macro i.
+    double applyMacroRange (int i, double val) const noexcept
+    {
+        for (const auto& r : macroRanges)
+            if (r.macro == i + 1)
+                return r.min + val * (r.max - r.min);
+        return val;
+    }
+
     bool operator== (const Patch& o) const
     {
         return version == o.version && name == o.name && prompt == o.prompt
             && macros == o.macros && voiceMode == o.voiceMode && graphJson == o.graphJson
             && init == o.init && voice == o.voice && master == o.master
             && samePatchNumber (trim, o.trim) && tweaks == o.tweaks && macroMaps == o.macroMaps
-            && mods == o.mods;
+            && mods == o.mods && macroRanges == o.macroRanges;
     }
 };
 

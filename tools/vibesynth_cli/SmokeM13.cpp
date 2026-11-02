@@ -788,7 +788,7 @@ bool smokeM12FunctionsModulated()
         "env = env_adsr(0, gate, 0.01, 0.3, 0.8, 0.2);\n"
         "out = s * env * vel * 0.4;";
     base.master =
-        "d = bus_delay(inl, inr, 0.25, 0.4, 0.4);\n"
+        "d = bus_delay(inl, inr, 0.25, 0.4, 0.4, 0.35);\n"
         "dr = bus_delay_r();\n"
         "outl = bus_width(d, dr, 0.5);\n"
         "outr = bus_width_r();";

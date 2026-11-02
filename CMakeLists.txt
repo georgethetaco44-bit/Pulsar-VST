@@ -358,11 +358,13 @@ target_sources(vibesynth_cli PRIVATE
 # M10 + M11 merge checks.
 target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/Edit.cpp
+    tools/vibesynth_cli/MacroScan.cpp
     tools/vibesynth_cli/SmokeM11.cpp
     tools/vibesynth_cli/SmokeM12.cpp
     tools/vibesynth_cli/SmokeM12b.cpp
     tools/vibesynth_cli/SmokeMerge.cpp
-    tools/vibesynth_cli/SmokeM13.cpp)
+    tools/vibesynth_cli/SmokeM13.cpp
+    tools/vibesynth_cli/SmokeM14a.cpp)
 # --render writes WAV only: keep JUCE's bundled FLAC/Ogg Vorbis codecs (and
 # the Windows Media reader) out of the CLI.
 target_compile_definitions(vibesynth_cli PRIVATE

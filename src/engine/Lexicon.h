@@ -74,6 +74,8 @@ enum class ModuleId : int
     FxOtt,
     FxPhaser,
     FxFshift,
+    FxComp,
+    FxGate,
     PhysResonator,
     PhysString,
     ChaosLorenz,
@@ -198,6 +200,8 @@ struct VoiceRack
     OttState ott[kNumOttSlots];
     PhaserState fxPhaser[kNumPhaserSlots];
     FshiftState fxFshift[kNumFshiftSlots];
+    CompState fxComp[kNumCompSlots];
+    GateState fxGate[kNumGateSlots];
 
     daisysp::Resonator resonator[kNumResonatorSlots];
     ResonCache resonCache[kNumResonatorSlots];

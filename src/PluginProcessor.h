@@ -191,6 +191,8 @@ public:
     void setModEnv (int index, const vibesynth::ModEnvSpec& spec);
     bool setMacroMod (vibesynth::ModSource source, int macro, double depth);
     void clearMacroMod (int macro);
+    void setMacroRange (int macro, double min, double max);
+    void clearMacroRange (int macro);
     bool setNodeArgMod (vibesynth::ModSource source, const std::string& node, const std::string& arg, double depth);
     void clearNodeArgMod (const std::string& node, const std::string& arg);
     int getTweaksVersion() const noexcept { return tweaksVersion; }

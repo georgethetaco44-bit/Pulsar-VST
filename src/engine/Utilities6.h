@@ -1,5 +1,5 @@
-// M12 Tier 2 — Utilities.h part 6 (SPEC §5.3 Tier 2): fx_phaser and
-// fx_fshift (voice racks), bus_delay and bus_width (master rack).
+// M12 Tier 2 + M14a — Utilities.h part 6 (SPEC §5.3 Tier 2, M14a wishlist):
+// fx_phaser, fx_fshift, fx_comp, fx_gate (voice racks), bus_delay and bus_width (master rack).
 //
 // Header-only, allocation-free, audio-thread safe (SPEC §11). The delay's
 // buffer is allocated by its owner (EelMaster, off the audio thread) and
@@ -15,6 +15,8 @@ namespace vibesynth {
 
 constexpr int kNumPhaserSlots = 2;
 constexpr int kNumFshiftSlots = 1;
+constexpr int kNumCompSlots = 2;
+constexpr int kNumGateSlots = 2;
 
 // TPT one-pole gain G = g / (1 + g), g = tan(pi hz / sr), hz clamped to
 // 0.45 x sr. Off the hot path (init, or when a raw input changes).
@@ -222,7 +224,7 @@ struct DelayBusState
     double sampleRate = 48000.0;
     double delay = -1.0;  // current delay in samples (-1: unset, snaps)
     double glide = 1.0;
-    double hpG = 0.0, lpG = 0.0;
+    double lpG = 0.0;
     double hpL1 = 0.0, hpL2 = 0.0, lpL = 0.0;
     double hpR1 = 0.0, hpR2 = 0.0, lpR = 0.0;
 
@@ -234,7 +236,6 @@ struct DelayBusState
         bufR = ok ? storage + frames : nullptr;
         capacity = ok ? frames : 0;
         glide = 1.0 - std::exp (-1.0 / (0.05 * sampleRate));
-        hpG = onePoleGain (150.0, sampleRate);
         lpG = onePoleGain (6000.0, sampleRate);
         reset();
     }
@@ -272,15 +273,15 @@ struct DelayBusState
     }
 
     // Low-cut (two one-poles) then high-cut (one one-pole).
-    double filter (double x, double& h1, double& h2, double& lp) const noexcept
+    double filter (double x, double& h1, double& h2, double& lp, double gHp) const noexcept
     {
-        const double a = x - onePoleLp (x, h1, hpG);
-        const double b = a - onePoleLp (a, h2, hpG);
+        const double a = x - onePoleLp (x, h1, gHp);
+        const double b = a - onePoleLp (a, h2, gHp);
         return onePoleLp (b, lp, lpG);
     }
 
-    void process (float l, float r, double beatsIn, double fbIn, double mixIn, double bpmIn, float& outL,
-                  float& outR) noexcept
+    void process (float l, float r, double beatsIn, double fbIn, double mixIn, double lowcutIn,
+                  double bpmIn, float& outL, float& outR) noexcept
     {
         const double mix = clamp01 (mixIn);
         if (bufL == nullptr || capacity < 16)
@@ -311,12 +312,16 @@ struct DelayBusState
             }
         }
 
+        const double lowcut = clamp01 (isFiniteBitsD (lowcutIn) ? lowcutIn : 0.35);
+        const double cutHz = 60.0 * std::pow (25.0, lowcut);
+        const double currentHpG = onePoleGain (cutHz, sampleRate);
+
         const double fb = kMaxFeedback * clamp01 (fbIn);
         const double tapL = read (bufL, delay);
         const double tapR = read (bufR, delay);
         const double mono = 0.5 * (static_cast<double> (l) + static_cast<double> (r));
-        double wL = filter (mono + fb * tapR, hpL1, hpL2, lpL);
-        double wR = filter (fb * tapL, hpR1, hpR2, lpR);
+        double wL = filter (mono + fb * tapR, hpL1, hpL2, lpL, currentHpG);
+        double wR = filter (fb * tapL, hpR1, hpR2, lpR, currentHpG);
         if (! isFiniteBitsD (wL) || ! isFiniteBitsD (wR))
         {
             hpL1 = hpL2 = lpL = hpR1 = hpR2 = lpR = 0.0;
@@ -381,6 +386,163 @@ struct WidthBusState
         const double extra = w * (w >= 0.0 ? hp : hi);
         outL = sanitizeFloat (static_cast<float> (static_cast<double> (l) + extra));
         outR = sanitizeFloat (static_cast<float> (static_cast<double> (r) - extra));
+    }
+};
+
+// ---------------------------------------------------------------------------
+// fx_comp(slot, in, amount): feed-forward compressor; amount 0–1 sets
+// threshold and ratio together, from gentle glue to heavy squash. Fast attack
+// (~1 ms), ~80 ms release, automatic makeup gain so level stays roughly constant.
+struct CompState
+{
+    double sampleRate = 48000.0;
+    double env = 0.0;
+    double alphaAtt = 0.0;
+    double alphaRel = 0.0;
+
+    void init (double sr) noexcept
+    {
+        sampleRate = sr > 0.0 ? sr : 48000.0;
+        // Fast attack ~1 ms, ~80 ms release
+        alphaAtt = 1.0 - std::exp (-1.0 / (0.001 * sampleRate));
+        alphaRel = 1.0 - std::exp (-1.0 / (0.080 * sampleRate));
+        reset();
+    }
+
+    void reset() noexcept
+    {
+        env = 0.0;
+    }
+
+    float process (float in, double amountIn) noexcept
+    {
+        const double x = static_cast<double> (in);
+        const double absX = std::fabs (x);
+        if (! isFiniteBitsD (absX))
+        {
+            reset();
+            return 0.0f;
+        }
+
+        // Peak detector
+        if (absX > env)
+            env += alphaAtt * (absX - env);
+        else
+            env += alphaRel * (absX - env);
+
+        if (! isFiniteBitsD (env) || env < 0.0)
+            env = 0.0;
+
+        const double amount = clamp01 (isFiniteBitsD (amountIn) ? amountIn : 0.0);
+        if (amount <= 1.0e-5)
+            return sanitizeFloat (in);
+
+        // amount 0..1: threshold 0 dB down to -30 dB, ratio 1:1 up to 10:1
+        const double threshDb = -30.0 * amount;
+        const double ratio = 1.0 + 9.0 * amount;
+        const double cs = 1.0 - 1.0 / ratio;
+
+        // Auto makeup compensates for compression at nominal 0 dBFS input
+        const double makeupDb = cs * (-threshDb);
+
+        const double envDb = 20.0 * std::log10 (std::max (env, 1.0e-5));
+        double grDb = 0.0;
+        if (envDb > threshDb)
+            grDb = -cs * (envDb - threshDb);
+
+        const double totalDb = std::min (36.0, grDb + makeupDb);
+        const double gain = std::pow (10.0, totalDb / 20.0);
+
+        return sanitizeFloat (static_cast<float> (x * gain));
+    }
+};
+
+// ---------------------------------------------------------------------------
+// fx_gate(slot, in, threshold): noise gate with hysteresis and a ~1 ms attack
+// / ~30 ms release, so it chops cleanly without clicks.
+struct GateState
+{
+    double sampleRate = 48000.0;
+    double env = 0.0;
+    double gain = 1.0;
+    bool isOpen = true;
+    double envAlphaAtt = 0.0;
+    double envAlphaRel = 0.0;
+    double gateAlphaAtt = 0.0;
+    double gateAlphaRel = 0.0;
+
+    void init (double sr) noexcept
+    {
+        sampleRate = sr > 0.0 ? sr : 48000.0;
+        // Fast peak follower for triggering
+        envAlphaAtt = 1.0 - std::exp (-1.0 / (0.001 * sampleRate));
+        envAlphaRel = 1.0 - std::exp (-1.0 / (0.010 * sampleRate));
+        // Gain envelope: ~1 ms attack (opening), ~30 ms release (closing)
+        gateAlphaAtt = 1.0 - std::exp (-1.0 / (0.001 * sampleRate));
+        gateAlphaRel = 1.0 - std::exp (-1.0 / (0.030 * sampleRate));
+        reset();
+    }
+
+    void reset() noexcept
+    {
+        env = 0.0;
+        gain = 0.0;
+        isOpen = false;
+    }
+
+    float process (float in, double thresholdIn) noexcept
+    {
+        const double x = static_cast<double> (in);
+        const double absX = std::fabs (x);
+        if (! isFiniteBitsD (absX))
+        {
+            reset();
+            return 0.0f;
+        }
+
+        const double thOpen = clamp01 (isFiniteBitsD (thresholdIn) ? thresholdIn : 0.0);
+        if (thOpen <= 1.0e-5)
+        {
+            isOpen = true;
+            gain = 1.0;
+            return sanitizeFloat (in);
+        }
+
+        // Track envelope for threshold detection
+        if (absX > env)
+            env += envAlphaAtt * (absX - env);
+        else
+            env += envAlphaRel * (absX - env);
+
+        if (! isFiniteBitsD (env) || env < 0.0)
+            env = 0.0;
+
+        // Hysteresis: close threshold is 75% of open threshold (~2.5 dB below)
+        const double thClose = thOpen * 0.75;
+        if (isOpen)
+        {
+            if (env < thClose)
+                isOpen = false;
+        }
+        else
+        {
+            if (env >= thOpen)
+                isOpen = true;
+        }
+
+        // Smooth gain ramp: ~1 ms attack (open), ~30 ms release (close)
+        const double targetGain = isOpen ? 1.0 : 0.0;
+        if (isOpen)
+            gain += gateAlphaAtt * (targetGain - gain);
+        else
+            gain += gateAlphaRel * (targetGain - gain);
+
+        if (! isFiniteBitsD (gain) || gain < 0.0)
+            gain = 0.0;
+        else if (gain > 1.0)
+            gain = 1.0;
+
+        return sanitizeFloat (static_cast<float> (x * gain));
     }
 };
 

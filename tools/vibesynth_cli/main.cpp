@@ -59,6 +59,7 @@
 #include "Batch.h"
 #include "Bench.h"
 #include "Edit.h"
+#include "MacroScan.h"
 #include "CliCheck.h"
 #include "PulsarTestPatches.h"
 #include "Render.h"
@@ -70,6 +71,7 @@
 #include "SmokeM12.h"
 #include "SmokeM12b.h"
 #include "SmokeM13.h"
+#include "SmokeM14a.h"
 #include "SmokeMerge.h"
 #include "engine/OutputStage.h"
 #include "patch/LexiconLint.h"
@@ -1173,6 +1175,7 @@ int runSmoketest()
     ok = vibesynth_cli::smokeM12b() && ok;
     ok = vibesynth_cli::smokeMerge() && ok;
     ok = vibesynth_cli::smokeM13() && ok;
+    ok = vibesynth_cli::smokeM14a() && ok;
     std::printf (ok ? "SMOKETEST PASS\n" : "SMOKETEST FAIL\n");
     return ok ? 0 : 1;
 }
@@ -1261,13 +1264,15 @@ int main (int argc, char** argvIn)
     const bool change = argc >= 3 && std::strcmp (argv[1], "--change") == 0;
     const bool mutate = argc >= 3 && std::strcmp (argv[1], "--mutate") == 0;
     const bool changeBatch = argc >= 3 && std::strcmp (argv[1], "--change-batch") == 0;
+    const bool macroScan = argc >= 2 && std::strcmp (argv[1], "--macro-scan") == 0;
     if (! smoke && ! self && ! bench && ! validate && ! render && ! batch && ! bake && ! change && ! mutate
-        && ! changeBatch)
+        && ! changeBatch && ! macroScan)
     {
         std::printf ("usage: vibesynth_cli (--smoketest | --selftest [--strict-cpu] | --bench | --validate file.pulsar\n"
                      "                     | --render <patch.pulsar | built-in> out.wav\n"
-                     "                       [--sr HZ] [--seconds-tail S] [--bpm BPM] [--phrase default|riff]\n"
+                     "                       [--sr HZ] [--seconds-tail S] [--bpm BPM] [--phrase default|riff] [--octave N]\n"
                      "                       [--mode patch|poly|mono] [--glide G] [--macro N=V]...\n"
+                     "                     | --macro-scan [<patch.pulsar | built-in | all>]\n"
                      "                     | --batch prompts.txt [--batch-limit N] [--out DIR] [--endpoint URL] [--model ID]\n"
                      "                       [--effort low|minimal|medium|none]\n"
                      "                     | --bake in.pulsar out.pulsar\n"
@@ -1311,6 +1316,8 @@ int main (int argc, char** argvIn)
         return jitOk ? vibesynth_cli::runMutate (argc - 2, argv + 2, g_oversampling) : 2;
     if (changeBatch)
         return jitOk ? vibesynth_cli::runChangeBatch (argc - 2, argv + 2, g_oversampling) : 2;
+    if (macroScan)
+        return jitOk ? vibesynth_cli::runMacroScan (argc - 2, argv + 2, g_oversampling) : 2;
 
     bool ok = check (jit, "execution mode is %s", mode);
     ok = check (initOk, "NSEEL_init") && ok;

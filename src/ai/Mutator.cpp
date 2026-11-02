@@ -54,7 +54,7 @@ MutateBase prepareMutateBase (const Patch& active)
 {
     MutateBase b;
     b.patch = active;
-    b.hadTweaks = ! active.tweaks.empty() || ! active.macroMaps.empty();
+    b.hadTweaks = ! active.tweaks.empty() || ! active.macroMaps.empty() || ! active.macroRanges.empty();
     if (! b.hadTweaks)
     {
         carryMutateMods (active, b.patch);
@@ -73,6 +73,7 @@ MutateBase prepareMutateBase (const Patch& active)
     }
     b.patch.tweaks.clear();
     b.patch.macroMaps.clear();
+    b.patch.macroRanges.clear();
     carryMutateMods (active, b.patch);
     return b;
 }

@@ -120,6 +120,20 @@ void readTweaks (const juce::var& root, Patch& p)
                 p.macroMaps.push_back (mm);
         }
 
+    // M14a: optional "macroRanges": [{"macro": 1..8, "min": v, "max": v}]
+    if (const auto* list = root.getProperty ("macroRanges", juce::var()).getArray())
+        for (const auto& m : *list)
+        {
+            if (! m.isObject() || ! isNumber (m.getProperty ("macro", juce::var())))
+                continue;
+            MacroRange mr;
+            mr.macro = static_cast<int> (m.getProperty ("macro", 0));
+            mr.min = readNumber (m.getProperty ("min", juce::var()), 0.0);
+            mr.max = readNumber (m.getProperty ("max", juce::var()), 1.0);
+            if (mr.macro >= 1 && mr.macro <= Patch::kMaxMacros)
+                p.macroRanges.push_back (mr);
+        }
+
     // M13: optional "mods": {"lfos": [...], "envs": [...], "assignments": [...]}
     const juce::var modsVar = root.getProperty ("mods", juce::var());
     if (modsVar.isObject())
@@ -201,6 +215,7 @@ const char* patchStatusName (PatchStatus s) noexcept
         case PatchStatus::DcOffset:     return "dc";
         case PatchStatus::Silent:       return "silent";
         case PatchStatus::TooSlow:      return "slow";
+        case PatchStatus::MacroNoise:   return "macro_noise";
     }
     return "unknown";
 }
@@ -369,6 +384,19 @@ std::string serializePatch (const Patch& p)
             list.add (juce::var (o));
         }
         root->setProperty ("macroMaps", list);
+    }
+    if (! p.macroRanges.empty())
+    {
+        juce::Array<juce::var> list;
+        for (const auto& r : p.macroRanges)
+        {
+            auto* o = new juce::DynamicObject();
+            o->setProperty ("macro", r.macro);
+            o->setProperty ("min", r.min);
+            o->setProperty ("max", r.max);
+            list.add (juce::var (o));
+        }
+        root->setProperty ("macroRanges", list);
     }
     if (! p.mods.empty())
     {

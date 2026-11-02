@@ -50,6 +50,8 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 - `fx_ott(slot, in, depth)` · 2 slots · both — 3-band (120 Hz / 2.5 kHz) upward + downward compressor, depth 0-1 (0 = bypass). In master use slot 0 for L, 1 for R [85].
 - `fx_phaser(slot, in, pos, depth, feedback)` · 2 slots · both — 8-stage phaser; `pos` 0-1 sweeps the notches (100 Hz-5 kHz; move it with an LFO), depth 0-1 (0 = dry), feedback 0-1 [50].
 - `fx_fshift(slot, in, shift)` · 1 slot · both — frequency shifter: moves every partial by the same Hz (inharmonic, metallic); `shift` 0.5 = none, toward 0/1 = down/up to 2 kHz, exponential (0.6 ≈ +6 Hz, 0.75 ≈ +60 Hz).
+- `fx_comp(slot, in, amount)` · 2 slots · both — feed-forward compressor; amount 0-1 sets threshold and ratio (glue to squash), fast attack, ~80 ms release, automatic makeup gain.
+- `fx_gate(slot, in, threshold)` · 2 slots · both — noise gate with hysteresis; threshold 0-1, ~1 ms attack / ~30 ms release, chops cleanly without clicks.
 
 ### Physical models (driven by any exciter signal)
 - `phys_resonator(slot, exciter, hz, structure, brightness, damping)` · 1 slot · both — modal resonator; structure, brightness, damping 0-1 [190].
@@ -62,7 +64,7 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 ### Utilities
 - `util_safe_fb(slot, x)` · 4 slots · both — DC block + slew limit + tanh. Every feedback path must pass through it: `fb1 = util_safe_fb(0, y);`.
 - `util_xover_lo(slot, in)` · 2 slots · both — Linkwitz-Riley 4th-order crossover at 100 Hz; returns the low band.
-- `util_xover_hi(slot)` · 2 slots · both — the high band of that slot's last util_xover_lo call (call _lo first).
+- `util_xover_hi(slot)` · 2 slots · both — the high band of that slot's last util_xover_lo call (call _lo first). It takes the slot ONLY, no input: `lo = util_xover_lo(0, inl); hi = util_xover_hi(0);`
 - `util_bytebeat(t, mode)` · no slot · both — bytebeat formula of an integer counter t, mode 0-3; output ±1.
 
 ### Master bus
@@ -73,7 +75,7 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 - `bus_chorus_r()` · no slot · master — R from the last bus_chorus.
 - `bus_reverb(l, r, size, mix)` · no slot · master — small FDN reverb; returns L.
 - `bus_reverb_r()` · no slot · master — R from the last bus_reverb.
-- `bus_delay(l, r, beats, feedback, mix)` · no slot · master — tempo-synced ping-pong delay; beats 0.0625-4 (0.75 = dotted 1/8), feedback 0-1, mix 0-1; echoes are band-passed 150 Hz-6 kHz, so the sub stays dry; returns L.
+- `bus_delay(l, r, beats, feedback, mix, lowcut)` · no slot · master — tempo-synced ping-pong delay; beats 0.0625-4 (0.75 = dotted 1/8), feedback 0-1, mix 0-1, lowcut 0-1 (60 Hz-1.5 kHz, default 0.35 ≈ 250 Hz, 6 kHz high-cut); returns L.
 - `bus_delay_r()` · no slot · master — R from the last bus_delay.
 - `bus_width(l, r, amount)` · no slot · master — stereo width above 150 Hz (0 = mono, 0.5 = unchanged, 1 = wide); the low end is untouched. inl == inr, so it widens only what a stereo effect before it made (bus_chorus, bus_delay, bus_reverb); returns L.
 - `bus_width_r()` · no slot · master — R from the last bus_width.

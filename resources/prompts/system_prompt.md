@@ -41,7 +41,7 @@ Reply with exactly these blocks, in this order, and no code anywhere else:
 - One strong idea, done well, beats many weak layers.
 - Notes end cleanly: the amp envelope is the last multiply in voice, release 0.3-0.4 (15-40 ms) for basses and leads; no reverb on basses.
 - Movement is tempo-synced with `mod_lfo(slot, beats, shape)` or `beat` (1/4, 1/8, 1/16 notes).
-- m1 is the hero and transforms the sound (clean to snarling, steady to chopped). Every macro is audible and musical across its whole range, ordered by importance; the defaults already sound good.
+- m1 is the hero and transforms the sound (clean to snarling, steady to chopped). Every macro is audible and musical across its whole range, ordered by importance; the defaults already sound good. Every macro's full travel must stay musical; at 1 it is the most extreme setting a producer would actually use, never noise. Scale drive, fold, feedback and resonance ranges so they top out before their destructive zone.
 - Keys, plucks, pads: no sub split.
 - Most patches benefit from a little space and width on the master: bus_delay or bus_reverb at a low mix (0.1-0.25), then bus_width; the sub stays mono and dry.
 

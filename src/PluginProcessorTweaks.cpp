@@ -24,6 +24,7 @@ void VibeSynthAudioProcessor::editTweaks (const std::function<void (vibesynth::P
             activePatch.tweaks = uiPatch.tweaks;
             activePatch.macroMaps = uiPatch.macroMaps;
             activePatch.mods = uiPatch.mods;
+            activePatch.macroRanges = uiPatch.macroRanges;
         }
     }
     applyTweaksFrom (uiPatch);
@@ -73,6 +74,16 @@ bool VibeSynthAudioProcessor::setMacroMod (vibesynth::ModSource source, int macr
 void VibeSynthAudioProcessor::clearMacroMod (int macro)
 {
     editTweaks ([&] (vibesynth::Patch& p) { vibesynth::removePatchMacroMod (p, macro); });
+}
+
+void VibeSynthAudioProcessor::setMacroRange (int macro, double min, double max)
+{
+    editTweaks ([&] (vibesynth::Patch& p) { vibesynth::setPatchMacroRange (p, macro, min, max); });
+}
+
+void VibeSynthAudioProcessor::clearMacroRange (int macro)
+{
+    editTweaks ([&] (vibesynth::Patch& p) { vibesynth::removePatchMacroRange (p, macro); });
 }
 
 bool VibeSynthAudioProcessor::setNodeArgMod (vibesynth::ModSource source, const std::string& node,

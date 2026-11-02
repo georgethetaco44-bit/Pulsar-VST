@@ -33,7 +33,8 @@ const char* stageOf (PatchStatus s) noexcept
         case PatchStatus::TooLoud:
         case PatchStatus::DcOffset:
         case PatchStatus::Silent:
-        case PatchStatus::TooSlow:      break;
+        case PatchStatus::TooSlow:
+        case PatchStatus::MacroNoise:   break;
     }
     return "test";
 }
@@ -285,7 +286,8 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
         std::unique_lock<std::mutex> gate;
         if (request.validationGate != nullptr)
             gate = std::unique_lock<std::mutex> (*request.validationGate);
-        const ValidationResult vr = validatePatch (patch, request.sampleRate, cancel);
+        const ValidationResult vr = validatePatch (patch, request.sampleRate, cancel,
+                                                   PatchProgram::kDefaultOversampling, true);
         if (vr.cancelled)
         {
             res.cancelled = true;

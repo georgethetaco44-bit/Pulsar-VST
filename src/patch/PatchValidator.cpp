@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <cstdio>
 #include <iterator>
 #include <vector>
@@ -127,7 +128,8 @@ double validatorCpuScale() noexcept
 }
 
 ValidationResult validatePatch (const Patch& patch, double sampleRate,
-                                const std::atomic<bool>* cancel, int oversampling)
+                                const std::atomic<bool>* cancel, int oversampling,
+                                bool checkMacroNoise)
 {
     ValidationResult result;
     const double deadlineMs = kDeadlineMs * validatorCpuScale();
@@ -171,7 +173,10 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
         {
             double macros[MacroSmoother::kNumMacros];
             for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
-                macros[m] = set == 0 ? 0.0 : set == 2 ? 1.0 : patch.macroDefault (m);
+            {
+                const double raw = set == 0 ? 0.0 : set == 2 ? 1.0 : patch.macroDefault (m);
+                macros[m] = patch.applyMacroRange (m, raw);
+            }
 
             // Fresh test VMs for every configuration (SPEC §7.1); the
             // voice at the oversampled rate, as the plugin runs it.
@@ -292,6 +297,21 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
     if (worstPeak < kSilence)
         return finish (reject (result, PatchStatus::Silent, "patch makes no sound"));
 
+    if (checkMacroNoise)
+    {
+        const auto scan = scanPatchMacros (patch, sr, os);
+        for (const auto& entry : scan)
+        {
+            if (entry.isNoise)
+            {
+                return finish (reject (result, PatchStatus::MacroNoise,
+                                       "m" + std::to_string (entry.macro) + " at 1 turns the sound into noise (flatness "
+                                           + fmt ("%.2f", entry.at1Flatness) + " vs " + fmt ("%.2f", entry.defaultFlatness)
+                                           + " at its default). Reduce its range so 1 is the most extreme setting a producer would use."));
+            }
+        }
+    }
+
     const double audioNs = 1.0e9 * kConfigSeconds * static_cast<double> (std::size (kNotes) * kNumMacroSets);
     result.voiceCpu = voiceNs / audioNs;   // reported only
 
@@ -327,7 +347,10 @@ TouchedNodes probeTouchedNodes (const Patch& patch, double sampleRate,
         {
             double macros[MacroSmoother::kNumMacros];
             for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
-                macros[m] = set == 0 ? 0.0 : set == 2 ? 1.0 : patch.macroDefault (m);
+            {
+                const double raw = set == 0 ? 0.0 : set == 2 ? 1.0 : patch.macroDefault (m);
+                macros[m] = patch.applyMacroRange (m, raw);
+            }
 
             // resetState() leaves the VMs as fresh as the validator's.
             voice->resetState();
@@ -403,6 +426,252 @@ double measureVoiceNs (const Patch& patch, double sampleRate, int runs, int samp
     }
     std::sort (times.begin(), times.end());
     return times[times.size() / 2];
+}
+
+namespace {
+
+constexpr double kPi = 3.14159265358979323846;
+
+void radix2Fft (std::vector<std::complex<double>>& a)
+{
+    const size_t n = a.size();
+    for (size_t i = 1, j = 0; i < n; ++i)
+    {
+        size_t bit = n >> 1;
+        for (; j & bit; bit >>= 1)
+            j ^= bit;
+        j ^= bit;
+        if (i < j)
+            std::swap (a[i], a[j]);
+    }
+    for (size_t len = 2; len <= n; len <<= 1)
+    {
+        const double ang = -2.0 * kPi / static_cast<double> (len);
+        const std::complex<double> wl (std::cos (ang), std::sin (ang));
+        for (size_t i = 0; i < n; i += len)
+        {
+            std::complex<double> w (1.0, 0.0);
+            for (size_t k = 0; k < len / 2; ++k)
+            {
+                const auto u = a[i + k];
+                const auto v = a[i + k + len / 2] * w;
+                a[i + k] = u + v;
+                a[i + k + len / 2] = u - v;
+                w *= wl;
+            }
+        }
+    }
+}
+
+void renderMacroNote (const Patch& patch, int note, const double* rawMacros,
+                      double sr, int os, std::vector<float>& outL, std::vector<float>& outR)
+{
+    const int total = static_cast<int> (sr);
+    outL.assign (total, 0.0f);
+    outR.assign (total, 0.0f);
+
+    double macros[MacroSmoother::kNumMacros];
+    for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
+        macros[m] = patch.applyMacroRange (m, rawMacros[m]);
+
+    const double voiceRate = sr * os;
+    const double freq = 440.0 * std::pow (2.0, (note - 69) / 12.0);
+    const PatchStrings ps { patch.init.c_str(), patch.voice.c_str(), patch.master.c_str() };
+    const auto voice = std::make_unique<EelVoice> (ps, voiceRate, PatchProgram::voiceSeed (0));
+    if (! voice->isValid()) return;
+    const auto master = std::make_unique<EelMaster> (ps, sr);
+    if (! master->isValid()) return;
+
+    HalfbandDecimator decimator;
+    Transport transport;
+    const double beatStep = transport.beatStep (sr);
+    const double voiceBeatStep = transport.beatStep (voiceRate);
+    voice->noteOn (freq, note, 1.0, transport);
+
+    constexpr int kChunk = 512;
+    float voiceBuf[kChunk * PatchProgram::kMaxOversampling];
+    float hostBuf[kChunk];
+
+    for (int start = 0; start < total; start += kChunk)
+    {
+        const int n = std::min (kChunk, total - start);
+        const int vn = n * os;
+        const int vstart = start * os;
+        for (int k = 0; k < vn; ++k)
+        {
+            transport.beat = (vstart + k) * voiceBeatStep;
+            voiceBuf[k] = voice->renderSample (freq, 1.0, note, 1.0, macros, transport);
+        }
+        if (os == 2)
+            for (int k = 0; k < n; ++k)
+                hostBuf[k] = decimator.process (voiceBuf[2 * k], voiceBuf[2 * k + 1]);
+        else
+            std::copy (voiceBuf, voiceBuf + n, hostBuf);
+
+        for (int k = 0; k < n; ++k)
+        {
+            const int i = start + k;
+            float l = 0.0f, r = 0.0f;
+            transport.beat = i * beatStep;
+            master->renderSample (hostBuf[k], hostBuf[k], l, r, macros, transport);
+            outL[i] = l;
+            outR[i] = r;
+        }
+    }
+}
+
+double computeBufferRms (const float* left, const float* right, int numSamples)
+{
+    if (left == nullptr || numSamples <= 0)
+        return 0.0;
+    double sum = 0.0;
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const double l = static_cast<double> (left[i]);
+        const double r = right != nullptr ? static_cast<double> (right[i]) : l;
+        sum += 0.5 * (l * l + r * r);
+    }
+    return std::sqrt (sum / static_cast<double> (numSamples));
+}
+
+} // namespace
+
+double computeSpectralFlatness (const float* left, const float* right, int numSamples, double sampleRate)
+{
+    if (left == nullptr || numSamples < 1024 || sampleRate <= 0.0)
+        return 0.0;
+
+    constexpr size_t N = 1024;
+    constexpr size_t H = 512;
+    std::vector<double> avgP (N / 2 + 1, 0.0);
+
+    const int startOffset = 0;
+    const int endLimit = std::min (numSamples, static_cast<int> (sampleRate * 0.8));
+    int frameCount = 0;
+
+    std::vector<std::complex<double>> aL (N);
+    std::vector<std::complex<double>> aR (N);
+    const bool stereo = (right != nullptr && right != left);
+
+    for (int start = startOffset; start + static_cast<int> (N) <= endLimit; start += H)
+    {
+        for (size_t i = 0; i < N; ++i)
+        {
+            const double w = 0.5 * (1.0 - std::cos (2.0 * kPi * static_cast<double> (i) / static_cast<double> (N)));
+            aL[i] = static_cast<double> (left[start + i]) * w;
+            if (stereo)
+                aR[i] = static_cast<double> (right[start + i]) * w;
+        }
+        radix2Fft (aL);
+        if (stereo)
+        {
+            radix2Fft (aR);
+            for (size_t k = 0; k <= N / 2; ++k)
+                avgP[k] += 0.5 * (std::norm (aL[k]) + std::norm (aR[k]));
+        }
+        else
+        {
+            for (size_t k = 0; k <= N / 2; ++k)
+                avgP[k] += std::norm (aL[k]);
+        }
+        ++frameCount;
+    }
+
+    if (frameCount == 0)
+        return 0.0;
+
+    for (size_t k = 0; k <= N / 2; ++k)
+        avgP[k] /= static_cast<double> (frameCount);
+
+    const double binHz = sampleRate / static_cast<double> (N);
+    const size_t kMin = static_cast<size_t> (std::max (1, static_cast<int> (std::ceil (200.0 / binHz))));
+    const size_t kMax = static_cast<size_t> (std::min (static_cast<int> (N / 2), static_cast<int> (std::floor (8000.0 / binHz))));
+    if (kMin >= kMax)
+        return 0.0;
+
+    const size_t K = kMax - kMin + 1;
+    double arith = 0.0;
+    double sumLog = 0.0;
+    constexpr double eps = 1.0e-30;
+
+    for (size_t k = kMin; k <= kMax; ++k)
+    {
+        arith += avgP[k];
+        sumLog += std::log (avgP[k] + eps);
+    }
+    arith /= static_cast<double> (K);
+    if (arith < 1.0e-12)
+        return 0.0;
+
+    const double geom = std::exp (sumLog / static_cast<double> (K));
+    return std::min (1.0, std::max (0.0, geom / arith));
+}
+
+std::vector<MacroScanResult> scanPatchMacros (const Patch& patch, double sampleRate, int oversampling)
+{
+    std::vector<MacroScanResult> results;
+    const unsigned read = macrosRead (patch);
+    if (read == 0u)
+        return results;
+
+    const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
+    const int os = std::clamp (oversampling, 1, PatchProgram::kMaxOversampling);
+
+    double defaultMacros[MacroSmoother::kNumMacros];
+    for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
+        defaultMacros[m] = patch.macroDefault (m);
+
+    std::vector<float> defL40, defR40, defL52, defR52;
+    renderMacroNote (patch, 40, defaultMacros, sr, os, defL40, defR40);
+    renderMacroNote (patch, 52, defaultMacros, sr, os, defL52, defR52);
+
+    const double fDef40 = computeSpectralFlatness (defL40.data(), defR40.data(), (int) defL40.size(), sr);
+    const double fDef52 = computeSpectralFlatness (defL52.data(), defR52.data(), (int) defL52.size(), sr);
+    const double rmsDef40 = computeBufferRms (defL40.data(), defR40.data(), (int) defL40.size());
+    const double rmsDef52 = computeBufferRms (defL52.data(), defR52.data(), (int) defL52.size());
+
+    const double baseFlatness = 0.5 * (fDef40 + fDef52);
+    const double baseRms = std::sqrt (0.5 * (rmsDef40 * rmsDef40 + rmsDef52 * rmsDef52));
+
+    for (int m = 0; m < MacroSmoother::kNumMacros; ++m)
+    {
+        if (((read >> m) & 1u) == 0u)
+            continue;
+
+        MacroScanResult res;
+        res.macro = m + 1;
+        res.label = (m < static_cast<int> (patch.macros.size()) && ! patch.macros[(size_t) m].label.empty())
+                        ? patch.macros[(size_t) m].label
+                        : ("Macro " + std::to_string (m + 1));
+        res.defaultFlatness = baseFlatness;
+
+        double testMacros[MacroSmoother::kNumMacros];
+        for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
+            testMacros[i] = (i == m) ? 1.0 : defaultMacros[i];
+
+        std::vector<float> at1L40, at1R40, at1L52, at1R52;
+        renderMacroNote (patch, 40, testMacros, sr, os, at1L40, at1R40);
+        renderMacroNote (patch, 52, testMacros, sr, os, at1L52, at1R52);
+
+        const double fAt140 = computeSpectralFlatness (at1L40.data(), at1R40.data(), (int) at1L40.size(), sr);
+        const double fAt152 = computeSpectralFlatness (at1L52.data(), at1R52.data(), (int) at1L52.size(), sr);
+        const double rmsAt140 = computeBufferRms (at1L40.data(), at1R40.data(), (int) at1L40.size());
+        const double rmsAt152 = computeBufferRms (at1L52.data(), at1R52.data(), (int) at1L52.size());
+
+        res.at1Flatness = 0.5 * (fAt140 + fAt152);
+        res.deltaFlatness = res.at1Flatness - res.defaultFlatness;
+
+        const double testRms = std::sqrt (0.5 * (rmsAt140 * rmsAt140 + rmsAt152 * rmsAt152));
+        res.levelChangeDb = (baseRms > 1.0e-12 && testRms > 1.0e-12)
+                                ? 20.0 * std::log10 (testRms / baseRms)
+                                : 0.0;
+
+        // Calibrate: tonal at default (< 0.40), high flatness at 1 (>= 0.50), big jump (>= 0.20)
+        res.isNoise = (res.defaultFlatness < 0.40 && res.at1Flatness >= 0.50 && res.deltaFlatness >= 0.20);
+
+        results.push_back (res);
+    }
+    return results;
 }
 
 } // namespace vibesynth

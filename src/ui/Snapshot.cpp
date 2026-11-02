@@ -296,6 +296,19 @@ void SnapshotDriver::runShots()
     // M13 shots run on Reese (left loaded by the M11 shots), before M12 swaps the patch.
     runM13Snapshots (editor, [this] (const juce::String& n) { shoot (n); }, [this] (double t) { playNote (t); });
 
+    // M14a shots: macro range arc and "Set range…" control on a macro.
+    proc.setMacroRange (1, 0.20, 0.80);
+    editor.setKeyOverride (true);
+    playNote (0.2);
+    shoot ("macro_range_arc");
+
+    editor.macroPanel().openMacroRange (0);
+    editor.setKeyOverride (true);
+    shoot ("macro_set_range_control");
+    editor.macroPanel().closeMacroRange (0);
+    proc.clearMacroRange (1);
+    editor.setKeyOverride (true);
+
     // M12 inspector snapshots: osc_wt (table choice + pos), osc_fm, flt_formant.
     {
         const auto m12File = dir.getChildFile ("_m12_temp.pulsar");
@@ -380,7 +393,7 @@ void SnapshotDriver::runShots()
             "env = env_adsr(0, gate, 0.4, 0.5, 0.8, 0.6);\n"
             "out = s * env * vel * 0.35;";
         t2Patch.master =
-            "d = bus_delay(inl, inr, 0.75, m6 * 0.8, m5 * 0.5);\n"
+            "d = bus_delay(inl, inr, 0.75, m6 * 0.8, m5 * 0.5, 0.35);\n"
             "dr = bus_delay_r();\n"
             "outl = bus_width(d, dr, m7);\n"
             "outr = bus_width_r();";

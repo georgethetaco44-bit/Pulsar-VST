@@ -35,10 +35,16 @@ public:
                         const juce::String& drives = {}, bool codeReads = true);
     void setModAssignment (const ModAssignment* mod, double liveValue);
     void setLiveModValue (double liveValue);
+    void setMacroRange (double min, double max);
+    void openRangeEditor();
+    void closeRangeEditor();
+    bool isRangeEditorOpen() const noexcept { return rangeSlider.isVisible(); }
     void showModMenu();
 
     std::function<void (ModSource, double)> onAssignMod;
     std::function<void()> onRemoveMod;
+    std::function<void (double, double)> onRangeChanged;
+    std::function<void()> onResetRange;
 
     // DragAndDropTarget (dropping a tile from ModStrip).
     bool isInterestedInDragSource (const SourceDetails& dragSourceDetails) override;
@@ -51,13 +57,20 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
 
     ModAwareSlider slider;
+    juce::Slider rangeSlider;
 
 private:
+    void updateSliderRangeProps();
+
     const int index;
     juce::String label;
     bool used = true;
     bool dragHover = false;
     bool hasMod = false;
+    bool hasRange = false;
+    double rangeMin = 0.0;
+    double rangeMax = 1.0;
+    bool updatingRange = false;
     ModSource modSource = ModSource::Lfo1;
     double modDepth = 0.0;
     double liveMod = 0.5;
@@ -101,6 +114,8 @@ public:
     void showPatch (const vibesynth::Patch& patch);
     void tick (const OverrideTable& overrides);
     MacroKnob& macroKnob (int index) noexcept { return *knobs[(size_t) index]; }
+    void openMacroRange (int index);
+    void closeMacroRange (int index);
 
     void paint (juce::Graphics&) override;
     void resized() override;

@@ -79,8 +79,10 @@ const BenchCase kBenchCases[] = {
     { "bus_chorus", "out = osc_saw(0, freq);", "outl = bus_chorus(inl, inr, 0.4, 0.4); outr = bus_chorus_r();", true },
     { "fx_ott (master, 2 slots)", "out = osc_saw(0, freq);", "outl = fx_ott(0, inl, 0.8); outr = fx_ott(1, inr, 0.8);", true },
     { "bus_reverb", "out = osc_saw(0, freq);", "outl = bus_reverb(inl, inr, 0.5, 0.3); outr = bus_reverb_r();", true },
-    { "bus_delay", "out = osc_saw(0, freq);", "outl = bus_delay(inl, inr, 0.75, 0.4, 0.25); outr = bus_delay_r();", true },
+    { "bus_delay", "out = osc_saw(0, freq);", "outl = bus_delay(inl, inr, 0.75, 0.4, 0.25, 0.35); outr = bus_delay_r();", true },
     { "bus_width", "out = osc_saw(0, freq);", "outl = bus_width(inl, inr, 0.8); outr = bus_width_r();", true },
+    { "fx_comp", "out = fx_comp(0, osc_saw(0, freq), 0.7);", "", false },
+    { "fx_gate", "out = fx_gate(0, osc_saw(0, freq), 0.1);", "", false },
 };
 
 const int kNumBenchCases = static_cast<int> (sizeof (kBenchCases) / sizeof (kBenchCases[0]));

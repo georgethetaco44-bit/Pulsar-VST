@@ -50,6 +50,8 @@ EEL_F NSEEL_CGEN_CALL fnFxComb (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxOtt (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxPhaser (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxFshift (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnFxComp (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnFxGate (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnPhysResonator (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnPhysString (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnChaosLorenz (void*, INT_PTR, EEL_F**);
@@ -195,6 +197,10 @@ constexpr Registration kRegistrations[] = {
       &fnFxPhaser },
     { { "fx_fshift", "slot, in, shift", 3, kNumFshiftSlots, kBoth, mod (ModuleId::FxFshift), true, kPass, 1, 0.0,
         kAudio, 0, { aSlot, audio ("in"), norm ("shift", "Shift") } }, &fnFxFshift },
+    { { "fx_comp", "slot, in, amount", 3, kNumCompSlots, kBoth, mod (ModuleId::FxComp), true, kPass, 1, 0.0,
+        kAudio, 0, { aSlot, audio ("in"), norm ("amount", "Amount") } }, &fnFxComp },
+    { { "fx_gate", "slot, in, threshold", 3, kNumGateSlots, kBoth, mod (ModuleId::FxGate), true, kPass, 1, 0.0,
+        kAudio, 0, { aSlot, audio ("in"), norm ("threshold", "Threshold") } }, &fnFxGate },
     { { "phys_resonator", "slot, exciter, hz, structure, brightness, damping", 6, kNumResonatorSlots, kBoth,
         mod (ModuleId::PhysResonator), true, kZero, 0, 0.0, kAudio, 0,
         { aSlot, audio ("exciter"), hz ("hz", "Pitch", 20.0, 8000.0), norm ("structure", "Structure"),
@@ -229,10 +235,10 @@ constexpr Registration kRegistrations[] = {
         { audio ("l"), audio ("r"), norm ("size", "Size"), norm ("mix", "Mix") } }, &fnBusReverb },
     { { "bus_reverb_r", "", 0, 0, kMaster, mod (ModuleId::BusReverb), false, kNoBypass, 0, 0.0, kNoTrace, 0, {} },
       &fnBusReverbR },
-    { { "bus_delay", "l, r, beats, feedback, mix", 5, 0, kMaster, mod (ModuleId::BusDelay), true, kForce, 4, 0.0,
+    { { "bus_delay", "l, r, beats, feedback, mix, lowcut", 6, 0, kMaster, mod (ModuleId::BusDelay), true, kForce, 4, 0.0,
         kAudio, 0,
         { audio ("l"), audio ("r"), beats ("beats", "Time", DelayBusState::kMinBeats, DelayBusState::kMaxBeats),
-          norm ("feedback", "Feedback"), norm ("mix", "Mix") } }, &fnBusDelay },
+          norm ("feedback", "Feedback"), norm ("mix", "Mix"), norm ("lowcut", "Low cut") } }, &fnBusDelay },
     { { "bus_delay_r", "", 0, 0, kMaster, mod (ModuleId::BusDelay), false, kNoBypass, 0, 0.0, kNoTrace, 0, {} },
       &fnBusDelayR },
     { { "bus_width", "l, r, amount", 3, 0, kMaster, mod (ModuleId::BusWidth), true, kForce, 2, 0.5, kAudio, 0,

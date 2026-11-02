@@ -1011,6 +1011,16 @@ Each milestone has an exit test. Don't start the next until it passes.
     voice samples with per-sample ramps (this replaces "no stepping"), so
     S&H, square and saw jumps can land up to 0.17 ms late. Only assigned
     sources step. With the editor open, only the displayed voice steps.
+14a. **Macro range (done Nov 1):** `--macro-scan` (Wiener-entropy flatness,
+    default vs 1), a MacroNoise self-heal for generated patches (off for
+    built-ins), right-click a macro → Set range… (`macroRanges` key, baked
+    by --bake), fx_comp, fx_gate, a 6th `lowcut` argument on bus_delay
+    (60 Hz–1.5 kHz), the riff centred on E2, and `--octave`. batch30: 18/30
+    first try (12 were util_xover_hi called with an input; the API line now
+    shows the right call), 30/30 with retries; 0 MacroNoise heals. The
+    flatness measure flags only Coupled Scream and Corroder, while the user
+    hears most presets overshoot on m1, so it misses dense distortion. The
+    real fix is Set range… by ear in M14.
 14. **Sound pass 2.** The user designs presets by hand with M10–M12; the best
     become the LLM examples (via `--bake`). *Exit: the user keeps ≥ 10 of 15.*
 15. **Release polish.** README with Gatekeeper instructions, tagged GitHub
@@ -1018,6 +1028,8 @@ Each milestone has an exit test. Don't start the next until it passes.
     UI nits from the M10/M11 merge: the status line says "Generating:" during
     a Change; the response readout shows "957.403 HZ" (should be "957 Hz");
     slotless bus pills read "bus_mono_low 0".
+    The inline Set range slider overlaps the macro's value text; it should be
+    a popup like the LFO one.
 16. **[LATER]** extra libraries (§5.2 LATER list), editable wiring, Breed.
 
 **Schedule (deadline Nov 4, 6 PM PST):** Oct 31: M10 and M11 in parallel

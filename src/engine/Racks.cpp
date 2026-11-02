@@ -93,6 +93,10 @@ void VoiceRack::init (double newSampleRate, uint32_t voiceSeed)
 
     for (int i = 0; i < kNumOttSlots; ++i)
         ott[i].init (sampleRate);
+    for (int i = 0; i < kNumCompSlots; ++i)
+        fxComp[i].init (sampleRate);
+    for (int i = 0; i < kNumGateSlots; ++i)
+        fxGate[i].init (sampleRate);
 
     noise.seed (voiceSeed);
 
@@ -178,6 +182,10 @@ void VoiceRack::reset() noexcept
         fxPhaser[i].reset();
     for (int i = 0; i < kNumFshiftSlots; ++i)
         fxFshift[i].reset();
+    for (int i = 0; i < kNumCompSlots; ++i)
+        fxComp[i].reset();
+    for (int i = 0; i < kNumGateSlots; ++i)
+        fxGate[i].reset();
 
     for (int i = 0; i < kNumResonatorSlots; ++i)
     {

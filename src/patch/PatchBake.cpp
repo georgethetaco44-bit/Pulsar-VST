@@ -441,6 +441,7 @@ BakeResult bakePatch (const Patch& in)
     r.patch = in;
     r.patch.tweaks.clear();
     r.patch.macroMaps.clear();
+    r.patch.macroRanges.clear();
 
     // The engine's own resolution (names, ranges, applied doubles).
     auto table = std::make_unique<OverrideTable>();
@@ -474,6 +475,21 @@ BakeResult bakePatch (const Patch& in)
             r.error = std::string (s.name) + " code: " + baker.error;
             return r;
         }
+        std::string rangePrefix;
+        for (const auto& rng : in.macroRanges)
+        {
+            if (rng.macro >= 1 && rng.macro <= Patch::kMaxMacros
+                && (macrosRead (baked) & (1u << (rng.macro - 1))) != 0u)
+            {
+                const double diff = rng.max - rng.min;
+                rangePrefix += "m" + std::to_string (rng.macro) + " = " + formatEelNumber (rng.min)
+                             + " + m" + std::to_string (rng.macro) + " * " + formatEelNumber (diff) + ";\n";
+                ++r.callsChanged;
+            }
+        }
+        if (! rangePrefix.empty())
+            baked = rangePrefix + baked;
+
         if (baked.size() > Patch::kMaxSectionBytes)
         {
             r.error = std::string (s.name) + " code would be too large after baking";

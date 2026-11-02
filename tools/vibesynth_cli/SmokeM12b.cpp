@@ -86,9 +86,9 @@ bool smokeBounds()
     // output stage limits it), so those cases check only finiteness.
     struct MasterCase { const char* code; bool bounded; };
     const MasterCase masterCases[] = {
-        { "nan = sqrt(-1); big = pow(10, 30); outl = bus_delay(inl * big, nan, nan, big, -big); outr = bus_delay_r();", false },
-        { "nan = sqrt(-1); big = pow(10, 30); outl = bus_delay(inl, inr, -big, 1, 1); outr = bus_delay_r() + bus_delay(inl, inr, big, nan, nan);", true },
-        { "nan = sqrt(-1); big = pow(10, 30); outl = bus_delay(inl * big, inr, 0.0625, 1, 1); outr = bus_delay_r();", true },
+        { "nan = sqrt(-1); big = pow(10, 30); outl = bus_delay(inl * big, nan, nan, big, -big, nan); outr = bus_delay_r();", false },
+        { "nan = sqrt(-1); big = pow(10, 30); outl = bus_delay(inl, inr, -big, 1, 1, -big); outr = bus_delay_r() + bus_delay(inl, inr, big, nan, nan, big);", true },
+        { "nan = sqrt(-1); big = pow(10, 30); outl = bus_delay(inl * big, inr, 0.0625, 1, 1, 0.35); outr = bus_delay_r();", true },
         { "nan = sqrt(-1); big = pow(10, 30); outl = bus_width(inl * big, nan, big); outr = bus_width_r();", false },
         { "nan = sqrt(-1); big = pow(10, 30); outl = bus_width(inl, -inr, -big) + bus_width(inl, inr, nan); outr = bus_width_r() + bus_width(nan, inr, 1);", true },
     };
@@ -222,7 +222,7 @@ struct DelayRun
 };
 
 DelayRun runDelay (int samples, double beats, double fb, double mix, const float* inL, const float* inR,
-                   double bpmA = 120.0, double bpmB = 120.0, int switchAt = -1)
+                   double bpmA = 120.0, double bpmB = 120.0, int switchAt = -1, double lowcut = 0.35)
 {
     const int frames = DelayBusState::framesFor (kRate);
     std::vector<float> storage ((size_t) frames * 2u);
@@ -232,7 +232,7 @@ DelayRun runDelay (int samples, double beats, double fb, double mix, const float
     for (int i = 0; i < samples; ++i)
     {
         float l = 0.0f, r = 0.0f;
-        d.process (inL[i], inR[i], beats, fb, mix, (switchAt >= 0 && i >= switchAt) ? bpmB : bpmA, l, r);
+        d.process (inL[i], inR[i], beats, fb, mix, lowcut, (switchAt >= 0 && i >= switchAt) ? bpmB : bpmA, l, r);
         out.l.push_back (l);
         out.r.push_back (r);
     }
@@ -388,7 +388,7 @@ bool smokeBypass()
     double macros[8] = { 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5 };
     {
         const PatchStrings ps { "", "out = 0;",
-                                "d = bus_delay(inl, inr, 0.25, 0.7, 0.6); dr = bus_delay_r();\n"
+                                "d = bus_delay(inl, inr, 0.25, 0.7, 0.6, 0.35); dr = bus_delay_r();\n"
                                 "outl = bus_width(d, dr, 1); outr = bus_width_r();" };
         OverrideTable t;
         t.setBypass (RackKind::Master, ModuleId::BusDelay, 0, true);
@@ -480,7 +480,7 @@ bool smokeTier2PatchAndBake()
         "env = env_adsr(0, gate, 0.02, 0.3, 0.7, 0.25);\n"
         "out = s * env * vel * 0.35;";
     p.master =
-        "d = bus_delay(inl, inr, 0.75, 0.4, 0.25);\n"
+        "d = bus_delay(inl, inr, 0.75, 0.4, 0.25, 0.35);\n"
         "dr = bus_delay_r();\n"
         "outl = bus_width(d, dr, 0.7);\n"
         "outr = bus_width_r();";

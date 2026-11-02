@@ -16,6 +16,7 @@ constexpr const char* kModuleNames[kNumModules] = {
     "flt_formant", "flt_notch", "flt_peak", "flt_tilt",
     "env_adsr", "env_follow", "mod_lfo",
     "fx_fold", "fx_sat", "fx_shape", "fx_crush", "fx_comb", "fx_ott", "fx_phaser", "fx_fshift",
+    "fx_comp", "fx_gate",
     "phys_resonator", "phys_string",
     "chaos_lorenz", "chaos_duffing",
     "util_safe_fb", "util_xover", "util_bytebeat",
@@ -25,7 +26,7 @@ static_assert (static_cast<int> (ModuleId::BusWidth) == kNumModules - 1,
                "kModuleNames must list every ModuleId");
 // Spot checks that the table follows the enum order.
 static_assert (static_cast<int> (ModuleId::FxFold) == 19 && static_cast<int> (ModuleId::FxCrush) == 22
-                   && static_cast<int> (ModuleId::UtilBytebeat) == 33 && static_cast<int> (ModuleId::BusSat) == 34,
+                   && static_cast<int> (ModuleId::UtilBytebeat) == 35 && static_cast<int> (ModuleId::BusSat) == 36,
                "kModuleNames is in ModuleId order");
 
 struct Alias

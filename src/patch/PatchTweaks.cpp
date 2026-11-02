@@ -152,6 +152,20 @@ int applyPatchTweaks (const Patch& patch, OverrideTable& table, bool includeMods
                     }
                 }
             }
+
+    for (int m = 0; m < 8; ++m)
+    {
+        const auto* r = findMacroRange (patch, m + 1);
+        if (r != nullptr)
+        {
+            table.setMacroRange (m, r->min, r->max);
+            ++applied;
+        }
+        else
+        {
+            table.setMacroRange (m, 0.0, 1.0);
+        }
+    }
     return applied;
 }
 
@@ -242,6 +256,41 @@ void removePatchMacroMap (Patch& p, const std::string& node, const std::string& 
     p.macroMaps.erase (std::remove_if (p.macroMaps.begin(), p.macroMaps.end(),
                                        [&] (const MacroMap& m) { return m.node == node && m.arg == arg; }),
                        p.macroMaps.end());
+}
+
+void setPatchMacroRange (Patch& p, int macro, double min, double max)
+{
+    if (macro < 1 || macro > Patch::kMaxMacros)
+        return;
+    min = quantisePatchNumber (std::clamp (isFiniteBitsD (min) ? min : 0.0, 0.0, 1.0));
+    max = quantisePatchNumber (std::clamp (isFiniteBitsD (max) ? max : 1.0, 0.0, 1.0));
+    if (max < min)
+        std::swap (min, max);
+    if (min <= 1.0e-6 && max >= 1.0 - 1.0e-6)
+    {
+        removePatchMacroRange (p, macro);
+        return;
+    }
+    for (auto& r : p.macroRanges)
+    {
+        if (r.macro == macro)
+        {
+            r.min = min;
+            r.max = max;
+            return;
+        }
+    }
+    p.macroRanges.push_back ({ macro, min, max });
+    std::sort (p.macroRanges.begin(), p.macroRanges.end(),
+               [] (const MacroRange& a, const MacroRange& b) { return a.macro < b.macro; });
+}
+
+void removePatchMacroRange (Patch& p, int macro)
+{
+    p.macroRanges.erase (
+        std::remove_if (p.macroRanges.begin(), p.macroRanges.end(),
+                        [macro] (const MacroRange& r) { return r.macro == macro; }),
+        p.macroRanges.end());
 }
 
 void setPatchModLfo (Patch& p, int index, const ModLfoSpec& spec)
@@ -358,6 +407,7 @@ std::vector<std::string> carrySurvivingTweaks (const Patch& base, const TouchedN
     };
     into.tweaks.clear();
     into.macroMaps.clear();
+    into.macroRanges = base.macroRanges;
     for (const auto& t : base.tweaks)
     {
         if (survives (t.node))
@@ -443,6 +493,14 @@ const ModAssignment* findArgMod (const Patch& p, const std::string& node, const 
     for (const auto& a : p.mods.assignments)
         if (a.isNodeTarget() && a.node == node && a.arg == arg)
             return &a;
+    return nullptr;
+}
+
+const MacroRange* findMacroRange (const Patch& p, int macro)
+{
+    for (const auto& r : p.macroRanges)
+        if (r.macro == macro)
+            return &r;
     return nullptr;
 }
 

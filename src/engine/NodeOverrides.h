@@ -175,6 +175,11 @@ struct OverrideTable
     std::atomic<uint32_t> anyModActive { 0 };
     std::atomic<uint8_t> modSourceMask { 0 };  // bit s: some assignment uses source s
 
+    // M14a: macro ranges [min, max] per macro (1..8).
+    std::atomic<uint8_t> macroRangeActive { 0 }; // bit m: macro m has a non-[0,1] range
+    std::atomic<double> macroRangeMin[8];
+    std::atomic<double> macroRangeMax[8];
+
     // Live audio-thread telemetry for the UI (playheads, mod outputs, modulated macros).
     mutable std::atomic<float> liveModPhase[kNumModSources] = {};
     mutable std::atomic<float> liveModValue[kNumModSources] = {};
@@ -201,6 +206,9 @@ struct OverrideTable
     void setMacroMod (int macroIndex, ModSource src, double depth) noexcept;
     void setArgMod (RackKind rack, ModuleId module, int slot, int arg, ModSource src, double depth) noexcept;
     void clearMods() noexcept;
+
+    void setMacroRange (int macroIndex, double lo, double hi) noexcept;
+    void clearMacroRanges() noexcept;
 
     // Audio thread: the node's overrides, or null when nothing is set.
     const NodeOverride* activeNode (int rack, int module, int slot) const noexcept

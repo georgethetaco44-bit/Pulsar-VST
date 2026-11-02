@@ -97,7 +97,8 @@ struct ValidationResult
 // The CPU limit and the deadline are multiplied by validatorCpuScale().
 ValidationResult validatePatch (const Patch& patch, double sampleRate,
                                 const std::atomic<bool>* cancel = nullptr,
-                                int oversampling = PatchProgram::kDefaultOversampling);
+                                int oversampling = PatchProgram::kDefaultOversampling,
+                                bool checkMacroNoise = false);
 
 // Process-wide CPU allowance for the validator's limit and deadline and
 // the Generator's weight hint. The plugin never changes it (1). Only
@@ -128,5 +129,25 @@ TouchedNodes probeTouchedNodes (const Patch& patch, double sampleRate,
 
 // "compile error in voice: <text>" (section omitted when empty).
 std::string formatCompileError (const std::string& section, const std::string& text);
+
+// M14a: spectral flatness and macro scanning.
+struct MacroScanResult
+{
+    int macro = 1;              // 1..8 (m1..m8)
+    std::string label;
+    double defaultFlatness = 0.0;
+    double at1Flatness = 0.0;
+    double deltaFlatness = 0.0;
+    double levelChangeDb = 0.0;
+    bool isNoise = false;
+};
+
+// Computes spectral flatness over 200 Hz - 8 kHz using Wiener entropy
+// on averaged STFT power spectra across the audio buffer.
+double computeSpectralFlatness (const float* left, const float* right, int numSamples, double sampleRate);
+
+// Renders held notes (E2 = 40 and E3 = 52, 1.0 s each) and scans each macro read by the patch.
+std::vector<MacroScanResult> scanPatchMacros (const Patch& patch, double sampleRate = 48000.0,
+                                              int oversampling = PatchProgram::kDefaultOversampling);
 
 } // namespace vibesynth

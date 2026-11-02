@@ -296,17 +296,61 @@ void PulsarLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
     const float alpha = s.isEnabled() ? 1.0f : 0.4f;
     const juce::PathStrokeType arcStroke (3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
 
-    juce::Path track;
-    track.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, startAngle, endAngle, true);
-    g.setColour (border.withMultipliedAlpha (alpha));
-    g.strokePath (track, arcStroke);
+    const auto& props = s.getProperties();
+    const bool hasRange = props.contains ("macroRangeMin") && props.contains ("macroRangeMax");
+    const float rMin = hasRange ? static_cast<float> (static_cast<double> (props["macroRangeMin"])) : 0.0f;
+    const float rMax = hasRange ? static_cast<float> (static_cast<double> (props["macroRangeMax"])) : 1.0f;
+    const bool rangeActive = hasRange && (rMin > 0.001f || rMax < 0.999f);
 
-    if (pos > 0.001f)
+    const float span = endAngle - startAngle;
+    const float aLo = startAngle + rMin * span;
+    const float aHi = startAngle + rMax * span;
+    const float effectiveAngle = aLo + pos * (aHi - aLo);
+
+    if (rangeActive)
     {
-        juce::Path value;
-        value.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, startAngle, angle, true);
-        g.setColour (accent.withMultipliedAlpha (alpha));
-        g.strokePath (value, arcStroke);
+        // Faint full-travel reference arc
+        juce::Path fullTrack;
+        fullTrack.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, startAngle, endAngle, true);
+        g.setColour (border.withMultipliedAlpha (0.22f * alpha));
+        g.strokePath (fullTrack, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        // Active range arc track
+        juce::Path activeTrack;
+        activeTrack.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, aLo, aHi, true);
+        g.setColour (border.brighter (0.15f).withMultipliedAlpha (alpha));
+        g.strokePath (activeTrack, arcStroke);
+
+        // Active range endpoint pips
+        for (const float a : { aLo, aHi })
+        {
+            const juce::Point<float> pt (c.x + arcR * std::sin (a), c.y - arcR * std::cos (a));
+            g.setColour (border.brighter (0.4f).withMultipliedAlpha (alpha));
+            g.fillEllipse (pt.x - 2.0f, pt.y - 2.0f, 4.0f, 4.0f);
+        }
+
+        if (pos > 0.001f)
+        {
+            juce::Path value;
+            value.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, aLo, effectiveAngle, true);
+            g.setColour (accent.withMultipliedAlpha (alpha));
+            g.strokePath (value, arcStroke);
+        }
+    }
+    else
+    {
+        juce::Path track;
+        track.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, startAngle, endAngle, true);
+        g.setColour (border.withMultipliedAlpha (alpha));
+        g.strokePath (track, arcStroke);
+
+        if (pos > 0.001f)
+        {
+            juce::Path value;
+            value.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, startAngle, angle, true);
+            g.setColour (accent.withMultipliedAlpha (alpha));
+            g.strokePath (value, arcStroke);
+        }
     }
 
     const bool hot = s.isMouseOverOrDragging() && s.isEnabled();
@@ -315,7 +359,8 @@ void PulsarLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
     g.setColour (border.brighter (hot ? 0.3f : 0.0f));
     g.drawEllipse (c.x - faceR, c.y - faceR, faceR * 2.0f, faceR * 2.0f, hairline);
 
-    const auto dir = juce::Point<float> (std::sin (angle), -std::cos (angle));
+    const float needleAngle = rangeActive ? effectiveAngle : angle;
+    const auto dir = juce::Point<float> (std::sin (needleAngle), -std::cos (needleAngle));
     g.setColour (text.withMultipliedAlpha (alpha));
     g.drawLine (juce::Line<float> (c + dir * (faceR * 0.35f), c + dir * (faceR * 0.85f)), 2.0f);
 
@@ -329,11 +374,27 @@ void PulsarLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
 }
 
 void PulsarLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height, float pos,
-                                          float, float, juce::Slider::SliderStyle style, juce::Slider& s)
+                                          float minPos, float maxPos, juce::Slider::SliderStyle style, juce::Slider& s)
 {
+    if (style == juce::Slider::TwoValueHorizontal)
+    {
+        using namespace Theme;
+        const float cy = (float) y + (float) height * 0.5f;
+        const auto track = juce::Rectangle<float> ((float) x, cy - 1.5f, (float) width, 3.0f);
+        g.setColour (border);
+        g.fillRoundedRectangle (track, 1.5f);
+        g.setColour (accent.withMultipliedAlpha (s.isEnabled() ? 1.0f : 0.4f));
+        g.fillRect (juce::Rectangle<float> (minPos, cy - 1.5f, juce::jmax (1.0f, maxPos - minPos), 3.0f));
+        for (const float p : { minPos, maxPos })
+        {
+            g.setColour (text);
+            g.fillRoundedRectangle (p - 2.5f, cy - 5.0f, 5.0f, 10.0f, 1.5f);
+        }
+        return;
+    }
     if (style != juce::Slider::LinearHorizontal)
     {
-        LookAndFeel_V4::drawLinearSlider (g, x, y, width, height, pos, 0.0f, 0.0f, style, s);
+        LookAndFeel_V4::drawLinearSlider (g, x, y, width, height, pos, minPos, maxPos, style, s);
         return;
     }
     using namespace Theme;

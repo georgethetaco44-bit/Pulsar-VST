@@ -31,6 +31,10 @@ void setPatchMacroMap (Patch& patch, const std::string& node, const std::string&
                        double max);
 void removePatchMacroMap (Patch& patch, const std::string& node, const std::string& arg);
 
+// M14a: macro range [min, max] (1..8).
+void setPatchMacroRange (Patch& patch, int macro, double min, double max);
+void removePatchMacroRange (Patch& patch, int macro);
+
 // M13 (SPEC §9.8): editing a patch's modulator specs and assignments
 // (capped at kMaxModAssignments = 8). Setting depth == 0 removes that
 // assignment. Returns false if adding a new assignment would exceed 8.
@@ -59,5 +63,6 @@ const ArgTweak* findArgTweak (const Patch& patch, const std::string& node, const
 const MacroMap* findMacroMap (const Patch& patch, const std::string& node, const std::string& arg);
 const ModAssignment* findMacroMod (const Patch& patch, int macro);
 const ModAssignment* findArgMod (const Patch& patch, const std::string& node, const std::string& arg);
+const MacroRange* findMacroRange (const Patch& patch, int macro);
 
 } // namespace vibesynth

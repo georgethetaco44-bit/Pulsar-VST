@@ -82,11 +82,11 @@ struct RiffNote
 
 constexpr RiffNote kRiff[] = {
     // bar 1
-    { 0, 3, 28, false }, { 3, 1, 40, false }, { 5, 1, 28, false }, { 6, 2, 31, false },   // 8-9 rest
-    { 10, 1, 40, false }, { 11, 1, 28, false }, { 12, 2, 33, true }, { 14, 1, 35, false }, // 15 rest
+    { 0, 3, 40, false }, { 3, 1, 52, false }, { 5, 1, 40, false }, { 6, 2, 43, false },   // 8-9 rest
+    { 10, 1, 52, false }, { 11, 1, 40, false }, { 12, 2, 45, true }, { 14, 1, 47, false }, // 15 rest
     // bar 2 (macro 1 ramps)
-    { 16, 6, 28, true }, { 22, 1, 40, true }, { 23, 1, 28, false }, { 25, 1, 38, true },   // 24 rest
-    { 26, 2, 40, false }, { 29, 1, 43, false }, { 30, 2, 31, false },                     // 28 rest
+    { 16, 6, 40, true }, { 22, 1, 52, true }, { 23, 1, 40, false }, { 25, 1, 50, true },   // 24 rest
+    { 26, 2, 52, false }, { 29, 1, 55, false }, { 30, 2, 43, false },                     // 28 rest
 };
 constexpr int kRiffSteps = 32;
 
@@ -99,12 +99,14 @@ struct Phrase
     double end = 0.0;
 };
 
-Phrase makePhrase (bool riff, double bpm)
+Phrase makePhrase (bool riff, double bpm, int octave = 0)
 {
     Phrase p;
+    const int noteOffset = juce::jlimit (-2, 2, octave) * 12;
     if (! riff)
     {
-        p.notes.assign (std::begin (kPhrase), std::end (kPhrase));
+        for (const PhraseNote& n : kPhrase)
+            p.notes.push_back ({ n.on, n.off, n.note + noteOffset });
         p.sweepStart = 4.5;
         p.sweepEnd = 6.5;
         p.end = 6.5;
@@ -112,7 +114,7 @@ Phrase makePhrase (bool riff, double bpm)
     }
     const double step = 60.0 / bpm / 4.0;
     for (const RiffNote& n : kRiff)
-        p.notes.push_back ({ n.step * step, (n.step + n.steps + (n.slide ? 0.25 : -0.25)) * step, n.note });
+        p.notes.push_back ({ n.step * step, (n.step + n.steps + (n.slide ? 0.25 : -0.25)) * step, n.note + noteOffset });
     p.sweepStart = 16 * step;
     p.sweepEnd = kRiffSteps * step;
     p.end = kRiffSteps * step;
@@ -158,6 +160,7 @@ int runRender (int argc, char** argv, int oversampling)
     double tail = 1.5;
     double bpm = 140.0;
     bool riff = false;
+    int octave = 0;
     auto mode = PatchPlayer::VoiceMode::Patch;
     double glide = 0.3;
     std::vector<std::pair<int, double>> macroOverrides;
@@ -171,6 +174,15 @@ int runRender (int argc, char** argv, int oversampling)
             tail = std::atof (argv[++i]);
         else if (opt == "--bpm" && hasValue)
             bpm = std::atof (argv[++i]);
+        else if (opt == "--octave" && hasValue)
+        {
+            octave = std::atoi (argv[++i]);
+            if (octave < -2 || octave > 2)
+            {
+                std::printf ("bad --octave %d (want -2..+2)\n", octave);
+                return 2;
+            }
+        }
         else if (opt == "--phrase" && hasValue)
         {
             const std::string name = argv[++i];
@@ -271,7 +283,7 @@ int runRender (int argc, char** argv, int oversampling)
         targets[o.first] = static_cast<float> (o.second);
 
     // The phrase as raw MIDI, sorted by time (note-offs first on a tie).
-    const Phrase phrase = makePhrase (riff, bpm);
+    const Phrase phrase = makePhrase (riff, bpm, octave);
     std::vector<std::array<uint8_t, 3>> bytes;
     std::vector<std::pair<int, size_t>> order;
     for (const PhraseNote& n : phrase.notes)
