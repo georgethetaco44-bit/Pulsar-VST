@@ -28,8 +28,7 @@ std::string lower (std::string s)
 // Bus effects with no slot argument: their id has no slot suffix.
 bool isSlotless (ModuleId m) noexcept
 {
-    return m == ModuleId::BusMonoLow || m == ModuleId::BusChorus || m == ModuleId::BusReverb
-        || m == ModuleId::BusDelay || m == ModuleId::BusWidth;
+    return isSlotlessModule (m);
 }
 
 const char* ordinal (int i)

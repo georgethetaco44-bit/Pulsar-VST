@@ -324,6 +324,7 @@ void VibeSynthAudioProcessor::generate (const juce::String& prompt)
         generationPending = true;
         cancelGenerationFlag = true;
         changeRunning = false; // M11: a pending change is superseded
+        changeNodeName = {};
     }
     generationWorker.notify();
     generationStartMs = juce::Time::getMillisecondCounterHiRes();
@@ -771,8 +772,16 @@ void VibeSynthAudioProcessor::handleAsyncUpdate()
     {
         if (genStatus.kind == StatusKind::Busy)
         {
-            generationStage = genStatus.text;
-            status = { StatusKind::Busy, "Generating: " + genStatus.text, {} };
+            if (changeRunning && changeNodeName.isNotEmpty())
+            {
+                generationStage = "Changing " + changeNodeName + ": " + genStatus.text.toLowerCase();
+                status = { StatusKind::Busy, "Changing " + changeNodeName + ": " + genStatus.text, {} };
+            }
+            else
+            {
+                generationStage = genStatus.text;
+                status = { StatusKind::Busy, "Generating: " + genStatus.text, {} };
+            }
         }
         else
         {

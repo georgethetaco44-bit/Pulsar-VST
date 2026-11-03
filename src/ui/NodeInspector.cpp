@@ -21,8 +21,10 @@ constexpr int kKnobSize = 50;
 juce::String hzText (double hz)
 {
     if (hz >= 1000.0)
-        return juce::String (hz / 1000.0, hz >= 10000.0 ? 1 : 2) + " kHz";
-    return juce::String (hz, hz < 10.0 ? 2 : (hz < 100.0 ? 1 : 0)) + " Hz";
+        return juce::String (hz / 1000.0, 1) + " kHz";
+    if (hz < 100.0)
+        return juce::String (hz, 1) + " Hz";
+    return juce::String (std::round (hz), 0) + " Hz";
 }
 
 void caps (juce::Graphics& g, const juce::String& s, juce::Rectangle<int> r, juce::Justification j)
@@ -229,7 +231,7 @@ void TraceDisplay::paint (juce::Graphics& g)
         g.strokePath (curve, juce::PathStrokeType (1.25f));
         const double fc = juce::jmin (20.0 * std::pow (1000.0, juce::jlimit (0.0, 1.0, cutoff)), 0.45 * rate);
         g.setColour (dimText);
-        caps (g, juce::String::fromUTF8 ("RESPONSE \xc2\xb7 ") + hzText (fc).toUpperCase(), captionRow,
+        caps (g, juce::String::fromUTF8 ("RESPONSE \xc2\xb7 ") + hzText (fc), captionRow,
               juce::Justification::centredRight);
         g.setFont (font (9.0f));
         for (const auto& [f, label] : { std::pair<double, const char*> { 100.0, "100" }, { 1000.0, "1k" }, { 10000.0, "10k" } })

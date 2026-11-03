@@ -217,25 +217,41 @@ jobs:
         run: |
           ./pluginval-bin/pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate "build/VibeSynthVST_artefacts/Release/VST3/Pulsar.vst3"
 
-      # Package Pulsar-<OS>.zip from the built artefacts.
+      - name: Determine release version and package names
+        id: pkg
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF_NAME#v}"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VER="${GITHUB_REF_NAME}"
+          else
+            VER="0.1.0"
+          fi
+          echo "version=${VER}" >> $GITHUB_OUTPUT
+          echo "zip_name=Pulsar-${VER}-${{ matrix.label }}.zip" >> $GITHUB_OUTPUT
+
+      # Package Pulsar-<version>-<OS>.zip containing VST3, Standalone and README-INSTALL.txt.
       - name: Zip VST3 + Standalone (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
         run: |
+          cp "$GITHUB_WORKSPACE/README-INSTALL.txt" build/VibeSynthVST_artefacts/Release/
           cd build/VibeSynthVST_artefacts/Release
-          zip -r -y "$GITHUB_WORKSPACE/Pulsar-${{ matrix.label }}.zip" "VST3/Pulsar.vst3" "Standalone"
+          zip -r -y "$GITHUB_WORKSPACE/${{ steps.pkg.outputs.zip_name }}" "VST3/Pulsar.vst3" "Standalone" "README-INSTALL.txt"
 
       - name: Zip VST3 + Standalone (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "build/VibeSynthVST_artefacts/Release/VST3/Pulsar.vst3", "build/VibeSynthVST_artefacts/Release/Standalone" -DestinationPath "Pulsar-${{ matrix.label }}.zip"
+          Copy-Item "$env:GITHUB_WORKSPACE/README-INSTALL.txt" "build/VibeSynthVST_artefacts/Release/"
+          Compress-Archive -Path "build/VibeSynthVST_artefacts/Release/VST3/Pulsar.vst3", "build/VibeSynthVST_artefacts/Release/Standalone", "build/VibeSynthVST_artefacts/Release/README-INSTALL.txt" -DestinationPath "${{ steps.pkg.outputs.zip_name }}"
 
       - name: Upload Pulsar-${{ matrix.label }}.zip
         uses: actions/upload-artifact@v7.0.2
         with:
           name: Pulsar-${{ matrix.label }}
-          path: Pulsar-${{ matrix.label }}.zip
+          path: ${{ steps.pkg.outputs.zip_name }}
           if-no-files-found: error
 
   # Publishes all three zips as a GitHub release, but only for v* tags.
@@ -256,7 +272,5 @@ jobs:
         uses: softprops/action-gh-release@v3.0.3
         with:
           files: |
-            dist/Pulsar-Linux/Pulsar-Linux.zip
-            dist/Pulsar-Windows/Pulsar-Windows.zip
-            dist/Pulsar-macOS/Pulsar-macOS.zip
+            dist/*/*.zip
 

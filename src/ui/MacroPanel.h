@@ -38,13 +38,20 @@ public:
     void setMacroRange (double min, double max);
     void openRangeEditor();
     void closeRangeEditor();
-    bool isRangeEditorOpen() const noexcept { return rangeSlider.isVisible(); }
+    bool isRangeEditorOpen() const noexcept { return onIsRangeOpen ? onIsRangeOpen() : false; }
+    int getIndex() const noexcept { return index; }
+    const juce::String& getLabel() const noexcept { return label; }
+    double getRangeMin() const noexcept { return rangeMin; }
+    double getRangeMax() const noexcept { return rangeMax; }
     void showModMenu();
 
     std::function<void (ModSource, double)> onAssignMod;
     std::function<void()> onRemoveMod;
     std::function<void (double, double)> onRangeChanged;
     std::function<void()> onResetRange;
+    std::function<void()> onOpenRange;
+    std::function<void()> onCloseRange;
+    std::function<bool()> onIsRangeOpen;
 
     // DragAndDropTarget (dropping a tile from ModStrip).
     bool isInterestedInDragSource (const SourceDetails& dragSourceDetails) override;
@@ -57,7 +64,6 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
 
     ModAwareSlider slider;
-    juce::Slider rangeSlider;
 
 private:
     void updateSliderRangeProps();
@@ -75,6 +81,36 @@ private:
     double modDepth = 0.0;
     double liveMod = 0.5;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+};
+
+//==============================================================================
+// Popover editor for a macro's range (SPEC §9.6, M14a, M15).
+class MacroRangePopover final : public juce::Component
+{
+public:
+    MacroRangePopover();
+
+    void openFor (int index, const juce::String& name, double minVal, double maxVal,
+                  juce::Rectangle<int> targetBounds, juce::Rectangle<int> panelBounds);
+    void close();
+    bool isOpen() const noexcept { return isVisible(); }
+    int getTargetIndex() const noexcept { return targetIndex; }
+
+    std::function<void (double min, double max)> onRangeChanged;
+    std::function<void()> onClose;
+
+    void paint (juce::Graphics& g) override;
+    void resized() override;
+    bool keyPressed (const juce::KeyPress& key) override;
+
+private:
+    int targetIndex = -1;
+    juce::String macroName;
+    bool updating = false;
+
+    juce::TextButton closeButton { juce::String::fromUTF8 ("\xc3\x97") };
+    juce::Slider slider;
+    juce::Rectangle<int> headerArea, minArea, maxArea;
 };
 
 class VoiceModeControl final : public juce::Component
@@ -130,6 +166,7 @@ private:
     VibeSynthAudioProcessor* processor = nullptr;
     std::array<std::unique_ptr<MacroKnob>, 8> knobs;
     VoiceModeControl voiceMode;
+    MacroRangePopover rangePopover;
     juce::Slider glide;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> glideAttachment;
     juce::String patchName, patchMode;

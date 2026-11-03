@@ -164,6 +164,7 @@ bool VibeSynthAudioProcessor::requestNodeChange (const juce::String& nodeId, con
         generationPending = true;
         cancelGenerationFlag = true;
         changeRunning = true;
+        changeNodeName = id;
     }
     generationWorker.notify();
     generationStartMs = juce::Time::getMillisecondCounterHiRes();

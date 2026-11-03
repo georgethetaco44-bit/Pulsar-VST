@@ -1021,6 +1021,12 @@ Each milestone has an exit test. Don't start the next until it passes.
     flatness measure flags only Coupled Scream and Corroder, while the user
     hears most presets overshoot on m1, so it misses dense distortion. The
     real fix is Set range… by ear in M14.
+14b. **Mutate you can steer (planned Nov 2, after M15):** a Save… button on
+    each audition card (several variations can be saved as user presets
+    without closing the strip); 1–5 variations; a Mutate popover with the
+    user's own direction text (one intensity per slot, subtle to bold) or
+    Auto chips (Darker, Movement, Brighter, Weirder, and a new Space);
+    "Type value…" on every knob, with unit-aware parsing.
 14. **Sound pass 2.** The user designs presets by hand with M10–M12; the best
     become the LLM examples (via `--bake`). *Exit: the user keeps ≥ 10 of 15.*
 15. **Release polish.** README with Gatekeeper instructions, tagged GitHub
@@ -1030,6 +1036,10 @@ Each milestone has an exit test. Don't start the next until it passes.
     slotless bus pills read "bus_mono_low 0".
     The inline Set range slider overlaps the macro's value text; it should be
     a popup like the LFO one.
+    **Done Nov 2:** README (built-during-the-hackathon statement and
+    third-party table), full license texts in THIRD_PARTY_LICENSES.md,
+    release zips named Pulsar-<version>-<os>.zip with README-INSTALL.txt,
+    docs/DEMO.md, and all four nits fixed (Set range is now a popover).
 16. **[LATER]** extra libraries (§5.2 LATER list), editable wiring, Breed.
 
 **Schedule (deadline Nov 4, 6 PM PST):** Oct 31: M10 and M11 in parallel

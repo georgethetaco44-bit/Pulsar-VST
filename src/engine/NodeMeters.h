@@ -34,6 +34,10 @@ const char* moduleShortName (ModuleId module) noexcept;
 // is the call index within a sample (VoiceRack::recordStateless).
 bool isStatelessModule (ModuleId module) noexcept;
 
+// Bus effects with no slot argument (bus_mono_low, bus_chorus, bus_reverb,
+// bus_delay, bus_width).
+bool isSlotlessModule (ModuleId module) noexcept;
+
 // The module a graph-edge name refers to: "flt_lp", and also the aliases
 // "util_xover_lo"/"util_xover_hi" and the "_r" companions of bus_*.
 // Case-insensitive. False for names that don't meter (noise, out, ...).

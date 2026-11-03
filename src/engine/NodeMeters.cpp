@@ -68,6 +68,13 @@ bool isStatelessModule (ModuleId module) noexcept
         || module == ModuleId::UtilBytebeat || module == ModuleId::BusSat;
 }
 
+bool isSlotlessModule (ModuleId module) noexcept
+{
+    return module == ModuleId::BusMonoLow || module == ModuleId::BusChorus
+        || module == ModuleId::BusReverb  || module == ModuleId::BusDelay
+        || module == ModuleId::BusWidth;
+}
+
 bool moduleFromName (const std::string& name, ModuleId& module) noexcept
 {
     for (int m = 0; m < kNumModules; ++m)

@@ -51,26 +51,6 @@ MacroKnob::MacroKnob (juce::AudioProcessorValueTreeState& state, int i) : index 
     };
     addAndMakeVisible (slider);
 
-    rangeSlider.setSliderStyle (juce::Slider::TwoValueHorizontal);
-    rangeSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-    rangeSlider.setRange (0.0, 1.0, 0.01);
-    rangeSlider.setMinAndMaxValues (0.0, 1.0, juce::dontSendNotification);
-    rangeSlider.setMouseClickGrabsKeyboardFocus (false);
-    rangeSlider.setTooltip ("Macro range: min and max values sent to the synth code");
-    rangeSlider.onValueChange = [this]
-    {
-        if (updatingRange)
-            return;
-        rangeMin = rangeSlider.getMinValue();
-        rangeMax = rangeSlider.getMaxValue();
-        hasRange = (rangeMin > 0.001 || rangeMax < 0.999);
-        updateSliderRangeProps();
-        if (onRangeChanged)
-            onRangeChanged (rangeMin, rangeMax);
-        repaint();
-    };
-    addChildComponent (rangeSlider);
-
     setPatchMacro ({}, 0.5);
 }
 
@@ -98,25 +78,20 @@ void MacroKnob::setMacroRange (double min, double max)
     rangeMin = min;
     rangeMax = max;
     hasRange = (min > 0.001 || max < 0.999);
-    updatingRange = true;
-    rangeSlider.setMinAndMaxValues (rangeMin, rangeMax, juce::dontSendNotification);
-    updatingRange = false;
     updateSliderRangeProps();
     repaint();
 }
 
 void MacroKnob::openRangeEditor()
 {
-    rangeSlider.setVisible (true);
-    resized();
-    repaint();
+    if (onOpenRange)
+        onOpenRange();
 }
 
 void MacroKnob::closeRangeEditor()
 {
-    rangeSlider.setVisible (false);
-    resized();
-    repaint();
+    if (onCloseRange)
+        onCloseRange();
 }
 
 void MacroKnob::setPatchMacro (const juce::String& newLabel, double defaultValue, bool isUsed,
@@ -168,7 +143,7 @@ void MacroKnob::showModMenu()
 {
     juce::PopupMenu m;
     m.addSectionHeader (label.isNotEmpty() ? label : "Macro " + juce::String (index + 1));
-    if (rangeSlider.isVisible())
+    if (isRangeEditorOpen())
         m.addItem (1, "Hide range slider");
     else
         m.addItem (1, "Set range…");
@@ -201,7 +176,7 @@ void MacroKnob::showModMenu()
                              return;
                          if (result == 1)
                          {
-                             if (safe->rangeSlider.isVisible())
+                             if (safe->isRangeEditorOpen())
                                  safe->closeRangeEditor();
                              else
                                  safe->openRangeEditor();
@@ -282,19 +257,9 @@ void MacroKnob::paint (juce::Graphics& g)
     g.setColour (text);
     g.setFont (font (smallSize, Weight::Medium));
     g.drawFittedText (label, r.removeFromTop (13), juce::Justification::centred, 1, 0.85f);
-    if (rangeSlider.isVisible())
-    {
-        g.setColour (accent);
-        g.setFont (font (10.0f, Weight::Medium));
-        const juce::String rangeStr = juce::String (rangeMin, 2) + " " + juce::String::fromUTF8 ("\xe2\x80\x93") + " " + juce::String (rangeMax, 2);
-        g.drawText (rangeStr, r.removeFromTop (12), juce::Justification::centred);
-    }
-    else
-    {
-        g.setColour (hasMod ? modSourceColour (modSource) : (hasRange ? accent : dimText));
-        g.setFont (font (captionSize));
-        g.drawText (juce::String (slider.getValue(), 2), r.removeFromTop (12), juce::Justification::centred);
-    }
+    g.setColour (hasMod ? modSourceColour (modSource) : (hasRange ? accent : dimText));
+    g.setFont (font (captionSize));
+    g.drawText (juce::String (slider.getValue(), 2), r.removeFromTop (12), juce::Justification::centred);
 }
 
 void MacroKnob::resized()
@@ -302,11 +267,119 @@ void MacroKnob::resized()
     // The knob, its label and value as one block, centred in the cell.
     const int top = juce::jmax (0, (getHeight() - kKnobBlock) / 2);
     slider.setBounds ((getWidth() - kKnobSize) / 2, top, kKnobSize, kKnobSize);
-    if (rangeSlider.isVisible())
+}
+
+//==============================================================================
+MacroRangePopover::MacroRangePopover()
+{
+    setButtonStyle (closeButton, ButtonStyle::Ghost);
+    closeButton.setTooltip ("Close range settings");
+    closeButton.onClick = [this] { close(); };
+    addAndMakeVisible (closeButton);
+
+    slider.setSliderStyle (juce::Slider::TwoValueHorizontal);
+    slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    slider.setRange (0.0, 1.0, 0.01);
+    slider.setMouseClickGrabsKeyboardFocus (false);
+    slider.setTooltip ("Macro range: min and max values sent to the synth code");
+    slider.onValueChange = [this]
     {
-        const int sliderW = juce::jmin (getWidth() - 10, 72);
-        rangeSlider.setBounds ((getWidth() - sliderW) / 2, slider.getBottom() + 14, sliderW, 14);
+        if (updating)
+            return;
+        const double mn = slider.getMinValue();
+        const double mx = slider.getMaxValue();
+        if (onRangeChanged)
+            onRangeChanged (mn, mx);
+        repaint();
+    };
+    addAndMakeVisible (slider);
+}
+
+void MacroRangePopover::openFor (int index, const juce::String& name, double minVal, double maxVal,
+                                 juce::Rectangle<int> targetBounds, juce::Rectangle<int> panelBounds)
+{
+    targetIndex = index;
+    macroName = name;
+    updating = true;
+    slider.setMinAndMaxValues (juce::jlimit (0.0, 1.0, minVal),
+                               juce::jlimit (0.0, 1.0, maxVal),
+                               juce::dontSendNotification);
+    updating = false;
+
+    constexpr int popW = 168;
+    constexpr int popH = 54;
+    int x = targetBounds.getCentreX() - popW / 2;
+    x = juce::jlimit (panelBounds.getX(), juce::jmax (panelBounds.getX(), panelBounds.getRight() - popW), x);
+
+    int y = 0;
+    if (targetBounds.getY() < panelBounds.getCentreY())
+        y = targetBounds.getBottom() + 2;
+    else
+        y = targetBounds.getY() - popH - 2;
+    y = juce::jlimit (panelBounds.getY(), juce::jmax (panelBounds.getY(), panelBounds.getBottom() - popH), y);
+
+    setBounds (x, y, popW, popH);
+    setVisible (true);
+    toFront (true);
+    repaint();
+}
+
+void MacroRangePopover::close()
+{
+    setVisible (false);
+    targetIndex = -1;
+    if (onClose)
+        onClose();
+}
+
+void MacroRangePopover::paint (juce::Graphics& g)
+{
+    using namespace Theme;
+    const auto bounds = getLocalBounds().toFloat();
+
+    g.setColour (panel.darker (0.15f));
+    g.fillRoundedRectangle (bounds, radius);
+    g.setColour (accent.withAlpha (0.75f));
+    g.drawRoundedRectangle (bounds.reduced (0.5f), radius, 1.25f);
+
+    g.setColour (accent);
+    g.setFont (font (captionSize, Weight::SemiBold).withExtraKerningFactor (0.10f));
+    const juce::String title = macroName.isNotEmpty()
+        ? juce::String::fromUTF8 ("SET RANGE \xc2\xb7 ") + macroName.toUpperCase()
+        : juce::String ("SET RANGE");
+    g.drawText (title, headerArea, juce::Justification::centredLeft);
+
+    g.setColour (text);
+    g.setFont (font (captionSize, Weight::Medium));
+    g.drawText (juce::String (slider.getMinValue(), 2), minArea, juce::Justification::centred);
+    g.drawText (juce::String (slider.getMaxValue(), 2), maxArea, juce::Justification::centred);
+}
+
+void MacroRangePopover::resized()
+{
+    using namespace Theme;
+    auto r = getLocalBounds().reduced (8, 6);
+    auto top = r.removeFromTop (18);
+    closeButton.setBounds (top.removeFromRight (22));
+    headerArea = top;
+    r.removeFromTop (3);
+
+    auto bottom = r.removeFromTop (20);
+    minArea = bottom.removeFromLeft (26);
+    bottom.removeFromLeft (4);
+    maxArea = bottom.removeFromRight (26);
+    bottom.removeFromRight (4);
+    slider.setBounds (bottom);
+}
+
+bool MacroRangePopover::keyPressed (const juce::KeyPress& key)
+{
+    if (key.getKeyCode() == juce::KeyPress::escapeKey)
+    {
+        close();
+        return true;
     }
+    return Component::keyPressed (key);
 }
 
 //==============================================================================
@@ -381,8 +454,34 @@ MacroPanel::MacroPanel (juce::AudioProcessorValueTreeState& s, VibeSynthAudioPro
             if (processor != nullptr)
                 processor->clearMacroRange (i + 1);
         };
+        knobs[(size_t) i]->onOpenRange = [this, i]
+        {
+            openMacroRange (i);
+        };
+        knobs[(size_t) i]->onCloseRange = [this, i]
+        {
+            closeMacroRange (i);
+        };
+        knobs[(size_t) i]->onIsRangeOpen = [this, i]
+        {
+            return rangePopover.isOpen() && rangePopover.getTargetIndex() == i;
+        };
         addAndMakeVisible (*knobs[(size_t) i]);
     }
+
+    rangePopover.onRangeChanged = [this] (double min, double max)
+    {
+        const int idx = rangePopover.getTargetIndex();
+        if (idx >= 0 && idx < 8)
+        {
+            knobs[(size_t) idx]->setMacroRange (min, max);
+            if (processor != nullptr)
+                processor->setMacroRange (idx + 1, min, max);
+        }
+    };
+    rangePopover.onClose = [this] { repaint(); };
+    addChildComponent (rangePopover);
+
     voiceMode.onChange = [this] { updateGlide(); };
     addAndMakeVisible (voiceMode);
 
@@ -459,14 +558,17 @@ void MacroPanel::showPatch (const vibesynth::Patch& patch)
 
 void MacroPanel::openMacroRange (int index)
 {
-    if (index >= 0 && index < 8)
-        knobs[(size_t) index]->openRangeEditor();
+    if (index < 0 || index >= 8)
+        return;
+    auto* k = knobs[(size_t) index].get();
+    rangePopover.openFor (index, k->getLabel(), k->getRangeMin(), k->getRangeMax(),
+                          k->getBounds(), getLocalBounds().reduced (Theme::grid * 2, Theme::grid));
 }
 
 void MacroPanel::closeMacroRange (int index)
 {
-    if (index >= 0 && index < 8)
-        knobs[(size_t) index]->closeRangeEditor();
+    if (index < 0 || index >= 8 || rangePopover.getTargetIndex() == index)
+        rangePopover.close();
 }
 
 void MacroPanel::tick (const OverrideTable& overrides)
@@ -552,6 +654,9 @@ void MacroPanel::resized()
     glideValueArea = voiceRow.removeFromRight (grid * 6);
     voiceRow.removeFromRight (grid);
     glide.setBounds (voiceRow);
+
+    if (rangePopover.isOpen())
+        openMacroRange (rangePopover.getTargetIndex());
 }
 
 } // namespace vibesynth::ui

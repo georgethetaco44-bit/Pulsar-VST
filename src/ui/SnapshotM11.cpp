@@ -92,7 +92,7 @@ void runM11Snapshots (VibeSynthAudioProcessorEditor& editor, const std::function
     changing.canGenerate = true;
     changing.canUndo = true;
     changing.kind = HeaderState::Kind::Busy;
-    changing.stage = "Waiting for model";
+    changing.stage = "Changing flt_lp:0: waiting for model";
     changing.seconds = 6;
     editor.setHeaderOverride (changing);
     editor.setChangeRunningOverride (true);

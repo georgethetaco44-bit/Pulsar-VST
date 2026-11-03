@@ -551,6 +551,7 @@ private:
     std::unique_ptr<MutateThread> mutateThread;
     std::vector<MutateEvent> mutateEvents;     // under resultMutex
     std::atomic<bool> changeRunning { false };
+    juce::String changeNodeName;
     vibesynth::GenerationKind runningKind = vibesynth::GenerationKind::Generate;  // generation worker
 
     Worker worker { *this };
