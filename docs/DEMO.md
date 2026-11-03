@@ -12,10 +12,11 @@
 - **Visual:** Standalone or DAW window open with the clean Pulsar interface. The prompt field is focused.
 - **Action:** Select **3** takes below Generate. Type into the prompt bar:  
   `huge analog reese into a ladder filter with warm saturation and sub pressure`  
-  Press **Enter** (or click **Generate**). Generate 3 takes, audition, Keep one.
+  Press **Enter** (or click **Generate**). Generate 3 takes, audition, Keep one. Next, prompt `heavy square riddim bass with analog lowpass` — Pulsar builds it on `osc_square` rather than a reese.
+- **Editing note:** 3 takes take about 15–25 s to arrive. Record the wait, then cut it down to 2–3 s in the edit (keep a moment of the status line so viewers see it working).
 - **Visual Details:** The status line shows progress. As the 3 takes compile and validate in parallel, the **Audition Strip** opens displaying the original playing patch alongside the 3 new takes (Literal, Alt source, Alt motion). Click each take card to audition seamlessly while playing notes; click **Keep** on Take 2.
 - **Voiceover:**  
-  *"This is Pulsar—an AI synthesiser that doesn't just load presets or tweak pre-built wavetables. When you describe a sound, it writes real-time sample-rate DSP code on the fly. We select 3 takes, type 'huge analog reese into a ladder filter', hit Enter, and Pulsar generates three distinct takes in parallel—a literal reading, an alternative sound source, and a different rhythmic motion. We audition them live in the audition strip, and click Keep on our favorite."*
+  *"This is Pulsar—an AI synthesiser that doesn't just load presets or tweak pre-built wavetables. When you describe a sound, it writes real-time sample-rate DSP code on the fly. We select 3 takes, type 'huge analog reese into a ladder filter', hit Enter, and Pulsar generates three distinct takes in parallel—a literal reading, an alternative sound source, and a different rhythmic motion. We audition them live in the audition strip, and click Keep on our favorite. And when we ask for a square bass, it builds a real square-wave bass instead of the usual reese."*
 
 ---
 
@@ -61,14 +62,14 @@
   2. In **Your direction**, type `faster wobble, keep the sub clean`, select **3 variations**, and click **Mutate**.
   3. The **Audition Strip** appears showing the original plus 3 steered variations spread from subtle to bold.
   4. Play repeated notes while clicking between cards. Each click seamlessly auditions the variation.
-  5. On variation card 2, click **Save…**, hit Enter on the default name `Reese faster wobble · moderate`, and confirm it saves immediately with a `Saved: …` badge while the strip stays open.
+  5. On variation card 2, click **Save…**, hit Enter on the default name (`Reese faster wobble… · moderate`), and confirm it saves immediately with a `Saved: …` badge while the strip stays open.
   6. Click **Keep** on your favorite variation.
 - **Voiceover:**  
   *"When you want inspiration, click Mutate to open the steering popover. You can steer the sound with natural language instructions, pick how many variations you want, or run automatic musical directions like Darker or Space. The audition strip lets you jump between variations live while playing, and you can save any sounding variation straight to your presets without leaving the strip."*
 
 ---
 
-#### 2:15 – 2:30 | 6. Instant Undo (15s)
+#### 2:15 – 2:25 | 6. Instant Undo (10s)
 - **Visual:** Top right near the Generate button.
 - **Action:**
   1. Click **Undo**.
@@ -79,7 +80,7 @@
 
 ---
 
-#### 2:30 – 2:45 | 7. The MOD Strip (15s)
+#### 2:25 – 2:40 | 7. The MOD Strip (15s)
 - **Visual:** The **MOD** strip directly underneath the macros.
 - **Action:**
   1. Show LFO 1, LFO 2, ENV 1, and ENV 2 with live animated playheads.
@@ -90,15 +91,17 @@
 
 ---
 
-#### 2:45 – 2:50 | 8. Built-in Preset Showcase (5s)
+#### 2:40 – 2:52 | 8. Hold One Note: Generative & One-Finger Presets (12s)
 - **Visual:** Click **Presets** tab.
-- **Action:** Select `Scalpel Neuro` from the showcase list and play a brief aggressive bass riff.
+- **Action:**
+  1. Select `Pentatonic Dice` and hold **one** key: it plays an endless, never-repeating melody through delay and reverb. Turn the **Chaos** macro up while it plays.
+  2. Select `Minor9 Lush` and press one key: a full minor 9 chord.
 - **Voiceover:**  
-  *"Pulsar also includes 15 original built-in presets covering modern bass design and expressive synthesis."*
+  *"And it's not only bass. Hold one note on Pentatonic Dice and it plays a melody that never repeats; one finger on Minor9 Lush plays a full chord. Pulsar ships 23 original presets, all made during the hackathon."*
 
 ---
 
-#### 2:50 – 3:00 | 9. Hackathon Summary Card (10s)
+#### 2:52 – 3:00 | 9. Hackathon Summary Card (8s)
 - **Visual:** Fullscreen summary card matching the README hackathon statement.
   ```
   PULSAR — BUILT FOR THE HACKATHON
@@ -111,9 +114,11 @@
   • Realtime Lock-Free Audio Engine (VST3 & Standalone)
   • Dynamic Node Graph Visualizer & Inspector
   • "Change This Node" Localized DSP Rewriter
-  • 4-Way Audition & Mutate System
+  • Takes (1–4 Parallel Generations) & Steered Mutate
+  • Audition Strip with Save on Every Card
   • MOD Strip (LFOs & Envelopes with Drag-to-Assign)
-  • 15 Original Factory Presets & Macro Systems
+  • Type-in Values on Every Knob
+  • 23 Original Presets, incl. Generative & One-Finger Chords
 
   Open Source: github.com/georgethetaco44-bit/Pulsar-VST (AGPLv3)
   ```

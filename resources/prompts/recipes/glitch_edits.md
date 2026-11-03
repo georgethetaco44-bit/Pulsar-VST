@@ -1,4 +1,5 @@
 # Glitch micro-edits
+category: fx
 keywords: glitch, glitchy, edit, edits, chop, chopped, stutter, switch, splice, cut, cut up, broken, micro, 8 bit, bitcrush, crushed, mutate, metallic, inharmonic, frequency shift, shifter
 Decide once per 1/16 from a hash of the step (the same pattern every bar), then switch engines, ramp the pitch, shift the frequency (fx_fshift: inharmonic metal) or mute. Every gain change is a 0.3 ms slew: sharp, never a click. Run every engine every sample so phases stay continuous.
 ```eel

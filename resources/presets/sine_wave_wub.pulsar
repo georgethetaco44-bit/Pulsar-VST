@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "name": "Sine Wave Wub",
+  "prompt": "clean fm sine wave dubstep wub at a 1:2 ratio, simple lfo wobble, pure sub",
+  "macros": [
+    {
+      "label": "Wobble",
+      "default": 0.24
+    },
+    {
+      "label": "FM Index",
+      "default": 0.295347
+    },
+    {
+      "label": "Cutoff",
+      "default": 0.233333
+    },
+    {
+      "label": "Rate",
+      "default": 0.5
+    },
+    {
+      "label": "Sub",
+      "default": 1.0
+    },
+    {
+      "label": "Feedback",
+      "default": 0.0
+    },
+    {
+      "label": "Squash",
+      "default": 0.0
+    },
+    {
+      "label": "LFO Shape",
+      "default": 0.0
+    }
+  ],
+  "voiceMode": "mono",
+  "graph": {
+    "edges": [
+      [
+        "osc_fm:0",
+        "flt_lp:0"
+      ],
+      [
+        "flt_lp:0",
+        "flt_hp:0"
+      ],
+      [
+        "flt_hp:0",
+        "fx_ott:0"
+      ],
+      [
+        "fx_ott:0",
+        "out"
+      ],
+      [
+        "osc_sine:0",
+        "out"
+      ]
+    ]
+  },
+  "code": {
+    "init": "pe = 0;",
+    "voice": "per = m4 < 0.33 ? 1 : m4 < 0.66 ? 0.5 : 0.25;\nlfo = mod_lfo(0, 1.008697, 0.05 + m8 * 0.5);\nidx = min(1, 0.05 + m2 * 0.5 + lfo * (0.05 + m1 * 0.65));\ny = osc_fm(0, freq, 0.4, idx, m6 * 0.5);\ncut = min(0.9, 0.2 + m3 * 0.5 + lfo * m1 * 0.25);\ns1 = flt_lp(0, y, cut, 0.35);\nmid = flt_hp(1, s1, 0.27, min(max((0) + (-1), 0), 1));\nmid = fx_sat(fx_ott(0, mid, 0.3 + m7 * 0.5), 0.4);\nenv = env_adsr(0, gate, min(max((0.005) + 0.237477, 0), 1), 0.3, 0.9, min(max((0.35) + (-0.075524), 0), 1));\nout = (osc_sine(0, freq) * m5 * 0.6 + mid * 0.5) * env;",
+    "master": "lo = util_xover_lo(0, inl);\nhi = util_xover_hi(0);\ndl = bus_delay(hi, hi, 0.75, 0.3, 0.238766, 0.444597);\ndr = bus_delay_r();\nwl = bus_width(dl, dr, 0.7);\nwr = bus_width_r();\noutl = lo + wl;\noutr = lo + wr;"
+  },
+  "trim": 0.608301
+}

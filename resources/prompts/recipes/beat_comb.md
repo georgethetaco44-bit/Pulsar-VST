@@ -1,4 +1,5 @@
 # Beat-synced comb and notch movement
+category: bass-square
 keywords: comb, notch, phaser, flange, flanger, metallic, metal, robotic, robot, ringing, resonant, tuned, sequence, sequenced, steps, rhythmic, neuro, stab
 A comb tuned to a ratio of the note steps every 1/16 with a ~1 ms glide: sequenced metal. Subtract it instead of adding it and the peaks become moving notches (hollow, phaser-like). Comb the driven mid band only.
 ```eel

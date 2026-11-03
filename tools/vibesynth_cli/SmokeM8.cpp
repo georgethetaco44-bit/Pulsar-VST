@@ -410,9 +410,9 @@ bool checkPromptExamples (const PromptResources& res, bool measure)
                      e.file.c_str(), p.voiceMode.c_str(), cost.voiceNs, Patch::kPolyVoiceBudgetNs, cost.masterNs,
                      Patch::kMasterBudgetNs);
     }
-    ok = check (examples.size() == 3 && categories["bass"] == 1 && categories["pluck"] == 1
-                    && categories["texture"] == 1,
-                "3 examples: a bass, a pluck and a texture (%d found)", (int) examples.size()) && ok;
+    ok = check (examples.size() == 11 && categories["bass-reese"] >= 1 && categories["bass-square"] >= 1
+                    && categories["pad"] >= 1 && categories["pluck"] >= 1 && categories["fx"] >= 1,
+                "11 examples across diverse categories (%d found)", (int) examples.size()) && ok;
     return ok;
 }
 
@@ -431,7 +431,7 @@ bool smokePromptBuilder()
 {
     const PromptResources& res = PromptResources::embedded();
     const PromptBuilder b;
-    bool ok = check (! res.systemPrompt.empty() && res.recipes.size() >= 10 && res.examples.size() == 3,
+    bool ok = check (! res.systemPrompt.empty() && res.recipes.size() >= 25 && res.examples.size() == 11,
                      "prompt resources: system prompt, %d recipes, %d examples", (int) res.recipes.size(),
                      (int) res.examples.size());
 
@@ -458,11 +458,12 @@ bool smokePromptBuilder()
     const BuiltPrompt pad = b.build ("lush evolving pad");
     const BuiltPrompt keys = b.build ("bright piano chords");
     const BuiltPrompt none = b.build ("something nice");
-    ok = check (pad.exampleFiles[0] == "example_texture.md" && keys.exampleFiles[0] == "example_pluck.md"
+    ok = check (pad.exampleFiles[0] == "example_bloom_drift.md"
+                    && (keys.exampleFiles[0] == "example_minor9_lush.md" || keys.exampleFiles[0] == "example_pluck.md")
                     && ! b.isBassPrompt ("lush evolving pad"),
-                "builder: a pad prompt gets the texture example, a keys prompt the pluck") && ok;
-    ok = check (none.recipeFiles.size() == 2 && none.recipeFiles[0] == "ott_glue.md" && pad.recipeFiles.size() >= 2,
-                "builder: a prompt with no keywords still gets 2 recipes (%s, %s)", none.recipeFiles[0].c_str(),
+                "builder: a pad prompt gets the bloom pad example, a chords prompt gets minor9/pluck") && ok;
+    ok = check (none.recipeFiles.size() == 2 && none.recipeFiles[0] == "lush_pad.md" && pad.recipeFiles.size() >= 2,
+                "builder: a prompt with no keywords gets 2 recipes padded from pad category (%s, %s)", none.recipeFiles[0].c_str(),
                 none.recipeFiles.size() > 1 ? none.recipeFiles[1].c_str() : "-") && ok;
 
     const RetryContext rc { "previous reply", "compile error in voice: syntax error line 3" };
@@ -640,11 +641,16 @@ bool smokeSelfHeal()
                 attemptSummary (res).c_str()) && ok;
 
     // Weight hint: the poly pluck, marked heavy (the injected cost above).
-    const std::string heavy = juce::String (PromptResources::embedded().examples.at (1).reply)
+    auto pluckIt = std::find_if (PromptResources::embedded().examples.begin(),
+                                 PromptResources::embedded().examples.end(),
+                                 [] (const auto& e) { return e.file == "example_pluck.md"; });
+    const std::string pluckReply = pluckIt != PromptResources::embedded().examples.end()
+                                       ? pluckIt->reply : PromptResources::embedded().examples.at (1).reply;
+    const std::string heavy = juce::String (pluckReply)
                                   .replace ("out = fx_sat(x, 0.25) * env * vel;",
                                             "heavy_marker = 1;\nout = fx_sat(x, 0.25) * env * vel * heavy_marker;")
                                   .toStdString();
-    const std::string light = PromptResources::embedded().examples.at (1).reply;
+    const std::string light = pluckReply;
     seen.clear();
     gr.transport = [&] (const ChatRequest& c)
     {

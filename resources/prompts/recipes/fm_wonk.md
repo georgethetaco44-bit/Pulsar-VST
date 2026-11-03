@@ -1,4 +1,5 @@
 # FM wonk with pitch envelopes
+category: bass-fm
 keywords: wonk, wonky, halftime, fm, donk, dive, drop, zap, laser, pitch, bend, squelch, bouncy, goofy, 140
 Use `osc_fm(slot, hz, ratio, index, feedback)` (`ratio` 0.2 = 1×, 0.4 = 2×, 0.52 = 3×, 0.6 = 4×): each note dives in from above while the FM index decays, so every hit talks. Keep a clean sine sub on `f`.
 ```eel

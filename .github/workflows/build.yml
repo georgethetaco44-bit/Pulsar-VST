@@ -226,7 +226,7 @@ jobs:
           elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             VER="${GITHUB_REF_NAME}"
           else
-            VER="0.1.0"
+            VER="1.0.0"
           fi
           echo "version=${VER}" >> $GITHUB_OUTPUT
           echo "zip_name=Pulsar-${VER}-${{ matrix.label }}.zip" >> $GITHUB_OUTPUT

@@ -1,4 +1,5 @@
 # Cross-adaptive exciter injection
+category: fx
 keywords: physical, resonator, string, pluck, bell, mallet, struck, ringing, gong, acoustic, organic, wood, glass, modal
 Drive a physical model with a synth signal instead of a click, so its tone follows the synth. Keep the exciter quiet; phys_* are heavy, so one per patch.
 ```eel

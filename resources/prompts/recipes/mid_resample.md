@@ -1,4 +1,5 @@
 # Staged mid-bass (resampling style)
+category: bass-reese
 keywords: bass, sub, mid bass, neuro, dubstep, dnb, halftime, riddim, distort, distortion, drive, resample, heavy, grind, crush, foghorn, wub, multiband, clean sub, 808, low end
 Like resampling: each stage processes the last one's result, all on the mid band. The sub is a sine added at the end; nothing in the chain reads it.
 ```eel

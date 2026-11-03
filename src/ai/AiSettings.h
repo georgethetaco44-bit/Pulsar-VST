@@ -23,19 +23,28 @@ struct AiConfig
 {
     // SPEC §6.3 defaults (configurable, never hardcoded at the call site).
     static constexpr const char* kDefaultEndpoint = "https://api.meta.ai/v1/chat/completions";
-    static constexpr const char* kDefaultModel = "muse-spark-1.3";
+    // Nov 3: Generate and its retries default to the larger model (about
+    // twice as fast as muse-spark-1.3 in batch30 with no timeouts, about
+    // 3.5x the price per request). Mutate stays on the cheaper model, since
+    // it sends up to 5 requests at once.
+    static constexpr const char* kDefaultModel = "muse-wonder-1.0";
+    static constexpr const char* kCheapModel = "muse-spark-1.3";
+    // Bumped when a default model changes: a settings file from before keeps
+    // a model the user typed, but a stored old default is upgraded.
+    static constexpr int kModelDefaultsVersion = 2;
 
     std::string endpoint = kDefaultEndpoint;
     std::string generateModel = kDefaultModel;
-    std::string mutateModel = kDefaultModel;
+    std::string mutateModel = kCheapModel;
     std::string retryModel = kDefaultModel;
     double generateTemperature = 0.8;
     double mutateTemperature = 0.9;
     double retryTemperature = 0.15;
     // The service is a reasoning model whose hidden reasoning counts
-    // against max_tokens (M8 batch): "low" keeps a patch inside the 30 s
-    // timeout. Empty = not sent.
+    // against max_tokens (M8 batch): "low" keeps a patch inside the
+    // request timeout. Empty = not sent.
     std::string reasoningEffort = "low";
+    bool learnFromPresets = true;
 };
 
 class AiSettings
@@ -71,6 +80,10 @@ public:
     // M14e Takes settings.
     int generateTakes() const noexcept { return generateTakes_; }
     void setGenerateTakes (int n) { generateTakes_ = std::clamp (n, 1, 4); }
+
+    // M14c Learn from presets (SPEC §6.3, §13).
+    bool learnFromPresets() const noexcept { return config_.learnFromPresets; }
+    void setLearnFromPresets (bool b) { config_.learnFromPresets = b; }
 
     bool mutateChip (int index) const noexcept
     {

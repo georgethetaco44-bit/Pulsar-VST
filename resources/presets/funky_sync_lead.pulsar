@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "name": "Funky Sync Lead",
+  "prompt": "funky digital sync lead with a cutoff wah, phaser and tempo delay",
+  "macros": [
+    {
+      "label": "Wah",
+      "default": 0.56
+    },
+    {
+      "label": "Drive",
+      "default": 0.426667
+    },
+    {
+      "label": "Reso",
+      "default": 0.0
+    },
+    {
+      "label": "Groove",
+      "default": 0.986667
+    },
+    {
+      "label": "Sync",
+      "default": 1.0
+    },
+    {
+      "label": "Phaser",
+      "default": 0.0
+    },
+    {
+      "label": "Space",
+      "default": 1.0
+    },
+    {
+      "label": "Squash",
+      "default": 0.4
+    }
+  ],
+  "voiceMode": "mono",
+  "graph": {
+    "edges": [
+      [
+        "osc_sync:0",
+        "flt_lp:0"
+      ],
+      [
+        "flt_lp:0",
+        "fx_phaser:0"
+      ],
+      [
+        "fx_phaser:0",
+        "fx_ott:0"
+      ],
+      [
+        "fx_ott:0",
+        "out"
+      ],
+      [
+        "out",
+        "bus_delay"
+      ]
+    ]
+  },
+  "code": {
+    "init": "",
+    "voice": "// funky sync lead: sync sweep into envelope wah + tempo groove\nvib = osc_sine(0, 5.5) * (0.003 + mw * 0.008);\nf = freq * (1 + vib);\nsy = osc_sync(0, f, 0.12 + m5 * 0.25, 0.2 + m5 * 0.6);\nbody = osc_saw(0, f * 0.5) * 0.35;\nx = sy * 0.7 + body * 0.3;\nenv = env_adsr(0, gate, 0.01, 0.3, 0.8, 0.35);\nfenv = env_adsr(1, gate, 0.005, 0.28, 0, 0.3);\nper = m4 < 0.33 ? 1 : m4 < 0.66 ? 0.5 : 0.25;\nlfo = mod_lfo(0, per, 0.25 + m4 * 0.25) - 0.5;\ncut = 0.15 + m1 * 0.3 + fenv * (0.15 + m1 * 0.45) + lfo * m4 * 0.3;\ncut = min(max(cut, 0.05), 0.95);\nx = flt_lp(0, x, cut, m3 * 0.8);\nx = fx_sat(x, 0.2 + m2 * 0.6);\nx = fx_phaser(0, x, min(max(0.2 + m1 * 0.3 + fenv * 0.3 + lfo * m4 * 0.4, 0), 1), 0.2 + m6 * 0.5, 0.4);\nx = fx_ott(0, x, 0.15 + m8 * 0.3);\nout = x * env * (0.6 + vel * 0.4);",
+    "master": "ml = bus_mono_low(inl, inr);\nmr = bus_mono_low_r();\nd = bus_delay(ml, mr, 0.75, 0.35, 0.05 + m7 * 0.2, 0.35);\ndr = bus_delay_r();\noutl = bus_width(d, dr, 0.65);\noutr = bus_width_r();"
+  },
+  "trim": 0.865012
+}

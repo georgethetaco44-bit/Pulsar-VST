@@ -1,4 +1,5 @@
 # mem[] ring buffer: stutter repeats and tape stop
+category: fx
 keywords: stutter, repeat, glitch, chop, chopped, slice, tape, tape stop, slow down, slowdown, halt, beat repeat, rhythmic, cut up, gate, gated
 Record the master into a mem[] ring buffer and read it back: repeat the last 1/32 on chosen 1/16 steps (stutter), or read with a head that slows to a halt (tape stop; read between samples so it stays smooth). Ramp edges over 0.3 ms so cuts never click.
 ```eel

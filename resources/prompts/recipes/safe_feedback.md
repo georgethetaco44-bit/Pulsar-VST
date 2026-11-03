@@ -1,4 +1,5 @@
 # One-sample feedback
+category: fx
 keywords: feedback, fm, scream, screech, screechy, howl, snarl, chaos, chaotic, unstable, nasty, aggressive, neuro, feedback loop
 The output of a folder, filter or resonator feeds pitch, FM index or cutoff on the next sample. Always through util_safe_fb, with its state reset in init. In a bass, the loop lives on the mid band and the sub is added after it.
 ```eel

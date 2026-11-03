@@ -74,7 +74,9 @@
 #include "SmokeM14a.h"
 #include "SmokeM14b.h"
 #include "SmokeM14e.h"
+#include "SmokeM14c.h"
 #include "SmokeMerge.h"
+#include "ai/PromptBuilder.h"
 #include "engine/OutputStage.h"
 #include "patch/LexiconLint.h"
 #include "patch/LoopNesting.h"
@@ -1180,6 +1182,7 @@ int runSmoketest()
     ok = vibesynth_cli::smokeM14a() && ok;
     ok = vibesynth_cli::smokeM14b() && ok;
     ok = vibesynth_cli::smokeM14e() && ok;
+    ok = vibesynth_cli::smokeM14c() && ok;
     std::printf (ok ? "SMOKETEST PASS\n" : "SMOKETEST FAIL\n");
     return ok ? 0 : 1;
 }
@@ -1269,15 +1272,18 @@ int main (int argc, char** argvIn)
     const bool mutate = argc >= 3 && std::strcmp (argv[1], "--mutate") == 0;
     const bool changeBatch = argc >= 3 && std::strcmp (argv[1], "--change-batch") == 0;
     const bool macroScan = argc >= 2 && std::strcmp (argv[1], "--macro-scan") == 0;
+    const bool explainPrompt = argc == 3 && std::strcmp (argv[1], "--explain-prompt") == 0;
     if (! smoke && ! self && ! bench && ! validate && ! render && ! batch && ! bake && ! change && ! mutate
-        && ! changeBatch && ! macroScan)
+        && ! changeBatch && ! macroScan && ! explainPrompt)
     {
         std::printf ("usage: vibesynth_cli (--smoketest | --selftest [--strict-cpu] | --bench | --validate file.pulsar\n"
                      "                     | --render <patch.pulsar | built-in> out.wav\n"
                      "                       [--sr HZ] [--seconds-tail S] [--bpm BPM] [--phrase default|riff] [--octave N]\n"
                      "                       [--mode patch|poly|mono] [--glide G] [--macro N=V]...\n"
                      "                     | --macro-scan [<patch.pulsar | built-in | all>]\n"
+                     "                     | --explain-prompt \"<text>\"\n"
                      "                     | --batch prompts.txt [--batch-limit N] [--takes N] [--out DIR] [--endpoint URL] [--model ID]\n"
+                     "                       [--judge [--judge-model ID]] | --batch --rejudge DIR [--judge-model ID]\n"
                      "                       [--effort low|minimal|medium|none]\n"
                      "                     | --bake in.pulsar out.pulsar\n"
                      "                     | --change <in.pulsar | built-in> --node ID --say \"instruction\" --out out.pulsar\n"
@@ -1285,6 +1291,14 @@ int main (int argc, char** argvIn)
                      "                     | --change-batch cases.txt [--out DIR])\n"
                      "                     [--os 1|2]  (bench/validate/render voice oversampling, default 2)\n");
         return 2;
+    }
+
+    if (explainPrompt)
+    {
+        const vibesynth::PromptBuilder b;
+        const auto res = b.explainPrompt (argv[2]);
+        std::printf ("%s", res.print().c_str());
+        return 0;
     }
 
     if (runningUnderRosetta())

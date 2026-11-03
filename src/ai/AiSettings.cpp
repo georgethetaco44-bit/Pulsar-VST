@@ -59,11 +59,21 @@ AiSettings::AiSettings()
     config_.generateModel = readString (f, "generateModel", d.generateModel);
     config_.mutateModel = readString (f, "mutateModel", d.mutateModel);
     config_.retryModel = readString (f, "retryModel", d.retryModel);
+    if (f.getIntValue ("modelDefaultsVersion", 1) < AiConfig::kModelDefaultsVersion)
+    {
+        // Settings saved before the default moved: a stored old default
+        // becomes the new one; anything the user typed is kept.
+        if (config_.generateModel == AiConfig::kCheapModel)
+            config_.generateModel = d.generateModel;
+        if (config_.retryModel == AiConfig::kCheapModel)
+            config_.retryModel = d.retryModel;
+    }
     config_.generateTemperature = readTemperature (f, "generateTemperature", d.generateTemperature);
     config_.mutateTemperature = readTemperature (f, "mutateTemperature", d.mutateTemperature);
     config_.retryTemperature = readTemperature (f, "retryTemperature", d.retryTemperature);
     config_.reasoningEffort = f.containsKey ("reasoningEffort") ? f.getValue ("reasoningEffort").trim().toStdString()
                                                                : d.reasoningEffort;
+    config_.learnFromPresets = f.getBoolValue ("learnFromPresets", true);
     savedKey_ = f.getValue ("apiKey").trim().toStdString();
     mutateCount_ = std::clamp (f.getIntValue ("mutateCount", 3), 1, 5);
     generateTakes_ = std::clamp (f.getIntValue ("generateTakes", 1), 1, 4);
@@ -96,10 +106,12 @@ bool AiSettings::save() const
     f.setValue ("generateModel", juce::String (config_.generateModel));
     f.setValue ("mutateModel", juce::String (config_.mutateModel));
     f.setValue ("retryModel", juce::String (config_.retryModel));
+    f.setValue ("modelDefaultsVersion", AiConfig::kModelDefaultsVersion);
     f.setValue ("generateTemperature", config_.generateTemperature);
     f.setValue ("mutateTemperature", config_.mutateTemperature);
     f.setValue ("retryTemperature", config_.retryTemperature);
     f.setValue ("reasoningEffort", juce::String (config_.reasoningEffort));
+    f.setValue ("learnFromPresets", config_.learnFromPresets);
     f.setValue ("apiKey", juce::String (savedKey_));
     f.setValue ("mutateCount", mutateCount_);
     f.setValue ("generateTakes", generateTakes_);

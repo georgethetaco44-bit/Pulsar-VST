@@ -1,5 +1,5 @@
-category: texture
-keywords: pad, texture, drone, ambient, atmosphere, evolving, chaos, chaotic, fm, feedback, scream, screech, howl, metallic, alien, weird, cinematic, eerie, dark
+category: fx
+keywords: fx, texture, metallic, noise, chaos, alien, weird, scream, screech, eerie, howl, siren, riser, industrial
 prompt: two oscillators that frequency-modulate each other through filters, one sample apart; the coupling goes from a clean tone to a screaming chaotic howl
 ---
 ```json

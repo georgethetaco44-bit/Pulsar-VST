@@ -150,6 +150,88 @@ double dbfs (double v)
 
 } // namespace
 
+bool renderPatchToBuffer (const vibesynth::Patch& inputPatch,
+                          juce::AudioBuffer<float>& outBuffer,
+                          double sr,
+                          bool riff,
+                          int oversampling,
+                          double bpm,
+                          double tail,
+                          int octave,
+                          vibesynth::PatchPlayer::VoiceMode mode,
+                          double glide,
+                          const std::vector<std::pair<int, double>>& macroOverrides)
+{
+    vibesynth::Patch patch = inputPatch;
+    if (patch.trim <= 0.0)
+    {
+        const vibesynth::ValidationResult vr = vibesynth::validatePatch (patch, sr, nullptr, oversampling);
+        if (! vr.ok())
+            return false;
+        patch.trim = vr.trim;
+    }
+
+    std::string error;
+    const auto program = vibesynth::PatchProgram::build (patch, sr, error, oversampling);
+    if (program == nullptr)
+        return false;
+
+    float targets[PatchPlayer::kNumMacros] = {};
+    for (int m = 0; m < PatchPlayer::kNumMacros; ++m)
+        targets[m] = static_cast<float> (patch.macroDefault (m));
+    for (const auto& o : macroOverrides)
+        if (o.first >= 0 && o.first < PatchPlayer::kNumMacros)
+            targets[o.first] = static_cast<float> (o.second);
+
+    const Phrase phrase = makePhrase (riff, bpm, octave);
+    std::vector<std::array<uint8_t, 3>> bytes;
+    std::vector<std::pair<int, size_t>> order;
+    for (const PhraseNote& n : phrase.notes)
+    {
+        order.emplace_back ((int) std::lround (n.off * sr), bytes.size());
+        bytes.push_back ({ 0x80, (uint8_t) n.note, 0 });
+        order.emplace_back ((int) std::lround (n.on * sr), bytes.size());
+        bytes.push_back ({ 0x90, (uint8_t) n.note, (uint8_t) kVelocity });
+    }
+    std::stable_sort (order.begin(), order.end(), [&] (const auto& a, const auto& b)
+                      { return a.first < b.first
+                            || (a.first == b.first && bytes[a.second][0] < bytes[b.second][0]); });
+    std::vector<Event> events;
+    for (const auto& o : order)
+        events.push_back ({ o.first, bytes[o.second].data(), 3 });
+
+    PatchPlayer player;
+    player.setProgram (program.get());
+    player.prepare (sr, kBlock, targets);
+    player.setHostTransport (bpm, false, false, 0.0);
+    player.setVoiceControls (mode, glide);
+    auto overrides = std::make_unique<vibesynth::OverrideTable>();
+    const int tweaks = vibesynth::applyPatchTweaks (patch, *overrides);
+    if (tweaks > 0)
+        player.setNodeHooks (overrides.get(), nullptr);
+
+    const int total = (int) std::lround ((phrase.end + tail) * sr);
+    outBuffer.setSize (2, total);
+    outBuffer.clear();
+    auto it = events.cbegin();
+    const auto end = events.cend();
+    {
+        juce::ScopedNoDenormals noDenormals;
+        for (int start = 0; start < total; start += kBlock)
+        {
+            const int n = std::min (kBlock, total - start);
+            const double t = start / sr;
+            if (t >= phrase.sweepStart)
+                targets[0] = static_cast<float> (std::min (1.0, (t - phrase.sweepStart)
+                                                                     / (phrase.sweepEnd - phrase.sweepStart)));
+            player.renderChunk (n, targets, it, end, start);
+            outBuffer.copyFrom (0, start, player.outL(), n);
+            outBuffer.copyFrom (1, start, player.outR(), n);
+        }
+    }
+    return true;
+}
+
 int runRender (int argc, char** argv, int oversampling)
 {
     if (argc < 2)
@@ -268,70 +350,15 @@ int runRender (int argc, char** argv, int oversampling)
         }
         patch.trim = vr.trim;
     }
-    std::string error;
-    const auto program = vibesynth::PatchProgram::build (patch, sr, error, oversampling);
-    if (program == nullptr)
+
+    juce::AudioBuffer<float> out;
+    if (! renderPatchToBuffer (patch, out, sr, riff, oversampling, bpm, tail, octave, mode, glide, macroOverrides))
     {
-        std::printf ("REJECTED: %s\n", error.c_str());
+        std::printf ("REJECTED: render failed\n");
         return 1;
     }
 
-    float targets[PatchPlayer::kNumMacros] = {};
-    for (int m = 0; m < PatchPlayer::kNumMacros; ++m)
-        targets[m] = static_cast<float> (patch.macroDefault (m));
-    for (const auto& o : macroOverrides)
-        targets[o.first] = static_cast<float> (o.second);
-
-    // The phrase as raw MIDI, sorted by time (note-offs first on a tie).
-    const Phrase phrase = makePhrase (riff, bpm, octave);
-    std::vector<std::array<uint8_t, 3>> bytes;
-    std::vector<std::pair<int, size_t>> order;
-    for (const PhraseNote& n : phrase.notes)
-    {
-        order.emplace_back ((int) std::lround (n.off * sr), bytes.size());
-        bytes.push_back ({ 0x80, (uint8_t) n.note, 0 });
-        order.emplace_back ((int) std::lround (n.on * sr), bytes.size());
-        bytes.push_back ({ 0x90, (uint8_t) n.note, (uint8_t) kVelocity });
-    }
-    std::stable_sort (order.begin(), order.end(), [&] (const auto& a, const auto& b)
-                      { return a.first < b.first
-                            || (a.first == b.first && bytes[a.second][0] < bytes[b.second][0]); });
-    std::vector<Event> events;
-    for (const auto& o : order)
-        events.push_back ({ o.first, bytes[o.second].data(), 3 });
-
-    PatchPlayer player;
-    player.setProgram (program.get());
-    player.prepare (sr, kBlock, targets);
-    player.setHostTransport (bpm, false, false, 0.0); // beat runs on from 0
-    player.setVoiceControls (mode, glide);
-    // M10: a patch's tweaks and macro maps play as in the plugin.
-    auto overrides = std::make_unique<vibesynth::OverrideTable>();
-    const int tweaks = vibesynth::applyPatchTweaks (patch, *overrides);
-    if (tweaks > 0)
-        player.setNodeHooks (overrides.get(), nullptr);
-
-    const int total = (int) std::lround ((phrase.end + tail) * sr);
-    juce::AudioBuffer<float> out (2, total);
-    auto it = events.cbegin();
-    const auto end = events.cend();
-    {
-        juce::ScopedNoDenormals noDenormals; // as processBlock
-        for (int start = 0; start < total; start += kBlock)
-        {
-            const int n = std::min (kBlock, total - start);
-            // Host automation: macro 1 ramps 0 -> 1 across the sweep, one
-            // value per block.
-            const double t = start / sr;
-            if (t >= phrase.sweepStart)
-                targets[0] = static_cast<float> (std::min (1.0, (t - phrase.sweepStart)
-                                                                     / (phrase.sweepEnd - phrase.sweepStart)));
-            player.renderChunk (n, targets, it, end, start);
-            out.copyFrom (0, start, player.outL(), n);
-            out.copyFrom (1, start, player.outR(), n);
-        }
-    }
-
+    const int total = out.getNumSamples();
     const double peak = std::max (out.getMagnitude (0, 0, total), out.getMagnitude (1, 0, total));
     const double rms = std::sqrt (0.5 * (std::pow (out.getRMSLevel (0, 0, total), 2.0)
                                          + std::pow (out.getRMSLevel (1, 0, total), 2.0)));
@@ -356,12 +383,16 @@ int runRender (int argc, char** argv, int oversampling)
     }
     writer.reset(); // flushes and closes the file
 
+    auto overrides = std::make_unique<vibesynth::OverrideTable>();
+    const int tweaks = vibesynth::applyPatchTweaks (patch, *overrides);
+
     std::printf ("rendered %s (%s, trim %+.1f dB) -> %s: %.2f s at %.0f Hz, %.0f bpm, "
                  "%s phrase, %s (glide %.2f), voices %dx, 24-bit stereo, peak %+.1f dBFS, RMS %+.1f dBFS%s\n",
                  patch.name.c_str(), builtin ? "built-in, stored trim" : "file, computed trim",
                  dbfs (patch.trim), outFile.getFullPathName().toRawUTF8(), total / sr, sr, bpm,
-                 riff ? "riff" : "default", player.monoActive() ? "mono" : "poly", glide,
-                 program->oversampling(), dbfs (peak), dbfs (rms),
+                 riff ? "riff" : "default",
+                 (patch.voiceMode == "mono" || mode == PatchPlayer::VoiceMode::Mono) ? "mono" : "poly",
+                 glide, oversampling, dbfs (peak), dbfs (rms),
                  tweaks > 0 ? (", " + std::to_string (tweaks) + " tweaks applied").c_str() : "");
     return 0;
 }

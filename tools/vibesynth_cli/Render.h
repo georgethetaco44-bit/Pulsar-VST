@@ -2,7 +2,29 @@
 
 // M6: vibesynth_cli --render (SPEC §10.3). See Render.cpp.
 
+#include <juce_audio_basics/juce_audio_basics.h>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "patch/Patch.h"
+#include "patch/PatchPlayer.h"
+
 namespace vibesynth_cli {
+
+// Renders a patch into an AudioBuffer<float> using the same offline render path
+// as --render (SPEC §10.3).
+bool renderPatchToBuffer (const vibesynth::Patch& patch,
+                          juce::AudioBuffer<float>& outBuffer,
+                          double sr = 48000.0,
+                          bool riff = true,
+                          int oversampling = 2,
+                          double bpm = 140.0,
+                          double tail = 1.5,
+                          int octave = 0,
+                          vibesynth::PatchPlayer::VoiceMode mode = vibesynth::PatchPlayer::VoiceMode::Patch,
+                          double glide = 0.3,
+                          const std::vector<std::pair<int, double>>& macroOverrides = {});
 
 // args: <patch.pulsar | built-in name> <out.wav> [--sr HZ]
 // [--seconds-tail S] [--bpm BPM] [--phrase default|riff]

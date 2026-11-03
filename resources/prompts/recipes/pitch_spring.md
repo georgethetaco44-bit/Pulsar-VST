@@ -1,4 +1,5 @@
 # Per-sample spring for pitch
+category: lead
 keywords: boing, bounce, bouncy, rubber, cartoon, goofy, funny, springy, elastic, pitch, wobble, wonky, wonk, zany
 A damped mass-spring simulated per sample in semitones: kick it in init and the pitch overshoots and wobbles back to the note. The spring's speed opens a filter. The sub follows the same pitch and stays a plain sine.
 ```eel

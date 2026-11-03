@@ -1,4 +1,5 @@
 # Formant growl (talking bass)
+category: bass-reese
 keywords: growl, talk, talking, vowel, yoi, wah, formant, vocal, mouth, nasal, tearout, dubstep, riddim, speak, yapping
 Drive a rich source (`osc_wt` table 2 vocal or saw+pulse) through `flt_formant(slot, in, vowel, res)` (`vowel` 0–1 morphs a→e→i→o→u). Sweep `vowel` with the hero macro and `mod_lfo`.
 ```eel

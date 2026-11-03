@@ -1,4 +1,5 @@
 # Wavetable growl
+category: bass-reese
 keywords: wavetable, wt, table, morph, scan, modern, dubstep, brostep, hybrid, bass, tearout, metallic, gnarly, aggressive
 Scan `osc_wt(slot, hz, table, pos)` (`table` 7 = growl, 6 = fold, 4 = sync, 2 = vocal) with an envelope and `mod_lfo`, then carve a moving notch (`flt_notch`) or formant (`flt_formant`) before `fx_shape` and `fx_ott`. Keep the sub clean and separate.
 ```eel

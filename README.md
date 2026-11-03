@@ -19,7 +19,7 @@ Key capabilities:
 - **Mutate & Audition Strip:** Generate four variations of the current sound at once (Darker, Movement, Brighter, Weirder). Audition each variation instantly with seamless audio swaps, and Keep your favourite or Discard back to the original.
 - **Full Undo History:** Instantly step back to previous sound states and macro configurations.
 - **Modulation (MOD) Strip:** Two tempo-synced/free LFOs (sine, triangle, saw+, saw-, square, sample & hold, random) and two ADSR envelopes with drag-to-assign modulation to any macro or node argument, visual depth rings, and popover editors.
-- **Built-in & User Presets:** 15 factory showcase patches, custom `.pulsar` patch export/import, and generation history.
+- **Built-in & User Presets:** 23 factory showcase patches, custom `.pulsar` patch export/import, "Learn from my presets" style reference adaptation, and generation history.
 - **Transparent Code Viewer:** Inspect the generated sample-rate code and macro definitions in a read-only viewer.
 
 ---
@@ -88,6 +88,8 @@ Pulsar generates new DSP architectures via the Meta AI API (`api.meta.ai`).
 3. Click the **Settings** gear at the right end of the tab row (next to the level meter).
 4. Paste your API key into the field and click **Test key**.
 5. Once verified, click **Save**.
+
+*Models:* Generate, Takes and Change use `muse-wonder-1.0` by default (about 16 s per sound). Mutate uses the cheaper `muse-spark-1.3`, because it sends up to five requests at once. You can type a different model for each into Settings; `muse-spark-1.3` costs roughly a third as much per Generate but is slower.
 
 *Environment Variable Alternative:* You can also set the key in your shell environment:
 ```bash
@@ -159,7 +161,8 @@ The **MOD** strip sits directly below the macros:
 - **Drag-to-Assign:** Click and drag any modulator tile directly onto any macro knob or inspector parameter to create an assignment. Adjust depth via the outer ring. Click a tile to open its settings popover.
 
 ### 8. Presets & Files
-- **Presets Tab:** Browse 15 built-in showcase presets.
+- **Presets Tab:** Browse 23 built-in showcase presets spanning reeses, FM wubs, analog square basses, chord pads, leads, plucks, generative arpeggios, and ambient soundscapes.
+- **Learn from My Presets:** When enabled in Settings (default on), Pulsar scans your local user presets folder (`~/.config/Pulsar/Patches/` on Linux, `~/Library/Application Support/Pulsar/Patches/` on macOS) off the audio thread. A high-scoring user preset replaces Slot 2 in the few-shot prompt context, letting the model learn your personal sound design style.
 - **Save / Open:** Save custom sounds as human-readable `.pulsar` JSON files or open previously exported patches.
 - **History Tab:** Automatically keeps a record of every successful generation, allowing you to reload previous sounds.
 
@@ -171,6 +174,12 @@ Click the **Code** tab to inspect the generated DSP code, init routine, and macr
 ## How It Works
 
 Pulsar couples a high-level language model with a hardened, low-level DSP execution runtime.
+
+### How Prompting Works
+When you enter a prompt, Pulsar selects two complementary worked examples and targeted DSP recipes from its lexicon using a synonym-aware matcher:
+- **Two Diverse Examples:** Slot 1 selects the closest match for your sound. Slot 2 is selected from a different sonic category to prevent the model from collapsing onto a single archetype (a bass prompt gets a second bass of another kind; the Reese is sent only when reese-specific keywords match). If no example matches but a recipe does (e.g. "acid", "ocean waves"), the first example comes from that recipe's category; otherwise Bloom Drift and Sine Wave Wub are used.
+- **Category-Aligned Recipes:** Techniques are matched to keywords and synonyms. When fewer than two recipes match, padding occurs strictly from recipes matching the first example's category. Features like `tempo_sync` (movement words only) and `ott_glue` (bass or explicit squash only) are gated to keep pads and leads clean and free of unintended wobble or pumping.
+- **Local Adaptation:** When "Learn from my presets" is active, your own keeper patches can take Slot 2 if they score higher than built-in examples, personalising new sounds to your taste.
 
 ```
 ┌─────────────────┐

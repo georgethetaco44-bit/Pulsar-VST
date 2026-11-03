@@ -1,4 +1,5 @@
 # Piece-wise transfer functions and chaos modulation
+category: fx
 keywords: chaos, chaotic, random, organic, drift, unpredictable, never repeats, distort, distortion, grit, gritty, gnarly, crunch, broken, asymmetric, shaper, waveshaper, lorenz, duffing, phaser, phasing, swirl, swirly
 Write custom shapers inline (a different curve for each half-wave) and modulate with chaos: rate near 0 is a slow LFO, near 1 audio rate. A phaser whose `pos` follows the chaos swirls without repeating. Asymmetric curves make DC; the mid band's high-pass traps it.
 ```eel

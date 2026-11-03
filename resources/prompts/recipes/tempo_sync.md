@@ -1,4 +1,5 @@
 # Tempo-synced motion
+category: fx
 keywords: wobble, wub, lfo, gate, gated, trance gate, sidechain, pump, pumping, rhythmic, sync, tempo, pulse, pulsing, movement, moving, step, sequence
 Use `mod_lfo(slot, beats, shape)` (`beats` is period in quarter notes: `1` = 1/4, `0.5` = 1/8, `0.25` = 1/16; `shape` 0–1 morphs sine/tri/saw/square/S&H, retriggers at note-on). Pick the division with a macro in steps; in a bass, move only the mid band.
 ```eel

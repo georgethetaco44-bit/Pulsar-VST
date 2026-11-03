@@ -1,4 +1,5 @@
 # Reese
+category: bass-reese
 keywords: reese, dnb, drum and bass, jungle, rolling, detune, detuned, beating, two saws, saws, dark, liquid, neuro
 A supersaw and one saw detuned the other way beat; one envelope opens the filter and shapes the amp; the last sample nudges the pitch (snarl). Only the mids are driven; their beating low end is high-passed away under a clean sine, so the low end never phases.
 ```eel

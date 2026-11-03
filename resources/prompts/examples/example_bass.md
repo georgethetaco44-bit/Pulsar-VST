@@ -1,5 +1,5 @@
-category: bass
-keywords: bass, sub, reese, neuro, dnb, drum and bass, dubstep, halftime, wobble, growl, riddim, wub, 808, low end, mid bass, foghorn, donk, jungle
+category: bass-reese
+keywords: reese, detuned, saws, neuro, rolling, dnb, drum and bass, growl, bass
 prompt: dark detuned reese bass that snarls when you push it, with an optional tempo wobble
 ---
 ```json

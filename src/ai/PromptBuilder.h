@@ -31,9 +31,10 @@ namespace vibesynth {
 struct PromptRecipe
 {
     std::string file;                  // "safe_feedback.md"
+    std::string category;              // "bass-reese", "fx", etc.
     std::string title;
     std::vector<std::string> keywords; // lower case
-    std::string text;                  // the file without its keywords line
+    std::string text;                  // the file without its keywords/category lines
 };
 
 struct PromptExample
@@ -59,6 +60,7 @@ struct PromptResources
     std::string apiReference;
     std::vector<PromptRecipe> recipes;   // in file-name order
     std::vector<PromptExample> examples; // in file-name order
+    std::vector<std::vector<std::string>> synonymGroups; // from synonyms.md
     // M11: edit/edit_change.md and edit/edit_mutate.md (their "# Title"
     // line dropped; {node}, {instruction}, {direction} filled in by
     // buildEdit), and the 4 Mutate directions in file order.
@@ -101,6 +103,27 @@ struct BuiltPrompt
     std::vector<std::string> exampleFiles;  // which examples were chosen
 };
 
+struct ExplainItem
+{
+    std::string file;
+    std::string category;
+    int score = 0;
+    std::string why;
+    std::vector<std::string> matchedWords;
+};
+
+struct ExplainResult
+{
+    std::string userPrompt;
+    std::vector<std::string> promptTokens;
+    std::vector<std::string> synonymExpansions;
+    std::vector<ExplainItem> examples;
+    std::vector<ExplainItem> recipes;
+    std::vector<ExplainItem> paddedRecipes;
+    int totalEstimatedTokens = 0;
+    std::string print() const;
+};
+
 class PromptBuilder
 {
 public:
@@ -113,7 +136,8 @@ public:
 
     // `retry` null for the first attempt.
     BuiltPrompt build (const std::string& userPrompt, const RetryContext* retry = nullptr,
-                       const std::string& extraUserLine = {}) const;
+                       const std::string& extraUserLine = {},
+                       const std::vector<PromptExample>& userExamples = {}) const;
 
     // M11: the same system message as build() (so the service can reuse
     // its prefix), no few-shot pairs (the current patch shows the format),
@@ -125,8 +149,17 @@ public:
     BuiltPrompt buildEdit (const EditPrompt& edit, const RetryContext* retry = nullptr) const;
 
     // Keyword choices on their own (deterministic for a given prompt).
-    std::vector<int> chooseRecipes (const std::string& userPrompt) const;
+    std::vector<int> chooseRecipes (const std::string& userPrompt, const std::string& firstExampleCategory = {}) const;
     std::vector<int> chooseExamples (const std::string& userPrompt) const;
+    std::vector<PromptExample> selectExamples (const std::string& userPrompt,
+                                              const std::vector<PromptExample>& userExamples = {}) const;
+
+    // M14c: Explain prompt selections without API call.
+    ExplainResult explainPrompt (const std::string& userPrompt,
+                                 const std::vector<PromptExample>& userExamples = {}) const;
+
+    // M14c Task 5: Load and validate user preset examples from a directory.
+    static std::vector<PromptExample> loadUserPresetExamples (const std::string& folderPath);
 
     // True if the prompt reads as a bass sound (the batch renders those
     // with the riff phrase). Same keywords as the bass example.

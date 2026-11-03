@@ -30,6 +30,7 @@
 #include <string>
 #include <vector>
 
+#include "Judge.h"
 #include "Render.h"
 #include "ai/AiSettings.h"
 #include "ai/Generator.h"
@@ -102,75 +103,7 @@ double pct (int n, int total)
 
 std::string mainOscillatorFunctions (const vibesynth::Patch& patch)
 {
-    static const char* const kOscs[] = {
-        "osc_sine", "osc_saw", "osc_tri", "osc_square", "osc_supersaw",
-        "osc_wt", "osc_fm", "osc_sync", "noise", "phys_resonator", "phys_string"
-    };
-    std::string code = patch.voice;
-    std::vector<std::string> found;
-    size_t i = 0;
-    const size_t n = code.size();
-    while (i < n)
-    {
-        if (code[i] == '/' && i + 1 < n && code[i + 1] == '/')
-        {
-            i += 2;
-            while (i < n && code[i] != '\n') ++i;
-            continue;
-        }
-        if (code[i] == '/' && i + 1 < n && code[i + 1] == '*')
-        {
-            i += 2;
-            while (i + 1 < n && ! (code[i] == '*' && code[i + 1] == '/')) ++i;
-            if (i + 1 < n) i += 2;
-            continue;
-        }
-        if (code[i] == '"')
-        {
-            ++i;
-            while (i < n && code[i] != '"')
-            {
-                if (code[i] == '\\' && i + 1 < n) ++i;
-                ++i;
-            }
-            if (i < n) ++i;
-            continue;
-        }
-        if ((code[i] >= 'a' && code[i] <= 'z') || (code[i] >= 'A' && code[i] <= 'Z') || code[i] == '_')
-        {
-            const size_t start = i;
-            while (i < n && ((code[i] >= 'a' && code[i] <= 'z') || (code[i] >= 'A' && code[i] <= 'Z')
-                             || (code[i] >= '0' && code[i] <= '9') || code[i] == '_'))
-                ++i;
-            const std::string ident = code.substr (start, i - start);
-            size_t j = i;
-            while (j < n && (code[j] == ' ' || code[j] == '\t' || code[j] == '\r' || code[j] == '\n'))
-                ++j;
-            if (j < n && code[j] == '(')
-            {
-                for (const char* osc : kOscs)
-                {
-                    if (ident == osc)
-                    {
-                        if (std::find (found.begin(), found.end(), ident) == found.end())
-                            found.push_back (ident);
-                        break;
-                    }
-                }
-            }
-            continue;
-        }
-        ++i;
-    }
-    if (found.empty())
-        return "none";
-    std::string res;
-    for (size_t fi = 0; fi < found.size(); ++fi)
-    {
-        if (fi > 0) res += ", ";
-        res += found[fi];
-    }
-    return res;
+    return analyzeVoiceOscillators (patch.voice).summary;
 }
 
 void writeAttemptFile (const juce::File& file, const std::string& prompt, size_t k, const vibesynth::GenerationAttempt& a)
@@ -194,21 +127,88 @@ void writeAttemptFile (const juce::File& file, const std::string& prompt, size_t
 
 } // namespace
 
+// --batch --rejudge DIR [--judge-model ID]: scores the .pulsar files a
+// batch already wrote, with one fixed judge model, so runs made with
+// different generate models compare fairly. No generation requests.
+static int runRejudge (const juce::File& dir, const std::string& judgeModel, int oversampling)
+{
+    using namespace vibesynth;
+    const AiSettings settings;
+    const std::string key = settings.apiKey();
+    if (key.empty() || ! dir.isDirectory())
+    {
+        std::printf (key.empty() ? "no API key\n" : "no such folder\n");
+        return 2;
+    }
+    AiConfig cfg = settings.config();
+    cfg.generateModel = judgeModel;
+    auto files = dir.findChildFiles (juce::File::findFiles, false, "*.pulsar");
+    files.sort();
+    int scores[6] = {}, n = 0, sum = 0, reese = 0;
+    std::printf ("rejudge: %d patches in %s, judge model %s\n", files.size(), dir.getFullPathName().toRawUTF8(),
+                 judgeModel.c_str());
+    for (const auto& f : files)
+    {
+        const auto parsed = parsePatch (f.loadFileAsString().toStdString());
+        if (! parsed.ok() || parsed.patch.prompt.empty())
+        {
+            std::printf ("  skip %s (%s)\n", f.getFileName().toRawUTF8(), parsed.ok() ? "no prompt" : parsed.error.c_str());
+            continue;
+        }
+        const OscAnalysis osc = analyzeVoiceOscillators (parsed.patch.voice);
+        if (osc.isReeseLike)
+            ++reese;
+        juce::AudioBuffer<float> buf;
+        JudgeResult jr;
+        if (renderPatchToBuffer (parsed.patch, buf, 48000.0, true, oversampling))
+            jr = runJudge (parsed.patch.prompt, parsed.patch, measureDescriptors (buf, 48000.0), osc, cfg, key);
+        else
+            jr.reason = "render failed";
+        ++scores[jr.score >= 1 && jr.score <= 5 ? jr.score : 0];
+        if (jr.score >= 1 && jr.score <= 5)
+        {
+            sum += jr.score;
+            ++n;
+        }
+        std::printf ("  %d/5  %-28s %s\n", jr.score, f.getFileNameWithoutExtension().toRawUTF8(), jr.reason.c_str());
+    }
+    std::printf ("rejudge summary: average %.2f over %d scored (no score %d), histogram 1..5: %d %d %d %d %d, reese-like %d\n",
+                 n > 0 ? (double) sum / n : 0.0, n, scores[0], scores[1], scores[2], scores[3], scores[4], scores[5], reese);
+    return 0;
+}
+
 int runBatch (int argc, char** argv, int oversampling)
 {
     using namespace vibesynth;
     if (argc < 1)
         return 2;
+    if (std::string (argv[0]) == "--rejudge")
+    {
+        if (argc < 2)
+            return 2;
+        std::string jm = AiConfig::kCheapModel;
+        for (int i = 2; i + 1 < argc; ++i)
+            if (std::string (argv[i]) == "--judge-model")
+                jm = argv[i + 1];
+        return runRejudge (juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (argv[1])), jm,
+                           oversampling);
+    }
     const juce::File promptsFile = juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (argv[0]));
     int limit = -1;
     int takes = 1;
+    bool judge = false;
     juce::File outDir;
     std::string endpoint, model, effort;
+    std::string judgeModel = AiConfig::kCheapModel;  // fixed, so runs compare
     bool effortSet = false;
     for (int i = 1; i < argc; ++i)
     {
         const std::string opt = argv[i];
-        if (opt == "--batch-limit" && i + 1 < argc)
+        if (opt == "--judge")
+            judge = true;
+        else if (opt == "--judge-model" && i + 1 < argc)
+            judgeModel = argv[++i];
+        else if (opt == "--batch-limit" && i + 1 < argc)
             limit = juce::String (argv[++i]).getIntValue();
         else if (opt == "--out" && i + 1 < argc)
             outDir = juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (argv[++i]));
@@ -275,6 +275,11 @@ int runBatch (int argc, char** argv, int oversampling)
               cfg.retryTemperature, cfg.reasoningEffort.empty() ? "(not sent)" : cfg.reasoningEffort.c_str(),
               settings.keyFromEnvironment() ? AiSettings::kEnvKey : "the settings file");
 
+    AiConfig judgeCfg = cfg;
+    judgeCfg.generateModel = judgeModel;
+    if (judge)
+        log.line ("judge model: %s", judgeModel.c_str());
+
     const PromptBuilder builder;
     int passAt[Generator::kMaxRetries + 1] = {};
     int failed = 0, weightHints = 0, kept = 0;
@@ -283,6 +288,15 @@ int runBatch (int argc, char** argv, int oversampling)
     double seconds = 0.0;
     std::map<std::string, std::map<std::string, int>> histogram;  // stage -> status -> count
     std::vector<std::string> reasons;
+
+    // M14c: LLM judge and oscillator tracking
+    int judgeScores[6] = {};  // 0: no score, 1..5: score counts
+    int judgeCount = 0;
+    int judgeSum = 0;
+    long judgePromptTokens = 0, judgeCompletionTokens = 0;
+    double judgeSeconds = 0.0;
+    int reeseLikeCount = 0;
+    std::map<std::string, int> batchOscCounts;
 
     for (size_t pi = 0; pi < prompts.size(); ++pi)
     {
@@ -325,6 +339,8 @@ int runBatch (int argc, char** argv, int oversampling)
 
             const int at = firstPassing (res);
             std::string rendered;
+            OscAnalysis osc;
+            JudgeResult jr;
             if (at >= 0)
             {
                 ++passAt[at];
@@ -339,6 +355,40 @@ int runBatch (int argc, char** argv, int oversampling)
                 char* rargs[] = { a0.data(), a1.data(), a2.data(), a3.data() };
                 const int rc = runRender (4, rargs, oversampling);
                 rendered = rc == 0 ? (riff ? "riff" : "default") : "render failed";
+
+                osc = analyzeVoiceOscillators (res.patch.voice);
+                batchOscCounts[osc.primaryOsc]++;
+                if (osc.isReeseLike)
+                    ++reeseLikeCount;
+
+                if (judge)
+                {
+                    juce::AudioBuffer<float> riffBuf;
+                    if (renderPatchToBuffer (res.patch, riffBuf, 48000.0, true, oversampling))
+                    {
+                        const AudioDescriptors desc = measureDescriptors (riffBuf, 48000.0);
+                        jr = runJudge (prompt, res.patch, desc, osc, judgeCfg, key);
+                        judgePromptTokens += jr.promptTokens;
+                        judgeCompletionTokens += jr.completionTokens;
+                        judgeSeconds += jr.seconds;
+                        if (jr.score >= 1 && jr.score <= 5)
+                        {
+                            ++judgeScores[jr.score];
+                            judgeSum += jr.score;
+                            ++judgeCount;
+                        }
+                        else
+                        {
+                            ++judgeScores[0];
+                        }
+                    }
+                    else
+                    {
+                        jr.score = 0;
+                        jr.reason = "render failed";
+                        ++judgeScores[0];
+                    }
+                }
             }
             else
             {
@@ -352,6 +402,17 @@ int runBatch (int argc, char** argv, int oversampling)
                       shorten (prompt, 60).c_str(),
                       at >= 0 ? (" [" + rendered + "]" + (res.reason.empty() ? "" : " (" + shorten (res.reason, 120) + ")")).c_str()
                               : ("  <- " + shorten (res.reason, 160)).c_str());
+            if (at >= 0)
+            {
+                if (judge)
+                    log.line ("     oscs: [%s]%s  judge %s: %s",
+                              osc.summary.c_str(),
+                              osc.isReeseLike ? " (reese-like)" : "",
+                              jr.score > 0 ? (std::to_string (jr.score) + "/5").c_str() : "no score",
+                              jr.reason.c_str());
+                else
+                    log.line ("     oscs: [%s]%s", osc.summary.c_str(), osc.isReeseLike ? " (reese-like)" : "");
+            }
         }
         else
         {
@@ -398,6 +459,8 @@ int runBatch (int argc, char** argv, int oversampling)
 
                 const int at = firstPassing (s);
                 std::string rendered;
+                OscAnalysis osc;
+                JudgeResult jr;
                 if (at >= 0)
                 {
                     ++passAt[at];
@@ -412,6 +475,40 @@ int runBatch (int argc, char** argv, int oversampling)
                     char* rargs[] = { a0.data(), a1.data(), a2.data(), a3.data() };
                     const int rc = runRender (4, rargs, oversampling);
                     rendered = rc == 0 ? (riff ? "riff" : "default") : "render failed";
+
+                    osc = analyzeVoiceOscillators (s.patch.voice);
+                    batchOscCounts[osc.primaryOsc]++;
+                    if (osc.isReeseLike)
+                        ++reeseLikeCount;
+
+                    if (judge)
+                    {
+                        juce::AudioBuffer<float> riffBuf;
+                        if (renderPatchToBuffer (s.patch, riffBuf, 48000.0, true, oversampling))
+                        {
+                            const AudioDescriptors desc = measureDescriptors (riffBuf, 48000.0);
+                            jr = runJudge (prompt + " (" + dirs[t].label + ")", s.patch, desc, osc, judgeCfg, key);
+                            judgePromptTokens += jr.promptTokens;
+                            judgeCompletionTokens += jr.completionTokens;
+                            judgeSeconds += jr.seconds;
+                            if (jr.score >= 1 && jr.score <= 5)
+                            {
+                                ++judgeScores[jr.score];
+                                judgeSum += jr.score;
+                                ++judgeCount;
+                            }
+                            else
+                            {
+                                ++judgeScores[0];
+                            }
+                        }
+                        else
+                        {
+                            jr.score = 0;
+                            jr.reason = "render failed";
+                            ++judgeScores[0];
+                        }
+                    }
                 }
                 else
                 {
@@ -419,24 +516,48 @@ int runBatch (int argc, char** argv, int oversampling)
                 }
 
                 const int retries = std::max (0, static_cast<int> (s.attempts.size()) - 1);
-                const std::string oscs = s.ok ? mainOscillatorFunctions (s.patch) : "-";
-                log.line ("     take %d (%s): %s  retries %d  oscs [%s]%s%s",
+                log.line ("     take %d (%s): %s  retries %d  oscs [%s]%s%s%s",
                           (int) t + 1, dirs[t].label.c_str(), s.ok ? "PASS" : "FAIL", retries,
-                          oscs.c_str(),
+                          s.ok ? osc.summary.c_str() : "-",
+                          s.ok && osc.isReeseLike ? " (reese-like)" : "",
                           s.ok ? ("  \"" + shorten (s.patch.name, 22) + "\" [" + rendered + "]").c_str() : "",
-                          s.ok ? "" : ("  <- " + shorten (s.reason, 120)).c_str());
+                          s.ok ? (judge ? ("  judge " + (jr.score > 0 ? std::to_string (jr.score) + "/5" : "no score") + ": " + jr.reason).c_str() : "")
+                               : ("  <- " + shorten (s.reason, 120)).c_str());
             }
         }
     }
 
     const int total = static_cast<int> (prompts.size()) * (takes >= 2 ? takes : 1);
     const int first = passAt[0], one = passAt[0] + passAt[1], two = one + passAt[2];
+    const int passedTotal = two;
     log.line ("");
     log.line ("== totals (%d %s) ==", total, takes >= 2 ? "takes" : "prompts");
     log.line ("pass first try    %2d/%d  %5.1f %%", first, total, pct (first, total));
     log.line ("pass <= 1 retry   %2d/%d  %5.1f %%", one, total, pct (one, total));
     log.line ("pass <= 2 retries %2d/%d  %5.1f %%   (exit: >= 70 %%)", two, total, pct (two, total));
     log.line ("weight hints %d (heavy patch kept after a failed lighter retry: %d)", weightHints, kept);
+    log.line ("reese-like patches: %d / %d (%.1f %%)", reeseLikeCount, passedTotal, pct (reeseLikeCount, passedTotal));
+    log.line ("main oscillator functions across batch:");
+    if (batchOscCounts.empty())
+        log.line ("  (none)");
+    for (const auto& [name, count] : batchOscCounts)
+        log.line ("  %-16s %2d", name.c_str(), count);
+
+    if (judge)
+    {
+        log.line ("");
+        log.line ("== judge ==");
+        const double avgJudge = judgeCount > 0 ? static_cast<double> (judgeSum) / judgeCount : 0.0;
+        log.line ("average score:     %.2f / 5.0 (%d scored, %d no score)",
+                  avgJudge, judgeCount, judgeScores[0]);
+        log.line ("score histogram:   1: %d, 2: %d, 3: %d, 4: %d, 5: %d (no score: %d)",
+                  judgeScores[1], judgeScores[2], judgeScores[3], judgeScores[4], judgeScores[5], judgeScores[0]);
+        log.line ("judge tokens:      %ld prompt + %ld completion = %ld; %.1f s total (%.1f s per patch)",
+                  judgePromptTokens, judgeCompletionTokens, judgePromptTokens + judgeCompletionTokens,
+                  judgeSeconds, judgeCount > 0 ? judgeSeconds / judgeCount : 0.0);
+    }
+
+    log.line ("");
     log.line ("failure reasons by stage (every failed attempt):");
     if (histogram.empty())
         log.line ("  (none)");

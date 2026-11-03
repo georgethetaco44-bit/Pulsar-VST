@@ -16,8 +16,8 @@ SettingsPanel::SettingsPanel (VibeSynthAudioProcessor& p) : processor (p)
     keyEditor.setPasswordCharacter ((juce::juce_wchar) 0x2022);
     keyEditor.setTooltip ("Stored only in the Pulsar settings file on this computer");
     endpointEditor.setTooltip ("Chat-completions endpoint");
-    generateEditor.setTooltip ("Model for Generate");
-    mutateEditor.setTooltip ("Model for Mutate (later milestone)");
+    generateEditor.setTooltip ("Model for Generate and Takes (muse-spark-1.3 is cheaper and slower)");
+    mutateEditor.setTooltip ("Model for Mutate and Change");
     retryEditor.setTooltip ("Model for self-heal retries");
     for (auto* e : { &keyEditor, &endpointEditor, &generateEditor, &mutateEditor, &retryEditor })
     {
@@ -35,6 +35,10 @@ SettingsPanel::SettingsPanel (VibeSynthAudioProcessor& p) : processor (p)
     testButton.setTooltip ("Send one tiny request to check the key, endpoint and model");
     testButton.onClick = [this] { testKey(); };
     addAndMakeVisible (testButton);
+    learnToggle.setTooltip ("When enabled, your saved presets are scanned locally and used as few-shot style references for new patches.");
+    learnToggle.setColour (juce::ToggleButton::textColourId, Theme::text);
+    learnToggle.setColour (juce::ToggleButton::tickColourId, Theme::accent);
+    addAndMakeVisible (learnToggle);
     keyEditor.onTextChange = [this]
     {
         // The result belonged to the old text.
@@ -61,6 +65,7 @@ void SettingsPanel::open()
     generateEditor.setText (juce::String (c.generateModel), false);
     mutateEditor.setText (juce::String (c.mutateModel), false);
     retryEditor.setText (juce::String (c.retryModel), false);
+    learnToggle.setToggleState (s.learnFromPresets(), juce::dontSendNotification);
     envNote = s.keyFromEnvironment() ? "Using VIBESYNTH_API_KEY from the environment (it overrides the saved key)."
                                      : "Saved in " + juce::String (s.filePath());
     setVisible (true);
@@ -124,6 +129,7 @@ void SettingsPanel::save()
     c.generateModel = field (generateEditor, defaults.generateModel);
     c.mutateModel = field (mutateEditor, defaults.mutateModel);
     c.retryModel = field (retryEditor, defaults.retryModel);
+    c.learnFromPresets = learnToggle.getToggleState();
     s.setConfig (c);
     s.setSavedKey (keyEditor.getText().trim().toStdString());
     const bool ok = s.save();
@@ -136,7 +142,7 @@ void SettingsPanel::save()
 
 juce::Rectangle<int> SettingsPanel::cardBounds() const
 {
-    return getLocalBounds().withSizeKeepingCentre (Theme::grid * 68, Theme::grid * 47);
+    return getLocalBounds().withSizeKeepingCentre (Theme::grid * 68, Theme::grid * 52);
 }
 
 void SettingsPanel::paint (juce::Graphics& g)
@@ -203,6 +209,9 @@ void SettingsPanel::resized()
         }
         r.removeFromTop (grid);
     }
+    r.removeFromTop (grid / 2);
+    auto toggleRow = r.removeFromTop (grid * 3).withTrimmedLeft (grid * 16);
+    learnToggle.setBounds (toggleRow);
     auto buttons = r.removeFromBottom (grid * 4);
     saveButton.setBounds (buttons.removeFromRight (grid * 12));
     buttons.removeFromRight (grid);

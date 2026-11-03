@@ -9,6 +9,7 @@
 #include "ai/NodeId.h"
 #include "ai/PromptBuilder.h"
 #include "ai/ResponseParser.h"
+#include "patch/PatchLibrary.h"
 #include "patch/PatchTweaks.h"
 #include "patch/PatchValidator.h"
 
@@ -210,6 +211,13 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
     double heavyNs = 0.0;
     TouchedNodes heavyTouched;
 
+    std::vector<PromptExample> userExamples;
+    if (! isEdit && request.config.learnFromPresets)
+    {
+        userExamples = PromptBuilder::loadUserPresetExamples (
+            PatchLibrary::userFolder().getFullPathName().toStdString());
+    }
+
     for (int n = 0; n <= kMaxRetries; ++n)
     {
         if (cancelled())
@@ -220,7 +228,7 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
         }
         progress (GenerationStage::Building, n);
         const BuiltPrompt bp = isEdit ? builder.buildEdit (edit, haveRetry ? &retry : nullptr)
-                                      : builder.build (request.prompt, haveRetry ? &retry : nullptr, request.extraUserLine);
+                                      : builder.build (request.prompt, haveRetry ? &retry : nullptr, request.extraUserLine, userExamples);
         ChatRequest cr;
         cr.endpoint = request.config.endpoint;
         cr.model = n > 0 ? request.config.retryModel

@@ -1,5 +1,5 @@
 category: pluck
-keywords: pluck, key, keys, piano, bell, mallet, stab, chord, arp, harp, guitar, marimba, organ, rhodes, lead, house, garage, trance, poly
+keywords: pluck, key, keys, piano, bell, mallet, harp, guitar, marimba, kalimba, poly
 prompt: short bright pluck with a decaying filter and a little chorus
 ---
 ```json

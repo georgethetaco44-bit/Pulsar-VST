@@ -7,15 +7,16 @@
 #include <algorithm>
 
 #include "PulsarPromptData.h"
+#include "ai/ResponseParser.h"
+#include "patch/LexiconLint.h"
 #include "patch/Patch.h"
+#include "patch/PatchValidator.h"
 
 namespace vibesynth {
 
 namespace {
 
-// Padding when fewer than kMinRecipes match: glue and tempo motion suit
-// almost any sound.
-const char* const kDefaultRecipes[] = { "ott_glue.md", "tempo_sync.md" };
+const std::vector<std::string> kReeseKeywords = { "reese", "detuned", "saws", "neuro", "rolling" };
 
 juce::String resourceText (int i)
 {
@@ -36,49 +37,105 @@ std::vector<std::string> keywordList (const juce::String& line)
     return out;
 }
 
-// Lower case, anything but letters and digits as spaces, padded with a
-// space at each end, so " kw" finds a keyword at the start of a word.
+// Lower case, anything but letters, digits, slashes and colons as spaces,
+// padded with a space at each end, so " kw" finds a keyword at the start of a word.
 std::string normalise (const std::string& text)
 {
     std::string s = " ";
     for (const char c : text)
     {
         const char l = (c >= 'A' && c <= 'Z') ? static_cast<char> (c - 'A' + 'a') : c;
-        s += ((l >= 'a' && l <= 'z') || (l >= '0' && l <= '9')) ? l : ' ';
+        s += ((l >= 'a' && l <= 'z') || (l >= '0' && l <= '9') || l == '/' || l == ':') ? l : ' ';
     }
     return s + " ";
 }
 
-int score (const std::string& normPrompt, const std::vector<std::string>& keywords)
+std::vector<std::string> getMatchedWords (const std::string& normPrompt,
+                                          const std::vector<std::string>& keywords,
+                                          const std::vector<std::vector<std::string>>& synonymGroups)
 {
-    int n = 0;
+    std::vector<std::string> matched;
     for (const auto& k : keywords)
     {
         const std::string nk = normalise (k);
-        // " kw " without its trailing space: a word-prefix match ("wobbl"
-        // finds "wobbly").
         if (normPrompt.find (nk.substr (0, nk.size() - 1)) != std::string::npos)
-            ++n;
+        {
+            if (std::find (matched.begin(), matched.end(), k) == matched.end())
+                matched.push_back (k);
+            continue;
+        }
+        for (const auto& group : synonymGroups)
+        {
+            if (std::find (group.begin(), group.end(), k) != group.end())
+            {
+                bool groupHit = false;
+                for (const auto& syn : group)
+                {
+                    const std::string ns = normalise (syn);
+                    if (normPrompt.find (ns.substr (0, ns.size() - 1)) != std::string::npos)
+                    {
+                        if (std::find (matched.begin(), matched.end(), syn) == matched.end())
+                            matched.push_back (syn);
+                        groupHit = true;
+                        break;
+                    }
+                }
+                if (groupHit)
+                    break;
+            }
+        }
     }
-    return n;
+    return matched;
 }
 
-// Indices with a positive score, best first (ties in file order).
-std::vector<int> ranked (const std::string& prompt, const std::vector<std::vector<std::string>>& kws)
+int score (const std::string& normPrompt,
+           const std::vector<std::string>& keywords,
+           const std::vector<std::vector<std::string>>& synonymGroups)
 {
-    const std::string norm = normalise (prompt);
-    std::vector<std::pair<int, int>> s;
-    for (int i = 0; i < (int) kws.size(); ++i)
-        s.emplace_back (-score (norm, kws[(size_t) i]), i);
-    std::stable_sort (s.begin(), s.end());
-    std::vector<int> out;
-    for (const auto& p : s)
-        if (p.first < 0)
-            out.push_back (p.second);
-    return out;
+    return static_cast<int> (getMatchedWords (normPrompt, keywords, synonymGroups).size());
 }
 
 } // namespace
+
+std::string ExplainResult::print() const
+{
+    std::string s = "Prompt: \"" + userPrompt + "\"\n";
+    s += "Tokens: ";
+    for (size_t i = 0; i < promptTokens.size(); ++i)
+        s += (i > 0 ? ", " : "") + promptTokens[i];
+    s += "\n";
+    if (! synonymExpansions.empty())
+    {
+        s += "Synonym expansions:\n";
+        for (const auto& exp : synonymExpansions)
+            s += "  " + exp + "\n";
+    }
+    s += "Examples (" + std::to_string (examples.size()) + "):\n";
+    for (size_t i = 0; i < examples.size(); ++i)
+    {
+        s += "  Slot " + std::to_string (i + 1) + ": " + examples[i].file
+             + " [" + examples[i].category + "] (score: " + std::to_string (examples[i].score)
+             + ", " + examples[i].why + ")\n";
+    }
+    s += "Recipes matched (" + std::to_string (recipes.size()) + "):\n";
+    for (size_t i = 0; i < recipes.size(); ++i)
+    {
+        s += "  " + std::to_string (i + 1) + ". " + recipes[i].file
+             + " [" + recipes[i].category + "] (score: " + std::to_string (recipes[i].score)
+             + ", " + recipes[i].why + ")\n";
+    }
+    s += "Padded recipes (" + std::to_string (paddedRecipes.size()) + "):\n";
+    if (paddedRecipes.empty())
+        s += "  (none)\n";
+    else
+    {
+        for (size_t i = 0; i < paddedRecipes.size(); ++i)
+            s += "  " + std::to_string (i + 1) + ". " + paddedRecipes[i].file
+                 + " [" + paddedRecipes[i].category + "] (" + paddedRecipes[i].why + ")\n";
+    }
+    s += "Total prompt token estimate: ~" + std::to_string (totalEstimatedTokens) + " tokens\n";
+    return s;
+}
 
 std::vector<std::pair<std::string, std::string>> PromptResources::embeddedFiles()
 {
@@ -110,6 +167,19 @@ PromptResources PromptResources::fromFiles (std::vector<std::pair<std::string, s
         if (file == "api_reference.md")
         {
             r.apiReference = text.trim().toStdString();
+            continue;
+        }
+        if (file == "synonyms.md")
+        {
+            juce::StringArray synLines;
+            synLines.addLines (text);
+            for (const auto& l : synLines)
+            {
+                const auto trimmed = l.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith ("#"))
+                    continue;
+                r.synonymGroups.push_back (keywordList (":" + trimmed.toStdString()));
+            }
             continue;
         }
         if (file.rfind ("edit_", 0) == 0)
@@ -174,6 +244,8 @@ PromptResources PromptResources::fromFiles (std::vector<std::pair<std::string, s
         {
             if (l.startsWith ("keywords:"))
                 rec.keywords = keywordList (l);
+            else if (l.startsWith ("category:"))
+                rec.category = l.fromFirstOccurrenceOf (":", false, false).trim().toStdString();
             else
                 body.add (l);
             if (l.startsWith ("# ") && rec.title.empty())
@@ -185,39 +257,378 @@ PromptResources PromptResources::fromFiles (std::vector<std::pair<std::string, s
     return r;
 }
 
-std::vector<int> PromptBuilder::chooseRecipes (const std::string& userPrompt) const
+std::vector<int> PromptBuilder::chooseRecipes (const std::string& userPrompt, const std::string& firstExampleCategory) const
 {
-    std::vector<std::vector<std::string>> kws;
-    for (const auto& r : res_.recipes)
-        kws.push_back (r.keywords);
-    std::vector<int> out = ranked (userPrompt, kws);
+    const std::string norm = normalise (userPrompt);
+    std::string firstCat = firstExampleCategory;
+    if (firstCat.empty())
+    {
+        const auto exIndices = chooseExamples (userPrompt);
+        if (! exIndices.empty() && exIndices[0] >= 0 && exIndices[0] < (int) res_.examples.size())
+            firstCat = res_.examples[(size_t) exIndices[0]].category;
+    }
+
+    const std::vector<std::string> kMovementWords = {
+        "wobble", "wub", "lfo", "rate", "rhythmic", "chop", "gate", "stutter", "1/4", "1/8", "1/16", "sync"
+    };
+    const std::vector<std::string> kOttWords = {
+        "ott", "squash", "loud", "compressed"
+    };
+    const bool tempoSyncAllowed = score (norm, kMovementWords, res_.synonymGroups) > 0;
+    const bool ottAllowed = isBassPrompt (userPrompt) || score (norm, kOttWords, res_.synonymGroups) > 0;
+
+    std::vector<std::pair<int, int>> scored;
+    for (int i = 0; i < (int) res_.recipes.size(); ++i)
+    {
+        const auto& r = res_.recipes[(size_t) i];
+        if (r.file == "tempo_sync.md" && ! tempoSyncAllowed)
+            continue;
+        if (r.file == "ott_glue.md" && ! ottAllowed)
+            continue;
+        const int s = score (norm, r.keywords, res_.synonymGroups);
+        if (s > 0)
+            scored.emplace_back (-s, i);
+    }
+    std::stable_sort (scored.begin(), scored.end());
+
+    std::vector<int> out;
+    for (const auto& p : scored)
+        out.push_back (p.second);
+
+    // When fewer than 2 recipes match, pad only from recipes whose category matches
+    // the chosen first example.
+    if ((int) out.size() < 2 && ! firstCat.empty())
+    {
+        for (int i = 0; i < (int) res_.recipes.size() && (int) out.size() < 2; ++i)
+        {
+            if (std::find (out.begin(), out.end(), i) != out.end())
+                continue;
+            const auto& r = res_.recipes[(size_t) i];
+            if (r.category != firstCat)
+                continue;
+            if (r.file == "tempo_sync.md" && ! tempoSyncAllowed)
+                continue;
+            if (r.file == "ott_glue.md" && ! ottAllowed)
+                continue;
+            out.push_back (i);
+        }
+    }
+
     if ((int) out.size() > kMaxRecipes)
         out.resize ((size_t) kMaxRecipes);
-    auto add = [&out] (int i)
-    {
-        if (i >= 0 && std::find (out.begin(), out.end(), i) == out.end())
-            out.push_back (i);
-    };
-    for (const char* file : kDefaultRecipes)
-        for (int i = 0; i < (int) res_.recipes.size() && (int) out.size() < kMinRecipes; ++i)
-            if (res_.recipes[(size_t) i].file == file)
-                add (i);
-    for (int i = 0; i < (int) res_.recipes.size() && (int) out.size() < kMinRecipes; ++i)
-        add (i);
+
     return out;
 }
 
 std::vector<int> PromptBuilder::chooseExamples (const std::string& userPrompt) const
 {
-    std::vector<std::vector<std::string>> kws;
-    for (const auto& e : res_.examples)
-        kws.push_back (e.keywords);
-    std::vector<int> out = ranked (userPrompt, kws);
+    const std::string norm = normalise (userPrompt);
+    const bool allowReese = score (norm, kReeseKeywords, res_.synonymGroups) > 0;
+
+    int bestPadIdx = -1;
+    int bestFmIdx = -1;
     for (int i = 0; i < (int) res_.examples.size(); ++i)
-        if (std::find (out.begin(), out.end(), i) == out.end())
-            out.push_back (i);
-    if ((int) out.size() > kNumExamples)
-        out.resize ((size_t) kNumExamples);
+    {
+        if (res_.examples[(size_t) i].file == "example_bloom_drift.md")
+            bestPadIdx = i;
+        if (res_.examples[(size_t) i].file == "example_sine_wub.md")
+            bestFmIdx = i;
+    }
+    if (bestPadIdx < 0 && ! res_.examples.empty()) bestPadIdx = 0;
+    if (bestFmIdx < 0 && ! res_.examples.empty()) bestFmIdx = (int) res_.examples.size() > 1 ? 1 : 0;
+
+    // Slot 2 when nothing else matched: a bass prompt gets a second bass of
+    // another kind (square, else FM; never the reese unless asked), anything
+    // else gets the pad (or the FM wub after a pad).
+    auto neutralSecond = [&] (const std::string& cat1) -> int
+    {
+        if (cat1.rfind ("bass-", 0) == 0)
+        {
+            for (const char* want : { "bass-square", "bass-fm" })
+                for (int i = 0; i < (int) res_.examples.size(); ++i)
+                    if (res_.examples[(size_t) i].category == want && cat1 != want)
+                        return i;
+        }
+        return cat1 == "pad" ? bestFmIdx : bestPadIdx;
+    };
+
+    std::vector<std::pair<int, int>> scored;
+    for (int i = 0; i < (int) res_.examples.size(); ++i)
+    {
+        const auto& e = res_.examples[(size_t) i];
+        if (! allowReese && (e.category == "bass-reese" || e.file == "example_bass.md"))
+            continue;
+        const int s = score (norm, e.keywords, res_.synonymGroups);
+        if (s > 0)
+            scored.emplace_back (-s, i);
+    }
+    std::stable_sort (scored.begin(), scored.end());
+
+    std::vector<int> out;
+    if (scored.empty())
+    {
+        // No example matched. If a recipe did ("acid", "ocean waves"), take
+        // the first example in that recipe's category; recipes with no
+        // example of their own borrow the nearest one.
+        int bestRecipe = -1, bestRecipeScore = 0;
+        for (int i = 0; i < (int) res_.recipes.size(); ++i)
+        {
+            const int s = score (norm, res_.recipes[(size_t) i].keywords, res_.synonymGroups);
+            if (s > bestRecipeScore)
+            {
+                bestRecipeScore = s;
+                bestRecipe = i;
+            }
+        }
+        int byRecipe = -1;
+        if (bestRecipe >= 0)
+        {
+            std::string cat = res_.recipes[(size_t) bestRecipe].category;
+            if (cat == "bass-sub")
+                cat = "bass-fm";  // 808 glide, noise bass: the clean sub example
+            if (cat == "bass-reese" && ! allowReese)
+                cat = "bass-square";  // "brostep growl": a bass, not the pad
+            for (int i = 0; i < (int) res_.examples.size() && byRecipe < 0; ++i)
+            {
+                const auto& e = res_.examples[(size_t) i];
+                if (e.category == cat && (allowReese || e.category != "bass-reese"))
+                    byRecipe = i;
+            }
+        }
+        if (byRecipe >= 0)
+        {
+            out.push_back (byRecipe);
+            out.push_back (neutralSecond (res_.examples[(size_t) byRecipe].category));
+            return out;
+        }
+        out.push_back (bestPadIdx);
+        out.push_back (bestFmIdx);
+        return out;
+    }
+
+    const int slot1Idx = scored[0].second;
+    out.push_back (slot1Idx);
+    const std::string& cat1 = res_.examples[(size_t) slot1Idx].category;
+
+    // Slot 2: best match from a different category
+    int slot2Idx = -1;
+    for (size_t k = 1; k < scored.size(); ++k)
+    {
+        const int candIdx = scored[k].second;
+        if (res_.examples[(size_t) candIdx].category != cat1)
+        {
+            slot2Idx = candIdx;
+            break;
+        }
+    }
+    if (slot2Idx < 0)
+    {
+        // Neutral fallback from a different category
+        slot2Idx = neutralSecond (cat1);
+    }
+    out.push_back (slot2Idx);
+    return out;
+}
+
+std::vector<PromptExample> PromptBuilder::selectExamples (const std::string& userPrompt,
+                                                         const std::vector<PromptExample>& userExamples) const
+{
+    const std::string norm = normalise (userPrompt);
+    const auto builtinIndices = chooseExamples (userPrompt);
+    std::vector<PromptExample> out;
+    for (int idx : builtinIndices)
+        out.push_back (res_.examples[(size_t) idx]);
+
+    if (userExamples.empty() || out.empty())
+        return out;
+
+    // Check if any user example scores strictly higher than the best built-in example
+    const int bestBuiltinScore = score (norm, out[0].keywords, res_.synonymGroups);
+    int bestUserScore = 0;
+    int bestUserIdx = -1;
+    for (int i = 0; i < (int) userExamples.size(); ++i)
+    {
+        const int s = score (norm, userExamples[(size_t) i].keywords, res_.synonymGroups);
+        if (s > bestUserScore)
+        {
+            bestUserScore = s;
+            bestUserIdx = i;
+        }
+    }
+
+    if (bestUserIdx >= 0 && bestUserScore > bestBuiltinScore)
+    {
+        if (out.size() >= 2)
+            out[1] = userExamples[(size_t) bestUserIdx];
+        else
+            out.push_back (userExamples[(size_t) bestUserIdx]);
+    }
+
+    return out;
+}
+
+ExplainResult PromptBuilder::explainPrompt (const std::string& userPrompt,
+                                           const std::vector<PromptExample>& userExamples) const
+{
+    ExplainResult res;
+    res.userPrompt = userPrompt;
+    const std::string norm = normalise (userPrompt);
+
+    // Tokens
+    juce::StringArray tokens;
+    tokens.addTokens (juce::String (userPrompt).toLowerCase(), " \t\r\n.,;:!?-/()[]\"'`", "");
+    tokens.trim();
+    tokens.removeEmptyStrings();
+    for (const auto& t : tokens)
+    {
+        const std::string ts = t.toStdString();
+        if (std::find (res.promptTokens.begin(), res.promptTokens.end(), ts) == res.promptTokens.end())
+            res.promptTokens.push_back (ts);
+    }
+
+    // Synonym expansions
+    for (const auto& token : res.promptTokens)
+    {
+        for (const auto& group : res_.synonymGroups)
+        {
+            if (std::find (group.begin(), group.end(), token) != group.end())
+            {
+                std::string synStr = token + " -> ";
+                int added = 0;
+                for (const auto& syn : group)
+                {
+                    if (syn == token) continue;
+                    synStr += (added > 0 ? ", " : "") + syn;
+                    ++added;
+                }
+                if (added > 0 && std::find (res.synonymExpansions.begin(), res.synonymExpansions.end(), synStr) == res.synonymExpansions.end())
+                    res.synonymExpansions.push_back (synStr);
+            }
+        }
+    }
+
+    const auto examples = selectExamples (userPrompt, userExamples);
+    for (size_t i = 0; i < examples.size(); ++i)
+    {
+        const auto& e = examples[i];
+        ExplainItem item;
+        item.file = e.file;
+        item.category = e.category;
+        item.matchedWords = getMatchedWords (norm, e.keywords, res_.synonymGroups);
+        item.score = static_cast<int> (item.matchedWords.size());
+        if (! item.matchedWords.empty())
+        {
+            std::string w = "matched: ";
+            for (size_t k = 0; k < item.matchedWords.size(); ++k)
+                w += (k > 0 ? ", " : "") + item.matchedWords[k];
+            item.why = w;
+        }
+        else if (e.category == "user")
+        {
+            item.why = "user preset (strictly higher score than built-in)";
+        }
+        else
+        {
+            item.why = (i == 0) ? "no example matched: from the best recipe's category, else the neutral pad"
+                                : "different category fallback (slot 2)";
+        }
+        res.examples.push_back (item);
+    }
+
+    const std::string firstCat = examples.empty() ? "" : examples[0].category;
+    const auto recipeIndices = chooseRecipes (userPrompt, firstCat);
+    for (int idx : recipeIndices)
+    {
+        const auto& r = res_.recipes[(size_t) idx];
+        ExplainItem item;
+        item.file = r.file;
+        item.category = r.category;
+        item.matchedWords = getMatchedWords (norm, r.keywords, res_.synonymGroups);
+        item.score = static_cast<int> (item.matchedWords.size());
+        if (! item.matchedWords.empty())
+        {
+            std::string w = "matched: ";
+            for (size_t k = 0; k < item.matchedWords.size(); ++k)
+                w += (k > 0 ? ", " : "") + item.matchedWords[k];
+            item.why = w;
+            res.recipes.push_back (item);
+        }
+        else
+        {
+            item.why = "padded from first example category: " + firstCat;
+            res.paddedRecipes.push_back (item);
+        }
+    }
+
+    const BuiltPrompt built = build (userPrompt, nullptr, "", userExamples);
+    int total = 0;
+    for (const auto& m : built.messages)
+        total += estimateTokens (m.content);
+    res.totalEstimatedTokens = total;
+
+    return res;
+}
+
+std::vector<PromptExample> PromptBuilder::loadUserPresetExamples (const std::string& folderPath)
+{
+    std::vector<PromptExample> out;
+    const juce::File folder (folderPath);
+    if (! folder.isDirectory())
+        return out;
+
+    for (const auto& file : folder.findChildFiles (juce::File::findFiles, false, "*.pulsar"))
+    {
+        if (file.getSize() > 10 * 1024)
+            continue;
+        const std::string text = file.loadFileAsString().toStdString();
+        const ParseResult pr = parsePatch (text);
+        if (! pr.ok())
+            continue;
+        const auto& p = pr.patch;
+        if (p.init.size() + p.voice.size() + p.master.size() > 10 * 1024)
+            continue;
+        const LintResult lr = lintPatch (p);
+        if (! lr.ok())
+            continue;
+
+        PromptExample e;
+        e.file = file.getFileName().toStdString();
+        e.category = "user";
+
+        // Clean prompt: strip any lines starting with mutate:
+        juce::StringArray plines;
+        plines.addLines (p.prompt);
+        juce::String cleanPrompt;
+        for (const auto& pl : plines)
+        {
+            if (pl.trim().startsWithIgnoreCase ("mutate:"))
+                continue;
+            if (cleanPrompt.isNotEmpty()) cleanPrompt << " ";
+            cleanPrompt << pl.trim();
+        }
+        e.prompt = cleanPrompt.trim().toStdString();
+        if (e.prompt.empty())
+            e.prompt = p.name;
+
+        // Keywords from name, cleaned prompt, macro labels
+        std::string rawKw = p.name + " " + e.prompt;
+        for (const auto& m : p.macros)
+            rawKw += " " + m.label;
+
+        juce::StringArray kwTokens;
+        kwTokens.addTokens (juce::String (normalise (rawKw)), " ", "");
+        kwTokens.trim();
+        kwTokens.removeEmptyStrings();
+        for (const auto& kw : kwTokens)
+        {
+            const std::string s = kw.toLowerCase().toStdString();
+            if (std::find (e.keywords.begin(), e.keywords.end(), s) == e.keywords.end())
+                e.keywords.push_back (s);
+        }
+
+        e.reply = formatPatchAsReply (p);
+        out.push_back (e);
+    }
     return out;
 }
 
@@ -225,8 +636,8 @@ bool PromptBuilder::isBassPrompt (const std::string& userPrompt) const
 {
     const std::string norm = normalise (userPrompt);
     for (const auto& e : res_.examples)
-        if (e.category == "bass")
-            return score (norm, e.keywords) > 0;
+        if (e.category.rfind ("bass", 0) == 0 && score (norm, e.keywords, res_.synonymGroups) > 0)
+            return true;
     return false;
 }
 
@@ -236,21 +647,23 @@ std::string PromptBuilder::patchRequest (const std::string& userPrompt)
 }
 
 BuiltPrompt PromptBuilder::build (const std::string& userPrompt, const RetryContext* retry,
-                                  const std::string& extraUserLine) const
+                                  const std::string& extraUserLine,
+                                  const std::vector<PromptExample>& userExamples) const
 {
     BuiltPrompt b;
     b.messages.push_back ({ "system", res_.systemPrompt + "\n\n" + res_.apiReference });
 
-    for (const int i : chooseExamples (userPrompt))
+    const auto examples = selectExamples (userPrompt, userExamples);
+    for (const auto& e : examples)
     {
-        const auto& e = res_.examples[(size_t) i];
         b.messages.push_back ({ "user", patchRequest (e.prompt) });
         b.messages.push_back ({ "assistant", e.reply });
         b.exampleFiles.push_back (e.file);
     }
 
+    const std::string firstCat = examples.empty() ? "" : examples[0].category;
     std::string user = "Techniques that may help (adapt them, don't paste them):";
-    for (const int i : chooseRecipes (userPrompt))
+    for (const int i : chooseRecipes (userPrompt, firstCat))
     {
         user += "\n\n" + res_.recipes[(size_t) i].text;
         b.recipeFiles.push_back (res_.recipes[(size_t) i].file);

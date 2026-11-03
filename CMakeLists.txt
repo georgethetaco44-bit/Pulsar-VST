@@ -9,7 +9,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "macOS architectures")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "macOS deployment target")
 
-project(VibeSynthVST VERSION 0.1.0)
+project(VibeSynthVST VERSION 1.0.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -139,7 +139,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 juce_add_plugin(VibeSynthVST
-    VERSION 0.1.0
+    VERSION 1.0.0
     COMPANY_NAME "Pulsar"
     BUNDLE_ID com.pulsar.vibesynthvst
     IS_SYNTH TRUE
@@ -205,6 +205,14 @@ juce_add_binary_data(PulsarPresetData
         resources/presets/corroder.pulsar
         resources/presets/boing.pulsar
         resources/presets/micro_edit.pulsar
+        resources/presets/howling_bass.pulsar
+        resources/presets/garage_chopper.pulsar
+        resources/presets/sine_wave_wub.pulsar
+        resources/presets/pentatonic_dice.pulsar
+        resources/presets/minor9_lush.pulsar
+        resources/presets/bloom_pulse.pulsar
+        resources/presets/bloom_drift.pulsar
+        resources/presets/funky_sync_lead.pulsar
         resources/presets/sub.pulsar
         resources/presets/garage_organ.pulsar
         resources/presets/twostep_stab.pulsar
@@ -350,6 +358,7 @@ target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/main.cpp
     tools/vibesynth_cli/Bench.cpp
     tools/vibesynth_cli/Render.cpp
+    tools/vibesynth_cli/Judge.cpp
     tools/vibesynth_cli/SmokeM7.cpp
     tools/vibesynth_cli/SmokeM8.cpp
     tools/vibesynth_cli/Batch.cpp
@@ -372,7 +381,8 @@ target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/SmokeM14a.cpp
     src/ui/KnobValueParser.cpp
     tools/vibesynth_cli/SmokeM14b.cpp
-    tools/vibesynth_cli/SmokeM14e.cpp)
+    tools/vibesynth_cli/SmokeM14e.cpp
+    tools/vibesynth_cli/SmokeM14c.cpp)
 # --render writes WAV only: keep JUCE's bundled FLAC/Ogg Vorbis codecs (and
 # the Windows Media reader) out of the CLI.
 target_compile_definitions(vibesynth_cli PRIVATE

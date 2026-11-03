@@ -484,18 +484,27 @@ constexpr BuiltinEntry kBuiltins[] = {
     { "corroder.pulsar",       "corroder_pulsar" },
     { "boing.pulsar",          "boing_pulsar" },
     { "micro_edit.pulsar",     "micro_edit_pulsar" },
+    { "howling_bass.pulsar",   "howling_bass_pulsar" },
+    { "garage_chopper.pulsar", "garage_chopper_pulsar" },
+    { "sine_wave_wub.pulsar",  "sine_wave_wub_pulsar" },
     // bread and butter (kNumShowcase marks the boundary)
-    { "sub.pulsar",            "sub_pulsar" },
-    { "garage_organ.pulsar",   "garage_organ_pulsar" },
-    { "twostep_stab.pulsar",   "twostep_stab_pulsar" },
-    { "pluck.pulsar",          "pluck_pulsar" },
-    { "glass_mallet.pulsar",   "glass_mallet_pulsar" },
-    { "mono_lead.pulsar",      "mono_lead_pulsar" },
-    { "velvet_pad.pulsar",     "velvet_pad_pulsar" },
+    // generative, chords and ambient ones first in their column
+    { "pentatonic_dice.pulsar", "pentatonic_dice_pulsar" },
+    { "minor9_lush.pulsar",     "minor9_lush_pulsar" },
+    { "bloom_pulse.pulsar",     "bloom_pulse_pulsar" },
+    { "bloom_drift.pulsar",     "bloom_drift_pulsar" },
+    { "funky_sync_lead.pulsar", "funky_sync_lead_pulsar" },
+    { "sub.pulsar",             "sub_pulsar" },
+    { "garage_organ.pulsar",    "garage_organ_pulsar" },
+    { "twostep_stab.pulsar",    "twostep_stab_pulsar" },
+    { "pluck.pulsar",           "pluck_pulsar" },
+    { "glass_mallet.pulsar",    "glass_mallet_pulsar" },
+    { "mono_lead.pulsar",       "mono_lead_pulsar" },
+    { "velvet_pad.pulsar",      "velvet_pad_pulsar" },
 };
 
 constexpr int kNumBuiltins = static_cast<int> (sizeof (kBuiltins) / sizeof (kBuiltins[0]));
-constexpr int kNumShowcase = 8;
+constexpr int kNumShowcase = 11;
 
 } // namespace
 

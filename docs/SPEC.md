@@ -374,10 +374,18 @@ goes through the retry path.
 
 | Use | Model | Temperature |
 |---|---|---|
-| Generate | `muse-spark-1.3` | 0.8 |
-| Change this node | `muse-spark-1.3` | 0.8 |
+| Generate (and Takes) | `muse-wonder-1.0` | 0.8 |
+| Change this node | `muse-wonder-1.0` | 0.8 |
 | Mutate | `muse-spark-1.3` | 0.9 |
-| Retry after compile/test failure | `muse-spark-1.3` | 0.15 |
+| Retry after compile/test failure | `muse-wonder-1.0` | 0.15 |
+
+Changed Nov 3 (14c): Generate, Change and retries moved to `muse-wonder-1.0`.
+In batch30 it took 16 s per patch on average, against 27–42 s for
+muse-spark-1.3, with no timeouts. It is fewer reese-like and costs about 3.5x
+as much per request (third-party price lists: $4 / $20 per M tokens in/out,
+against $1.25 / $4.25). Mutate stays on the cheaper model because it sends up
+to 5 requests at once. A settings file saved earlier is upgraded once
+(`modelDefaultsVersion`) unless the user typed another model.
 
 Model IDs and endpoint (`https://api.meta.ai/v1/chat/completions`,
 OpenAI-compatible) are configurable in settings, not hardcoded. The model is a
@@ -424,7 +432,8 @@ failure in the UI and keep the current patch playing.
 
 ### 6.6 Networking
 `juce::URL` on the worker thread (WinHTTP on Windows, NSURLSession on macOS,
-libcurl on Linux via `JUCE_USE_CURL=1`). 30 s timeout. In-flight requests are
+libcurl on Linux via `JUCE_USE_CURL=1`). 60 s timeout (30 s until Nov 3,
+when the larger 14c prompts made 16 of batch30's 30 first attempts time out). In-flight requests are
 cancelled and the worker joined in the processor destructor, so closing the DAW
 mid-request can't crash.
 
@@ -1082,6 +1091,31 @@ Each milestone has an exit test. Don't start the next until it passes.
     - one batch30 run with the larger Meta model for Generate, to compare
     - an LLM judge score ("does this patch match the prompt, 1–5") added to
       --batch, so accuracy is measured, not guessed
+    **Done Nov 3:** 11 worked examples in 10 categories (8 made from the
+    user's keepers), and the same 8 as built-in presets (23 in all). Also:
+    15 new recipes with a category line on every recipe, synonyms.md,
+    `--explain-prompt`, "Learn from my presets", and `--judge` with a fixed
+    judge model (`--judge-model`, default muse-spark-1.3) plus
+    `--batch --rejudge DIR`.
+    Advisor fixes:
+    - When no example matches, slot 1 comes from the best recipe's category
+      (acid gets the square bass, ocean waves get the fx texture). A bass
+      prompt's slot 2 is a bass of another kind.
+    - Pads raised 4–6 dB to sit with Velvet Pad.
+    - The timeout went to 60 s, and Generate moved to muse-wonder-1.0
+      (§6.3).
+    The Bloom pads lost their slow drift LFOs to meet the 300 ns poly budget;
+    the user chose that version.
+    batch30 (judge muse-spark-1.3):
+
+    | Run | Pass (first try) | Mean time | Judge | Reese-like |
+    |---|---|---|---|---|
+    | Before, spark | 30/30 (25) | 27 s | 3.70 | 12 |
+    | After, spark | 28/30 (16; 16 timeouts at 30 s) | 42 s | 3.86 | 11 |
+    | After, wonder | 30/30 (23) | 16 s | 4.03 | 9 |
+
+    diversity14 (spark, before → after): judge 3.64 → 3.54, reese-like
+    6/14 → 4/13.
 14d. **"How I understood it" card + web lookup (if time before the
     freeze):** before writing code, the model turns the prompt into a short,
     editable plan (source, filter, movement, grit, sub, mode, tempo), with
@@ -1093,6 +1127,24 @@ Each milestone has an exit test. Don't start the next until it passes.
     travel only at runtime in what the user typed; none go in the repo. The
     confirmed plan is appended to the normal Generate request, and its
     plain sound words also drive recipe matching.
+14f. **Modern genres (planned Nov 3, before the freeze):** the user can't get
+    modern-sounding riddim, tearout, jump-up, hyperpop, glitch-hop or color
+    bass even when guiding the model. Causes:
+    - Hyperpop, jump-up and color bass match no keyword.
+    - No recipe builds a wobble whose rate changes within the bar, which is
+      what makes riddim and dubstep sound current. Every wobble is one LFO on
+      one target.
+    - No recipe covers a distorted 808, hard-tuned pitch glides, a growl
+      tuned to a chord, or a tearout screech.
+    The plan has no engine or DSP changes; it is prompt resources and the CLI
+    only:
+    - `--phrase hold` and a genre16 prompt set, measured with --judge before
+      and after.
+    - About 10 genre recipes, plus synonyms.
+    - 7 candidate genre patches, rendered for the user. The keepers become
+      examples and built-in presets.
+    - A short "modern bass music" block in the system prompt.
+    Prompt: Pulsar-prompts/m14f-genres.md.
 14. **Sound pass 2.** The user designs presets by hand with M10–M12; the best
     become the LLM examples (via `--bake`). *Exit: the user keeps ≥ 10 of 15.*
 15. **Release polish.** README with Gatekeeper instructions, tagged GitHub
@@ -1122,6 +1174,9 @@ Nov 2: M14. Revised Nov 2: code may change until the submission deadline
 (Nov 4, 6 PM PST); Nov 3 is the last day to send questions to the organisers.
 Nov 3: 14e, 14c, 14d. Nov 4: code freeze at 12:00 PM PST, tag, release CI,
 demo video, submit by 5 PM (one hour of buffer).
+**Nov 3:** 14b, 14e and 14c are done. 14d is skipped (moved to 16 [LATER]),
+so the time goes to the README/DEMO refresh, the v1.0.0 tag and the demo video.
+Later Nov 3: 14f (modern genres) added before the tag; the tag waits for it.
 **Final roadmap (set Nov 2):** 14b (running) → 14e → 14c → 14d if time →
 M15 refresh (README, DEMO.md for every new feature), freeze at 12:00 PM PST
 on Nov 4, tag. Cut order if late: 14d first, then 14e; 14c stays. Every

@@ -6,7 +6,7 @@
 //
 // send() blocks its caller (the generation worker or vibesynth_cli) and
 // runs the request on a helper thread it always joins before returning.
-// While it waits it polls `cancel` and the 30 s deadline every 100 ms and,
+// While it waits it polls `cancel` and the 60 s deadline every 100 ms and,
 // on either, cancels the stream, so a processor destructor that cancels
 // and joins the worker never waits more than a moment.
 //
@@ -74,7 +74,7 @@ struct ChatReply
 class MetaClient
 {
 public:
-    static constexpr int kTimeoutMs = 30000;  // SPEC §6.6
+    static constexpr int kTimeoutMs = 60000;  // SPEC §6.6 (30 s until Nov 3: bigger prompts timed out)
 
     // `onWaiting` (optional) gets the elapsed seconds about every 100 ms,
     // on the calling thread.

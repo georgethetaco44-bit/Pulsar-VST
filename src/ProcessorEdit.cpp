@@ -215,14 +215,17 @@ void VibeSynthAudioProcessor::applyTakesResult (const vibesynth::MutateResult& r
         {
             v.state = vibesynth::MutateSlotView::State::Ready;
             auto r = std::make_shared<vibesynth::GenerationResult> (result.slots[(size_t) i]);
-            r->patch.name = r->patch.name + " (take " + std::to_string (i + 1) + ")";
             v.name = r->patch.name;
             v.text = "Ready";
             mutateResults[(size_t) i] = r;
 
+            // Only the History copy carries " (take k)"; the patch you Keep
+            // (and then Save) keeps the plain name.
+            auto historyPatch = r->patch;
+            historyPatch.name += " (take " + std::to_string (i + 1) + ")";
             juce::String histErr;
             const auto saved = vibesynth::PatchLibrary::addToHistory (
-                vibesynth::PatchLibrary::historyFolder(), r->patch, juce::Time::getCurrentTime(), histErr);
+                vibesynth::PatchLibrary::historyFolder(), historyPatch, juce::Time::getCurrentTime(), histErr);
             if (saved != juce::File())
                 ++historyVersion;
         }

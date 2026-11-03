@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "name": "Howling Bass",
+  "prompt": "huge analog square bass for drum and bass, mono, with glitch, snarl and crush macros",
+  "macros": [
+    {
+      "label": "Glitch",
+      "default": 0.0
+    },
+    {
+      "label": "Snarl",
+      "default": 0.0
+    },
+    {
+      "label": "Cutoff",
+      "default": 0.0
+    },
+    {
+      "label": "Reso",
+      "default": 1.0
+    },
+    {
+      "label": "Sub",
+      "default": 1.0
+    },
+    {
+      "label": "Wobble",
+      "default": 0.0
+    },
+    {
+      "label": "Crush",
+      "default": 0.0
+    },
+    {
+      "label": "Squash",
+      "default": 1.0
+    }
+  ],
+  "voiceMode": "mono",
+  "graph": {
+    "edges": [
+      [
+        "osc_square:0",
+        "flt_hp:0"
+      ],
+      [
+        "osc_square:1",
+        "flt_hp:0"
+      ],
+      [
+        "flt_hp:0",
+        "flt_lp:0"
+      ],
+      [
+        "flt_lp:0",
+        "fx_fold"
+      ],
+      [
+        "fx_fold",
+        "out"
+      ],
+      [
+        "osc_sine:0",
+        "out"
+      ],
+      [
+        "out",
+        "util_xover_lo:0"
+      ],
+      [
+        "util_xover_hi:0",
+        "fx_ott:0"
+      ]
+    ]
+  },
+  "code": {
+    "init": "dc = 0;",
+    "voice": "pw = 0.5 + 0.22 * sin(beat * 2 * $pi * 2) * m6;\npw = min(0.9, max(0.1, pw));\na = osc_square(0, ((freq) * 0.5028964705339267), pw);\nb = osc_square(1, ((freq * 1.008) * 0.4971202119087737), 1 - pw);\nmid = (a + b) * 0.5;\nmid = flt_hp(0, mid, 0.247, 0);\nlfo = sin(beat * 2 * $pi * 2);\ncut = 0.25 + m3 * 0.5 + lfo * m6 * 0.22;\ncut = min(1, max(0.05, cut));\nmid = flt_lp(0, mid, 0.364945, min(max((m4 * 0.85) + 0.22069, 0), 1));\nmid = fx_sat(mid * (1 + m2 * 2), 0.2 + m2 * 0.6);\nmid = fx_fold(mid, m2 * 0.7);\ndc += (mid - dc) * 20 / srate; mid -= dc;\nsub = osc_sine(0, ((freq) * 0.5028964705339267)) * m5;\nenv = env_adsr(0, gate, 0.05, 0.35, 0.9, 0.3);\nout = (sub * 0.9 + mid * 0.7) * env;",
+    "master": "lo = util_xover_lo(0, inl);\nhi = util_xover_hi(0);\nhi = fx_sat(hi * (1 + m2 * 3), 0.3 + m2 * 0.5);\nhi = fx_ott(0, hi, m8);\nhi = fx_crush(0, hi, m7 * 0.6 + m1 * 0.25, 1 - m7 * 0.5);\nhm = max(0.15, 1 - abs(lo));\ny = hm * fx_sat(hi * 1.5 / hm, 0) + lo;\n!ready ? (ready = 1; n = 65536; w = 0; r = 0; k = 0; last = -1; len = 2000; anchor = 0; rep = 0);\nmem[w] = y;\nstep = floor(beat * 4);\nstep != last ? (last = step; k = 0; tp = max(bpm, 20);\n  len = m1 > 0.65 ? floor(srate * 60 / tp / 16) : floor(srate * 60 / tp / 8);\n  len = min(8000, max(64, len));\n  rep = m1 > 0.65 ? 1 : (m1 > 0.25 ? ((step % 2) == 1) : 0);\n  anchor = (w - len + n) % n);\nkk = k % max(len, 1);\ned = max(1, srate * 0.0003);\ng = min(1, min(kk, len - kk) / ed);\ny = rep ? mem[(anchor + kk) % n] * g + y * (1 - g) * 0.2 : y;\nk += 1; w = (w + 1) % n;\noutl = y; outr = y;"
+  },
+  "trim": 0.670789
+}

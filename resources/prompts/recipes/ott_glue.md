@@ -1,4 +1,5 @@
 # OTT glue
+category: bass-reese
 keywords: ott, squash, squashed, compressed, compression, glue, loud, punchy, modern, upfront, aggressive, polished, crispy, space, wide, stereo, delay, echo, ping pong
 fx_ott is a 3-band upward + downward squash: detail up, bands even. Put it after the distortion, before the amp envelope; in a bass on the mid band only. On decaying sounds (plucks, keys) depth 0.3 at most and before any reverb, or it lifts noise and smear. For single-band feed-forward compression with automatic makeup, use fx_comp(slot, in, amount).
 ```eel

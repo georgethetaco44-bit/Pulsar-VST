@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "name": "Garage Chopper",
+  "prompt": "heavy square bass through an analog ladder filter, chopped speed garage wub, big subby low end with overtones",
+  "macros": [
+    {
+      "label": "Drive",
+      "default": 1.0
+    },
+    {
+      "label": "Cutoff",
+      "default": 0.0
+    },
+    {
+      "label": "Reso",
+      "default": 0.544982
+    },
+    {
+      "label": "Wobble",
+      "default": 0.0
+    },
+    {
+      "label": "Rate",
+      "default": 1.0
+    },
+    {
+      "label": "Punch",
+      "default": 0.0
+    },
+    {
+      "label": "Squash",
+      "default": 1.0
+    },
+    {
+      "label": "Sub",
+      "default": 1.0
+    }
+  ],
+  "voiceMode": "mono",
+  "graph": {
+    "edges": [
+      [
+        "osc_square:0",
+        "flt_ladder:0"
+      ],
+      [
+        "osc_square:1",
+        "flt_ladder:0"
+      ],
+      [
+        "flt_ladder:0",
+        "fx_sat"
+      ],
+      [
+        "fx_sat",
+        "flt_hp:0"
+      ],
+      [
+        "flt_hp:0",
+        "fx_comb:0"
+      ],
+      [
+        "fx_comb:0",
+        "fx_ott:0"
+      ],
+      [
+        "osc_sine:0",
+        "out"
+      ]
+    ]
+  },
+  "code": {
+    "init": "dc = 0;\ncr = 2;\ng = 1;",
+    "voice": "move = 0.25 + 0.75 * m1;\nper = m5 < 0.33 ? 1 : m5 < 0.66 ? 0.5 : 0.25;\nlfo = (mod_lfo(0, per, 0.25) - 0.5) * 2 * m4 * move;\nenv = env_adsr(0, gate, min(max((0.004) + 0.176159, 0), 1), min(max((0.25) + (-0.383016), 0), 1), min(max((0.9) + (-0.054716), 0), 1), min(max((0.35) + (-0.072955), 0), 1));\npenv = env_adsr(1, gate, min(max((0.0) + 1, 0), 1), 0.15, 0.0, 0.35);\nmodenv = env_adsr(2, gate, 0.270064, 0.053694, 0.0, 0.3);\npw = 0.5 + lfo * 0.12;\npw = min(0.85, max(0.15, pw));\nsrc = osc_square(0, freq * 1.003, pw) * 0.55 + osc_square(1, freq * 0.997, pw) * 0.55 + osc_square(2, freq * 0.5, 0.5) * 0.35;\nsrc += osc_tri(0, freq * 2) * penv * m6 * 0.6;\ncut = 0.15 + (m2 + modenv * 0.322728) * 0.4 + env * (0.1 + m6 * 0.2) + lfo * 0.22;\ncut = min(0.9, max(0.06, cut));\nf = flt_ladder(0, src, cut, 0.15 + m3 * 0.65);\ns1 = fx_sat(f, 0);\ny = fx_shape(s1, 0, 0.133333);\ndc += (y - dc) * 20 / srate; y -= dc;\nmid0 = flt_hp(0, y, min(max((0.27) + 0.208721, 0), 1), 0);\nst = floor(beat * 4) % 4;\ntg = st == 0 ? 2 : st == 1 ? 3 : st == 2 ? 1.5 : 4;\ncr += (2 + (tg - 2) * (0.3 + 0.7 * m1) - cr) * 0.02;\ncb = fx_comb(0, mid0, max(10, freq * cr), 0.3 + m1 * 0.45);\ncmix = (0.25 + m4 * 0.6) * move;\nmid1 = mid0 + cb * cmix;\nph = beat * 4 - floor(beat * 4);\ngdep = m4 * move;\ngt = (ph < 0.6 || gdep < 0.05) ? 1 : 1 - gdep * 0.7;\ng += (gt - g) * 0.02;\nmid = fx_sat(fx_ott(0, mid1, min(max((0.3 + m7 * 0.5) + 1, 0), 1)), 0.35);\nsub = osc_sine(0, ((freq) * 0.4942570101764481));\nout = (sub * m8 * 0.5 + mid * 0.5) * env * (0.5 + vel * 0.5) * g;",
+    "master": "loL = util_xover_lo(0, inl);\nhiL = util_xover_hi(0);\nloR = util_xover_lo(1, inr);\nhiR = util_xover_hi(1);\nhiL = fx_comp(0, hiL, 0.3);\nhiR = fx_comp(1, hiR, 0.3);\noutl = loL + hiL;\noutr = loR + hiR;"
+  },
+  "trim": 0.470798
+}

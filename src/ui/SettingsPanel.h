@@ -40,6 +40,7 @@ private:
 
     VibeSynthAudioProcessor& processor;
     juce::TextEditor keyEditor, endpointEditor, generateEditor, mutateEditor, retryEditor;
+    juce::ToggleButton learnToggle { "Learn from my presets" };
     juce::TextButton saveButton { "Save" }, closeButton { "Close" }, testButton { "Test key" };
     VibeSynthAudioProcessor::KeyTest keyTest;
     juce::Rectangle<int> keyResultArea;
