@@ -30,6 +30,7 @@ void runM14eSnapshots (VibeSynthAudioProcessorEditor& editor,
     v.numSlots = 3;
     v.auditioning = 0;
     v.baseName = "Reese";
+    v.takes = true;
     v.slots[0] = { State::Ready, "Literal", "Riddim Square", "Ready", "" };
     v.slots[1] = { State::Failed, "Alt source", "", "Compile failed: line 7: unknown identifier 'flt_wobble'", "line 7: unknown identifier 'flt_wobble'" };
     v.slots[2] = { State::Ready, "Alt motion", "Wobble Pulse", "Ready", "" };

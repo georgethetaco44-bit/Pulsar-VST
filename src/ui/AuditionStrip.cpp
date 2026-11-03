@@ -152,6 +152,8 @@ void AuditionStrip::startCardSave (int slot)
     juce::String defaultName;
     if (c.savedName.isNotEmpty())
         defaultName = c.savedName;
+    else if (view.takes)  // a take is a new sound: default to its own name, without " (take k)"
+        defaultName = juce::String (view.slots[(size_t) slot].name).upToLastOccurrenceOf (" (take ", false, false);
     else
         defaultName = juce::String (view.baseName) + " " + juce::String (view.slots[(size_t) slot].direction);
     c.nameEditor.setText (defaultName, false);
@@ -374,7 +376,8 @@ void AuditionStrip::paint (juce::Graphics& g)
     auto title = titleRow;
     g.setColour (dimText);
     g.setFont (font (captionSize, Weight::SemiBold).withExtraKerningFactor (0.12f));
-    juce::String caption = "VARIATIONS OF " + juce::String (view.baseName).toUpperCase();
+    juce::String caption = view.takes ? juce::String ("NEW TAKES")
+                                      : "VARIATIONS OF " + juce::String (view.baseName).toUpperCase();
     g.drawText (caption, title.removeFromLeft (grid * 40), juce::Justification::centredLeft);
 
     const int n = view.activeSlots();

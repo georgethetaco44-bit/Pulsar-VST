@@ -204,6 +204,7 @@ void VibeSynthAudioProcessor::applyTakesResult (const vibesynth::MutateResult& r
     mutateView.auditioning = -1;
     mutateView.numSlots = numTakes;
     mutateView.baseName = mutateOriginal.patch.name;
+    mutateView.takes = true;
     mutateView.startedMs = juce::Time::getMillisecondCounterHiRes();
 
     for (int i = 0; i < numTakes; ++i)

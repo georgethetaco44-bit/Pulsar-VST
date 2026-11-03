@@ -157,7 +157,7 @@ void MacroKnob::showModMenu()
         m.addItem (1, juce::String::fromUTF8 ("Set range\xe2\x80\xa6"));
 
     if (hasRange)
-        m.addItem (2, "Reset range (0.00 – 1.00)");
+        m.addItem (2, juce::String::fromUTF8 ("Reset range (0.00 \xe2\x80\x93 1.00)"));
 
     m.addSeparator();
     m.addSectionHeader ("Modulation");

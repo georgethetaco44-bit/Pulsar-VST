@@ -106,7 +106,7 @@ Type a description of your sound into the prompt bar at the top (e.g. *"gritty n
 #### Takes (1 to 4)
 Under the **Generate** button, select how many takes to produce (1, 2, 3, or 4; default is 1, saved in settings).
 - **1 take:** Generates a single patch directly into the editor as usual.
-- **2 to 4 takes:** Generates $N$ takes in parallel, each exploring a different angle:
+- **2 to 4 takes:** Generates that many takes in parallel, each exploring a different angle:
   - **Take 1 (Literal):** The most literal reading of the request.
   - **Take 2 (Alt source):** The same intent built on a different main sound source (square/pulse, FM, wavetable, sync, noise, or a physical model).
   - **Take 3 (Alt motion):** A different rhythm or style of movement.

@@ -13,7 +13,7 @@
 - **Action:** Select **3** takes below Generate. Type into the prompt bar:  
   `huge analog reese into a ladder filter with warm saturation and sub pressure`  
   Press **Enter** (or click **Generate**). Generate 3 takes, audition, Keep one.
-- **Visual Details:** Status line pulses: `"Generating 3 takes: waiting for model"`. As the 3 takes compile and validate in parallel, the **Audition Strip** opens displaying the original playing patch alongside the 3 new takes (Literal, Alt source, Alt motion). Click each take card to audition seamlessly while playing notes; click **Keep** on Take 2.
+- **Visual Details:** The status line shows progress. As the 3 takes compile and validate in parallel, the **Audition Strip** opens displaying the original playing patch alongside the 3 new takes (Literal, Alt source, Alt motion). Click each take card to audition seamlessly while playing notes; click **Keep** on Take 2.
 - **Voiceover:**  
   *"This is Pulsar—an AI synthesiser that doesn't just load presets or tweak pre-built wavetables. When you describe a sound, it writes real-time sample-rate DSP code on the fly. We select 3 takes, type 'huge analog reese into a ladder filter', hit Enter, and Pulsar generates three distinct takes in parallel—a literal reading, an alternative sound source, and a different rhythmic motion. We audition them live in the audition strip, and click Keep on our favorite."*
 

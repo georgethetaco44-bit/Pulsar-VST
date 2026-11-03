@@ -120,7 +120,7 @@ PromptPanel::PromptPanel()
         b.setConnectedEdges ((i > 0 ? juce::Button::ConnectedOnLeft : 0)
                              | (i < 3 ? juce::Button::ConnectedOnRight : 0));
         b.setClickingTogglesState (false);
-        b.setTooltip ("Number of takes to generate (1–4)");
+        b.setTooltip (juce::String::fromUTF8 ("Number of takes to generate (1\xe2\x80\x934)"));
         b.onClick = [this, i]
         {
             setTakes (i + 1);

@@ -1044,6 +1044,15 @@ Each milestone has an exit test. Don't start the next until it passes.
     strip against the patch that was playing before; Keep, Discard and the
     per-card Save… work as in Mutate. Every passing take is also written to
     History.
+    **Done Nov 2** (its code landed in the M14b commit c8294a7; the advisor
+    fixes are in the next commit): the Takes selector, runTakes on the shared
+    slot runner, the strip titled "NEW TAKES" (a take's Save… defaults to its
+    own name), `--batch --takes N` with main oscillators per take, and the
+    task 0 fix (cutoffs take Hz/kHz; in Offset mode, typed Hz switches the knob
+    to Replace; a wrong unit flashes red). API run of 3 prompts × 3 takes: 8/9
+    first try, 9/9 with retries, about 7k tokens per request, 22–53 s per
+    prompt. Take 2 used a different main source from take 1 in all 3 prompts;
+    take 3 kept take 1's source. Smoke 439/0, strict selftest 125/0.
 14c. **Wider lexicon (planned Nov 3):** the user's problem: most prompts come
     back reese-like. Causes found Nov 2:
     - Only 3 worked examples (reese bass, pluck, FM texture). Two are sent
