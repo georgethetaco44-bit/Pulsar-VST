@@ -44,18 +44,38 @@ public:
     std::function<void()> onKeep;
     std::function<void()> onDiscard;
     std::function<void()> onStop;
+    std::function<bool (int slot, const juce::String& name, bool overwrite, juce::String& error)> onSaveVariation;
+
+    void showCardSavedForSnapshot (int slot, const juce::String& name);
 
     juce::TextButton keepButton { "Keep" };
     juce::TextButton discardButton { "Discard" };
     juce::TextButton stopButton { "Stop" };
 
 private:
-    int cardAt (juce::Point<int> p) const;  // -1 original, 0..3 slots, -2 none
+    enum class CardMode { Normal, Naming, ConfirmReplace };
+    struct CardUi
+    {
+        CardMode mode = CardMode::Normal;
+        juce::String savedName;
+        juce::String pendingName;
+        juce::TextButton saveButton { juce::String::fromUTF8 ("Save\xe2\x80\xa6") };
+        juce::TextEditor nameEditor;
+        juce::TextButton confirmButton { "Save" };
+        juce::TextButton cancelButton { "Cancel" };
+    };
+
+    int cardAt (juce::Point<int> p) const;  // -1 original, 0..4 slots, -2 none
     void paintCard (juce::Graphics& g, int card, juce::Rectangle<int> r) const;
     void updateButtons();
+    void updateCardComponents();
+    void startCardSave (int slot);
+    void confirmCardSave (int slot);
+    void cancelCardSave (int slot);
 
     MutateView view;
     std::array<juce::Rectangle<int>, MutateView::kSlots + 1> cards;  // [0] = original
+    std::array<CardUi, MutateView::kSlots> cardUis;
     juce::Rectangle<int> titleRow;
     int hover = -2;
     int seconds = 0;

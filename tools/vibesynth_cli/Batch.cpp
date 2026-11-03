@@ -33,6 +33,7 @@
 #include "Render.h"
 #include "ai/AiSettings.h"
 #include "ai/Generator.h"
+#include "ai/Mutator.h"
 #include "ai/PromptBuilder.h"
 #include "patch/Patch.h"
 
@@ -99,6 +100,98 @@ double pct (int n, int total)
     return total > 0 ? 100.0 * n / total : 0.0;
 }
 
+std::string mainOscillatorFunctions (const vibesynth::Patch& patch)
+{
+    static const char* const kOscs[] = {
+        "osc_sine", "osc_saw", "osc_tri", "osc_square", "osc_supersaw",
+        "osc_wt", "osc_fm", "osc_sync", "noise", "phys_resonator", "phys_string"
+    };
+    std::string code = patch.voice;
+    std::vector<std::string> found;
+    size_t i = 0;
+    const size_t n = code.size();
+    while (i < n)
+    {
+        if (code[i] == '/' && i + 1 < n && code[i + 1] == '/')
+        {
+            i += 2;
+            while (i < n && code[i] != '\n') ++i;
+            continue;
+        }
+        if (code[i] == '/' && i + 1 < n && code[i + 1] == '*')
+        {
+            i += 2;
+            while (i + 1 < n && ! (code[i] == '*' && code[i + 1] == '/')) ++i;
+            if (i + 1 < n) i += 2;
+            continue;
+        }
+        if (code[i] == '"')
+        {
+            ++i;
+            while (i < n && code[i] != '"')
+            {
+                if (code[i] == '\\' && i + 1 < n) ++i;
+                ++i;
+            }
+            if (i < n) ++i;
+            continue;
+        }
+        if ((code[i] >= 'a' && code[i] <= 'z') || (code[i] >= 'A' && code[i] <= 'Z') || code[i] == '_')
+        {
+            const size_t start = i;
+            while (i < n && ((code[i] >= 'a' && code[i] <= 'z') || (code[i] >= 'A' && code[i] <= 'Z')
+                             || (code[i] >= '0' && code[i] <= '9') || code[i] == '_'))
+                ++i;
+            const std::string ident = code.substr (start, i - start);
+            size_t j = i;
+            while (j < n && (code[j] == ' ' || code[j] == '\t' || code[j] == '\r' || code[j] == '\n'))
+                ++j;
+            if (j < n && code[j] == '(')
+            {
+                for (const char* osc : kOscs)
+                {
+                    if (ident == osc)
+                    {
+                        if (std::find (found.begin(), found.end(), ident) == found.end())
+                            found.push_back (ident);
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        ++i;
+    }
+    if (found.empty())
+        return "none";
+    std::string res;
+    for (size_t fi = 0; fi < found.size(); ++fi)
+    {
+        if (fi > 0) res += ", ";
+        res += found[fi];
+    }
+    return res;
+}
+
+void writeAttemptFile (const juce::File& file, const std::string& prompt, size_t k, const vibesynth::GenerationAttempt& a)
+{
+    std::string header = "# prompt: " + prompt + "\n# attempt " + std::to_string (k + 1) + ": " + a.stage
+                       + " (" + a.status + "), temperature " + juce::String (a.temperature, 2).toStdString()
+                       + ", tokens " + std::to_string (a.promptTokens) + " + "
+                       + std::to_string (a.completionTokens) + " (" + std::to_string (a.reasoningTokens)
+                       + " reasoning), "
+                       + juce::String (a.requestSeconds, 1).toStdString() + " s\n";
+    if (! a.reason.empty())
+        header += "# reason: " + shorten (a.reason, 1000) + "\n";
+    for (const auto& n : a.notes)
+        header += "# note: " + n + "\n";
+    header += "# recipes: " + juce::StringArray ([&] { juce::StringArray s; for (auto& r : a.recipes) s.add (r); return s; }())
+                                  .joinIntoString (", ").toStdString()
+            + "; examples: " + juce::StringArray ([&] { juce::StringArray s; for (auto& e : a.examples) s.add (e); return s; }())
+                                   .joinIntoString (", ").toStdString() + "\n\n";
+    file.replaceWithText (juce::String::fromUTF8 ((header + a.reply).c_str()));
+}
+
 } // namespace
 
 int runBatch (int argc, char** argv, int oversampling)
@@ -108,6 +201,7 @@ int runBatch (int argc, char** argv, int oversampling)
         return 2;
     const juce::File promptsFile = juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (argv[0]));
     int limit = -1;
+    int takes = 1;
     juce::File outDir;
     std::string endpoint, model, effort;
     bool effortSet = false;
@@ -118,6 +212,8 @@ int runBatch (int argc, char** argv, int oversampling)
             limit = juce::String (argv[++i]).getIntValue();
         else if (opt == "--out" && i + 1 < argc)
             outDir = juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (argv[++i]));
+        else if (opt == "--takes" && i + 1 < argc)
+            takes = std::clamp (juce::String (argv[++i]).getIntValue(), 1, 4);
         else if (opt == "--endpoint" && i + 1 < argc)
             endpoint = argv[++i];
         else if (opt == "--model" && i + 1 < argc)
@@ -195,85 +291,148 @@ int runBatch (int argc, char** argv, int oversampling)
         std::snprintf (prefix, sizeof (prefix), "%02d", (int) pi + 1);
         const std::string stem = std::string (prefix) + "_" + slugOf (prompt);
 
-        GenerationRequest req;
-        req.prompt = prompt;
-        req.config = cfg;
-        req.apiKey = key;
-        const GenerationResult res = Generator::run (req, nullptr);
-
-        for (size_t k = 0; k < res.attempts.size(); ++k)
+        if (takes <= 1)
         {
-            const GenerationAttempt& a = res.attempts[k];
-            std::string header = "# prompt: " + prompt + "\n# attempt " + std::to_string (k + 1) + ": " + a.stage
-                               + " (" + a.status + "), temperature " + juce::String (a.temperature, 2).toStdString()
-                               + ", tokens " + std::to_string (a.promptTokens) + " + "
-                               + std::to_string (a.completionTokens) + " (" + std::to_string (a.reasoningTokens)
-                               + " reasoning), "
-                               + juce::String (a.requestSeconds, 1).toStdString() + " s\n";
-            if (! a.reason.empty())
-                header += "# reason: " + shorten (a.reason, 1000) + "\n";
-            for (const auto& n : a.notes)
-                header += "# note: " + n + "\n";
-            header += "# recipes: " + juce::StringArray ([&] { juce::StringArray s; for (auto& r : a.recipes) s.add (r); return s; }())
-                                          .joinIntoString (", ").toStdString()
-                    + "; examples: " + juce::StringArray ([&] { juce::StringArray s; for (auto& e : a.examples) s.add (e); return s; }())
-                                           .joinIntoString (", ").toStdString() + "\n\n";
-            outDir.getChildFile (stem + "_a" + std::to_string (k + 1) + ".txt")
-                .replaceWithText (juce::String::fromUTF8 ((header + a.reply).c_str()));
-            promptTokens += a.promptTokens;
-            completionTokens += a.completionTokens;
-            reasoningTokens += a.reasoningTokens;
-            if (k == 0 && a.promptTokens > 0)
-            {
-                firstRequestTokens += a.promptTokens;
-                ++firstRequests;
-            }
-            if (a.stage != "ok")
-            {
-                ++histogram[a.stage][a.status];
-                reasons.push_back (std::string (prefix) + "." + std::to_string (k + 1) + " " + a.stage + ": "
-                                   + shorten (a.reason, 220));
-            }
-            if (a.stage == "weight")
-                ++weightHints;
-        }
-        seconds += res.seconds;
+            GenerationRequest req;
+            req.prompt = prompt;
+            req.config = cfg;
+            req.apiKey = key;
+            const GenerationResult res = Generator::run (req, nullptr);
 
-        const int at = firstPassing (res);
-        std::string rendered;
-        if (at >= 0)
-        {
-            ++passAt[at];
-            if (res.reason.rfind ("kept the heavier", 0) == 0)
-                ++kept;
-            const juce::File patchFile = outDir.getChildFile (stem + ".pulsar");
-            patchFile.replaceWithText (juce::String::fromUTF8 (serializePatch (res.patch).c_str()));
-            const juce::File wav = outDir.getChildFile (stem + ".wav");
-            const bool riff = builder.isBassPrompt (prompt);
-            std::string a0 = patchFile.getFullPathName().toStdString(), a1 = wav.getFullPathName().toStdString();
-            std::string a2 = "--phrase", a3 = riff ? "riff" : "default";
-            char* rargs[] = { a0.data(), a1.data(), a2.data(), a3.data() };
-            const int rc = runRender (4, rargs, oversampling);
-            rendered = rc == 0 ? (riff ? "riff" : "default") : "render failed";
+            for (size_t k = 0; k < res.attempts.size(); ++k)
+            {
+                const GenerationAttempt& a = res.attempts[k];
+                writeAttemptFile (outDir.getChildFile (stem + "_a" + std::to_string (k + 1) + ".txt"),
+                                  prompt, k, a);
+                promptTokens += a.promptTokens;
+                completionTokens += a.completionTokens;
+                reasoningTokens += a.reasoningTokens;
+                if (k == 0 && a.promptTokens > 0)
+                {
+                    firstRequestTokens += a.promptTokens;
+                    ++firstRequests;
+                }
+                if (a.stage != "ok")
+                {
+                    ++histogram[a.stage][a.status];
+                    reasons.push_back (std::string (prefix) + "." + std::to_string (k + 1) + " " + a.stage + ": "
+                                       + shorten (a.reason, 220));
+                }
+                if (a.stage == "weight")
+                    ++weightHints;
+            }
+            seconds += res.seconds;
+
+            const int at = firstPassing (res);
+            std::string rendered;
+            if (at >= 0)
+            {
+                ++passAt[at];
+                if (res.reason.rfind ("kept the heavier", 0) == 0)
+                    ++kept;
+                const juce::File patchFile = outDir.getChildFile (stem + ".pulsar");
+                patchFile.replaceWithText (juce::String::fromUTF8 (serializePatch (res.patch).c_str()));
+                const juce::File wav = outDir.getChildFile (stem + ".wav");
+                const bool riff = builder.isBassPrompt (prompt);
+                std::string a0 = patchFile.getFullPathName().toStdString(), a1 = wav.getFullPathName().toStdString();
+                std::string a2 = "--phrase", a3 = riff ? "riff" : "default";
+                char* rargs[] = { a0.data(), a1.data(), a2.data(), a3.data() };
+                const int rc = runRender (4, rargs, oversampling);
+                rendered = rc == 0 ? (riff ? "riff" : "default") : "render failed";
+            }
+            else
+            {
+                ++failed;
+            }
+
+            const int n = static_cast<int> (res.attempts.size());
+            log.line ("[%s] %s  attempts %d  ns %4.0f/%-4.0f  tokens %6d + %5d  %5.1f s  %-22s %s%s", prefix,
+                      at >= 0 ? "PASS" : "FAIL", n, res.voiceNs, res.voiceBudgetNs, res.promptTokens(),
+                      res.completionTokens(), res.seconds, at >= 0 ? shorten (res.patch.name, 22).c_str() : "-",
+                      shorten (prompt, 60).c_str(),
+                      at >= 0 ? (" [" + rendered + "]" + (res.reason.empty() ? "" : " (" + shorten (res.reason, 120) + ")")).c_str()
+                              : ("  <- " + shorten (res.reason, 160)).c_str());
         }
         else
         {
-            ++failed;
-        }
+            TakesRequest treq;
+            treq.prompt = prompt;
+            treq.takes = takes;
+            treq.config = cfg;
+            treq.apiKey = key;
+            const MutateResult res = Mutator::runTakes (treq, nullptr);
+            const auto dirs = Mutator::buildTakeDirections (takes);
+            seconds += res.seconds;
 
-        const int n = static_cast<int> (res.attempts.size());
-        log.line ("[%s] %s  attempts %d  ns %4.0f/%-4.0f  tokens %6d + %5d  %5.1f s  %-22s %s%s", prefix,
-                  at >= 0 ? "PASS" : "FAIL", n, res.voiceNs, res.voiceBudgetNs, res.promptTokens(),
-                  res.completionTokens(), res.seconds, at >= 0 ? shorten (res.patch.name, 22).c_str() : "-",
-                  shorten (prompt, 60).c_str(),
-                  at >= 0 ? (" [" + rendered + "]" + (res.reason.empty() ? "" : " (" + shorten (res.reason, 120) + ")")).c_str()
-                          : ("  <- " + shorten (res.reason, 160)).c_str());
+            log.line ("[%s] takes %d/%d passed  tokens %6d + %5d  %5.1f s  %s", prefix,
+                      res.passed(), takes, res.promptTokens(), res.completionTokens(), res.seconds,
+                      shorten (prompt, 60).c_str());
+
+            for (size_t t = 0; t < res.slots.size(); ++t)
+            {
+                const GenerationResult& s = res.slots[t];
+                const std::string takePrefix = stem + "_take" + std::to_string (t + 1);
+
+                for (size_t k = 0; k < s.attempts.size(); ++k)
+                {
+                    const GenerationAttempt& a = s.attempts[k];
+                    writeAttemptFile (outDir.getChildFile (takePrefix + "_a" + std::to_string (k + 1) + ".txt"),
+                                      prompt + " (" + dirs[t].label + ")", k, a);
+                    promptTokens += a.promptTokens;
+                    completionTokens += a.completionTokens;
+                    reasoningTokens += a.reasoningTokens;
+                    if (k == 0 && a.promptTokens > 0)
+                    {
+                        firstRequestTokens += a.promptTokens;
+                        ++firstRequests;
+                    }
+                    if (a.stage != "ok")
+                    {
+                        ++histogram[a.stage][a.status];
+                        reasons.push_back (std::string (prefix) + ".t" + std::to_string (t + 1) + "."
+                                           + std::to_string (k + 1) + " " + a.stage + ": " + shorten (a.reason, 220));
+                    }
+                    if (a.stage == "weight")
+                        ++weightHints;
+                }
+
+                const int at = firstPassing (s);
+                std::string rendered;
+                if (at >= 0)
+                {
+                    ++passAt[at];
+                    if (s.reason.rfind ("kept the heavier", 0) == 0)
+                        ++kept;
+                    const juce::File patchFile = outDir.getChildFile (takePrefix + ".pulsar");
+                    patchFile.replaceWithText (juce::String::fromUTF8 (serializePatch (s.patch).c_str()));
+                    const juce::File wav = outDir.getChildFile (takePrefix + ".wav");
+                    const bool riff = builder.isBassPrompt (prompt);
+                    std::string a0 = patchFile.getFullPathName().toStdString(), a1 = wav.getFullPathName().toStdString();
+                    std::string a2 = "--phrase", a3 = riff ? "riff" : "default";
+                    char* rargs[] = { a0.data(), a1.data(), a2.data(), a3.data() };
+                    const int rc = runRender (4, rargs, oversampling);
+                    rendered = rc == 0 ? (riff ? "riff" : "default") : "render failed";
+                }
+                else
+                {
+                    ++failed;
+                }
+
+                const int retries = std::max (0, static_cast<int> (s.attempts.size()) - 1);
+                const std::string oscs = s.ok ? mainOscillatorFunctions (s.patch) : "-";
+                log.line ("     take %d (%s): %s  retries %d  oscs [%s]%s%s",
+                          (int) t + 1, dirs[t].label.c_str(), s.ok ? "PASS" : "FAIL", retries,
+                          oscs.c_str(),
+                          s.ok ? ("  \"" + shorten (s.patch.name, 22) + "\" [" + rendered + "]").c_str() : "",
+                          s.ok ? "" : ("  <- " + shorten (s.reason, 120)).c_str());
+            }
+        }
     }
 
-    const int total = static_cast<int> (prompts.size());
+    const int total = static_cast<int> (prompts.size()) * (takes >= 2 ? takes : 1);
     const int first = passAt[0], one = passAt[0] + passAt[1], two = one + passAt[2];
     log.line ("");
-    log.line ("== totals (%d prompts) ==", total);
+    log.line ("== totals (%d %s) ==", total, takes >= 2 ? "takes" : "prompts");
     log.line ("pass first try    %2d/%d  %5.1f %%", first, total, pct (first, total));
     log.line ("pass <= 1 retry   %2d/%d  %5.1f %%", one, total, pct (one, total));
     log.line ("pass <= 2 retries %2d/%d  %5.1f %%   (exit: >= 70 %%)", two, total, pct (two, total));

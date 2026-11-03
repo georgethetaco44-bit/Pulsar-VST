@@ -28,19 +28,30 @@ struct MutateSlotView
 
 struct MutateView
 {
-    static constexpr int kSlots = 4;
+    static constexpr int kSlots = 5;
 
     bool open = false;       // the strip is shown (a session exists)
     bool running = false;    // requests or tests still in flight
     int auditioning = -1;    // the slot playing; -1 = the original
+    int numSlots = kSlots;   // M14b: number of active variation slots (1..kSlots)
     std::string baseName;    // the patch the variations come from
     double startedMs = 0.0;  // juce::Time::getMillisecondCounterHiRes() at Mutate
     std::array<MutateSlotView, kSlots> slots;
 
+    int activeSlots() const noexcept
+    {
+        if (numSlots > 0 && numSlots <= kSlots)
+            return numSlots;
+        int n = 0;
+        while (n < kSlots && slots[(size_t) n].state != MutateSlotView::State::Empty)
+            ++n;
+        return n > 0 ? n : kSlots;
+    }
+
     bool operator== (const MutateView& o) const
     {
-        return open == o.open && running == o.running && auditioning == o.auditioning && baseName == o.baseName
-            && slots == o.slots;  // startedMs changes only with the slots
+        return open == o.open && running == o.running && auditioning == o.auditioning && numSlots == o.numSlots
+            && baseName == o.baseName && slots == o.slots;  // startedMs changes only with the slots
     }
     bool operator!= (const MutateView& o) const { return ! (*this == o); }
 };

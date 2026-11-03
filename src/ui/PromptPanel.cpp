@@ -111,6 +111,26 @@ PromptPanel::PromptPanel()
     actionButton.onClick = [this] { actionClicked(); };
     addAndMakeVisible (actionButton);
 
+    // M14e: Takes selector (1 2 3 4) in the empty space under Generate
+    for (int i = 0; i < 4; ++i)
+    {
+        auto& b = takesButtons[(size_t) i];
+        b.setButtonText (juce::String (i + 1));
+        setButtonStyle (b, ButtonStyle::Segment);
+        b.setConnectedEdges ((i > 0 ? juce::Button::ConnectedOnLeft : 0)
+                             | (i < 3 ? juce::Button::ConnectedOnRight : 0));
+        b.setClickingTogglesState (false);
+        b.setTooltip ("Number of takes to generate (1–4)");
+        b.onClick = [this, i]
+        {
+            setTakes (i + 1);
+            if (onTakesChanged)
+                onTakesChanged (takes_);
+        };
+        addAndMakeVisible (b);
+    }
+    updateTakesButtons();
+
     // M11: Mutate and Undo.
     setButtonStyle (mutateButton, ButtonStyle::Ghost);
     mutateButton.onClick = [this]
@@ -159,6 +179,18 @@ void PromptPanel::actionClicked()
     }
 }
 
+void PromptPanel::setTakes (int t)
+{
+    takes_ = std::clamp (t, 1, 4);
+    updateTakesButtons();
+}
+
+void PromptPanel::updateTakesButtons()
+{
+    for (int i = 0; i < 4; ++i)
+        takesButtons[(size_t) i].setToggleState (i + 1 == takes_, juce::dontSendNotification);
+}
+
 void PromptPanel::setState (const HeaderState& s)
 {
     state = s;
@@ -182,6 +214,11 @@ void PromptPanel::setState (const HeaderState& s)
     prompt.setVisible (! card);
     actionButton.setVisible (! card);
     addKeyButton.setVisible (card);
+    for (auto& b : takesButtons)
+    {
+        b.setVisible (! card);
+        b.setEnabled (! s.generating && s.canGenerate);
+    }
     // M11
     mutateButton.setVisible (! card);
     mutateButton.setEnabled (s.canMutate);
@@ -251,11 +288,19 @@ void PromptPanel::resized()
     auto mutateArea = top.removeFromRight (grid * 12);
     mutateButton.setBounds (mutateArea);
     top.removeFromRight (grid);
-    actionButton.setBounds (top.removeFromRight (grid * 14));
+    auto actionArea = top.removeFromRight (grid * 14);
+    actionButton.setBounds (actionArea);
     top.removeFromRight (grid * 2);
     prompt.setBounds (top);
     r.removeFromTop (grid);
     status.setBounds (r.withWidth (prompt.getWidth()).withHeight (grid * 3));
+
+    // M14e: Takes selector (1 2 3 4) in the empty space under Generate
+    auto takesArea = actionArea.withY (r.getY()).withHeight (grid * 3);
+    const int btnW = takesArea.getWidth() / 4;
+    for (int i = 0; i < 4; ++i)
+        takesButtons[(size_t) i].setBounds (i == 3 ? takesArea : takesArea.removeFromLeft (btnW));
+
     undoButton.setBounds (mutateArea.withY (r.getY()).withHeight (grid * 3));
 }
 

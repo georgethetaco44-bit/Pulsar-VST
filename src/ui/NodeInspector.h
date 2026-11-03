@@ -32,6 +32,7 @@
 #include "patch/PatchTweaks.h"
 #include "ui/ModStrip.h"
 #include "ui/Theme.h"
+#include "ui/ValueEditorOverlay.h"
 
 class VibeSynthAudioProcessor;
 
@@ -86,6 +87,7 @@ public:
     std::function<void()> onUnmap;
     std::function<void (ModSource, double)> onAssignMod;
     std::function<void()> onRemoveMod;
+    std::function<void()> onTypeValue;
     // Fills the right-click menu (the inspector knows the macro labels).
     std::function<void (juce::PopupMenu&)> buildMenu;
 
@@ -101,6 +103,13 @@ public:
 
     juce::PopupMenu menu();          // what right-click shows
     void showMenu();                 // right-click (also the snapshot tool)
+    juce::Rectangle<int> getValueBounds() const;
+    juce::String formatCurrent() const;
+    void switchToReplace (double replaceValue);
+    bool replaceShown() const noexcept
+    {
+        return mode == ArgMode::Replace || (mode == ArgMode::None && replaceSelected);
+    }
     const LexiconArg& arg() const noexcept { return meta; }
     int index() const noexcept { return argIndex; }
     double liveValue() const noexcept { return live; }
@@ -114,10 +123,6 @@ private:
     void modeClicked (bool replace);
     juce::String format (double v, bool offset) const;
     double toNorm (double v) const;  // a value in [lo, hi] to 0..1 on the knob's scale
-    bool replaceShown() const noexcept
-    {
-        return mode == ArgMode::Replace || (mode == ArgMode::None && replaceSelected);
-    }
 
     InspectorKnobLook look;
     LexiconArg meta;
@@ -165,6 +170,9 @@ public:
 
     // Snapshot tool: opens a knob's right-click menu inside the editor.
     void showMapMenu (int knobIndex);
+    void openTypeValueEditorForKnob (ArgKnob* k);
+    void openTypeValueEditorForSnapshot (int knobIndex);
+    void closeTypeValueEditorForSnapshot();
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -184,6 +192,7 @@ private:
     juce::TextEditor changeBox;
     juce::TextButton sendButton { "Send" };
     TraceDisplay trace;
+    ValueEditorOverlay valueEditor;
     std::vector<std::unique_ptr<ArgKnob>> knobs;
     juce::Rectangle<int> titleArea, traceArea, knobArea;
     bool changeEnabled = false;

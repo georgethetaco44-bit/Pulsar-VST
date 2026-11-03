@@ -48,6 +48,20 @@ struct MutateRequest
     double maxBackoffSeconds = 20.0;
 };
 
+// M14e Takes request (SPEC §9.7, §13 item 14e).
+struct TakesRequest
+{
+    std::string prompt;
+    int takes = 1;                  // 1..4
+    AiConfig config;
+    std::string apiKey;             // held in memory only
+    double sampleRate = 48000.0;
+    std::function<ChatReply (const ChatRequest&, const std::atomic<bool>* cancel)> transport;
+    std::function<double (const Patch&)> measureVoice;
+    double backoffSeconds = 2.0;
+    double maxBackoffSeconds = 20.0;
+};
+
 struct MutateResult
 {
     std::vector<MutateDirection> directions;  // per slot
@@ -81,15 +95,29 @@ MutateBase prepareMutateBase (const Patch& active);
 class Mutator
 {
 public:
-    static constexpr int kSlots = 4;
+    static constexpr int kSlots = 5;
     static constexpr int kRateLimitRetries = 3;
 
     static MutateResult run (const MutateRequest& request, const std::atomic<bool>* cancel,
                              const std::function<void (int slot, const GenerationProgress&)>& onProgress = {},
                              const std::function<void (int slot, const GenerationResult&)>& onDone = {});
 
+    // M14e Takes runner (SPEC §9.7, §13 item 14e): runs 1..4 parallel Generate requests.
+    static MutateResult runTakes (const TakesRequest& request, const std::atomic<bool>* cancel,
+                                  const std::function<void (int slot, const GenerationProgress&)>& onProgress = {},
+                                  const std::function<void (int slot, const GenerationResult&)>& onDone = {});
+
+    // M14e: Builds 1..4 take directions with take lines.
+    static std::vector<MutateDirection> buildTakeDirections (int count);
+
     // A 429, or another error whose message says it was rate limited.
     static bool isRateLimit (const ChatReply& reply);
+
+    // M14b: Builds steered mutation directions (SPEC §9.7).
+    static std::vector<MutateDirection> buildSteeredDirections (const std::string& text, int count);
+
+    // M14b: Builds auto mutation directions from a list of chip keys (e.g. {"darker", "space"}).
+    static std::vector<MutateDirection> buildAutoDirections (const std::vector<std::string>& chipKeys);
 };
 
 } // namespace vibesynth

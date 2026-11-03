@@ -15,6 +15,7 @@
 #include "patch/Patch.h"
 #include "ui/ModStrip.h"
 #include "ui/Theme.h"
+#include "ui/ValueEditorOverlay.h"
 
 class VibeSynthAudioProcessor;
 
@@ -43,8 +44,10 @@ public:
     const juce::String& getLabel() const noexcept { return label; }
     double getRangeMin() const noexcept { return rangeMin; }
     double getRangeMax() const noexcept { return rangeMax; }
+    juce::Rectangle<int> getValueBounds() const;
     void showModMenu();
 
+    std::function<void()> onTypeValue;
     std::function<void (ModSource, double)> onAssignMod;
     std::function<void()> onRemoveMod;
     std::function<void (double, double)> onRangeChanged;
@@ -153,8 +156,15 @@ public:
     void openMacroRange (int index);
     void closeMacroRange (int index);
 
+    void openTypeValueEditorForMacro (int index);
+    void openGlideEditor();
+    void showGlideMenu();
+    void openTypeValueEditorForSnapshot (int macroIndex);
+    void closeTypeValueEditorForSnapshot();
+
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
 
     // In keyboard focus order: the knobs, the voice mode, glide.
     juce::Array<juce::Component*> focusOrder();
@@ -167,6 +177,7 @@ private:
     std::array<std::unique_ptr<MacroKnob>, 8> knobs;
     VoiceModeControl voiceMode;
     MacroRangePopover rangePopover;
+    ValueEditorOverlay valueEditor;
     juce::Slider glide;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> glideAttachment;
     juce::String patchName, patchMode;

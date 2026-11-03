@@ -7,6 +7,7 @@
 
 #include "PluginProcessor.h"
 #include "ui/AuditionStrip.h"
+#include "ui/MutatePopover.h"
 #include "ui/CodeView.h"
 #include "ui/MacroPanel.h"
 #include "ui/ModStrip.h"
@@ -66,6 +67,7 @@ public:
     VibeSynthAudioProcessor& getProcessor() noexcept { return processor; }
     void setHeaderOverride (std::optional<vibesynth::ui::HeaderState> state);
     void setPromptText (const juce::String& text) { header.setPrompt (text); }
+    void setTakesForSnapshot (int count) { header.setTakes (count); }
     void showPage (int index);  // 0 Presets, 1 Code, 2 History
     void setErrorDetailOpen (bool open);
     // Forces "has an API key" for the header (nullopt: the real state), so
@@ -80,6 +82,14 @@ public:
     vibesynth::ui::ModPopover& getModPopover() noexcept { return modPopover; }
     void openModPopover (vibesynth::ModSource source);
     void closeModPopover();
+
+    vibesynth::ui::MutatePopover& getMutatePopover() noexcept { return mutatePopover; }
+    void openMutatePopover();
+    void closeMutatePopover();
+    void showStripCardSavedForSnapshot (int slot, const juce::String& name)
+    {
+        strip.showCardSavedForSnapshot (slot, name);
+    }
     // M10 node inspector (SPEC §9.6): opens over the page area (the audition
     // strip's place; only one of the two is open). `focusChange`: a
     // right-click, the "Change this node" box gets the keyboard focus.
@@ -117,6 +127,7 @@ private:
     vibesynth::ui::MacroPanel macros;
     vibesynth::ui::ModStrip modStrip;          // M13
     vibesynth::ui::ModPopover modPopover;      // M13
+    vibesynth::ui::MutatePopover mutatePopover; // M14b
     vibesynth::ui::NodeView nodes;
     std::array<juce::TextButton, numPages> tabs;
     vibesynth::ui::PresetBrowser presets;
@@ -137,6 +148,7 @@ private:
     int shownPatchVersion = -1;
     int shownNodesVersion = -1;
     int shownTweaksVersion = -1;
+    int shownUserPresetsVersion = 0;
     juce::String shownSource;
     vibesynth::ui::HeaderState shownHeader;
     std::optional<vibesynth::ui::HeaderState> headerOverride;

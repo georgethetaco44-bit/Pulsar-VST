@@ -9,6 +9,8 @@
 #include "ai/Generator.h"
 #include "ui/SnapshotM11.h"
 #include "ui/SnapshotM13.h"
+#include "ui/SnapshotM14b.h"
+#include "ui/SnapshotM14e.h"
 #include "ai/MetaClient.h"
 #include "patch/PatchPlayer.h"
 #include "patch/PatchTweaks.h"
@@ -295,6 +297,12 @@ void SnapshotDriver::runShots()
 
     // M13 shots run on Reese (left loaded by the M11 shots), before M12 swaps the patch.
     runM13Snapshots (editor, [this] (const juce::String& n) { shoot (n); }, [this] (double t) { playNote (t); });
+
+    // M14b shots: mutate popover, strip with 2 and 5 variations, card saved, type value editors.
+    runM14bSnapshots (editor, [this] (const juce::String& n) { shoot (n); }, [this] (double t) { playNote (t); });
+
+    // M14e shots: takes selector, strip after 3-take Generate with one failed card.
+    runM14eSnapshots (editor, [this] (const juce::String& n) { shoot (n); }, [this] (double t) { playNote (t); });
 
     // M14a shots: macro range arc and "Set range…" control on a macro.
     proc.setMacroRange (1, 0.20, 0.80);

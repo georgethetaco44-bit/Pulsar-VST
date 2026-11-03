@@ -112,7 +112,8 @@ public:
         : res_ (resources) {}
 
     // `retry` null for the first attempt.
-    BuiltPrompt build (const std::string& userPrompt, const RetryContext* retry = nullptr) const;
+    BuiltPrompt build (const std::string& userPrompt, const RetryContext* retry = nullptr,
+                       const std::string& extraUserLine = {}) const;
 
     // M11: the same system message as build() (so the service can reuse
     // its prefix), no few-shot pairs (the current patch shows the format),

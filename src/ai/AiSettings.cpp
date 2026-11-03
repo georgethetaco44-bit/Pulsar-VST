@@ -65,6 +65,15 @@ AiSettings::AiSettings()
     config_.reasoningEffort = f.containsKey ("reasoningEffort") ? f.getValue ("reasoningEffort").trim().toStdString()
                                                                : d.reasoningEffort;
     savedKey_ = f.getValue ("apiKey").trim().toStdString();
+    mutateCount_ = std::clamp (f.getIntValue ("mutateCount", 3), 1, 5);
+    generateTakes_ = std::clamp (f.getIntValue ("generateTakes", 1), 1, 4);
+    if (f.containsKey ("mutateChips"))
+    {
+        const auto chipStr = f.getValue ("mutateChips");
+        static const char* kChipKeys[5] = { "darker", "movement", "brighter", "weirder", "space" };
+        for (int i = 0; i < 5; ++i)
+            mutateChips_[(size_t) i] = chipStr.containsIgnoreCase (kChipKeys[i]);
+    }
 }
 
 std::string AiSettings::apiKey() const
@@ -92,6 +101,14 @@ bool AiSettings::save() const
     f.setValue ("retryTemperature", config_.retryTemperature);
     f.setValue ("reasoningEffort", juce::String (config_.reasoningEffort));
     f.setValue ("apiKey", juce::String (savedKey_));
+    f.setValue ("mutateCount", mutateCount_);
+    f.setValue ("generateTakes", generateTakes_);
+    juce::String chips;
+    static const char* kChipKeys[5] = { "darker", "movement", "brighter", "weirder", "space" };
+    for (int i = 0; i < 5; ++i)
+        if (mutateChips_[(size_t) i])
+            chips << (chips.isEmpty() ? "" : ",") << kChipKeys[i];
+    f.setValue ("mutateChips", chips);
     if (! f.save())
         return false;
    #if JUCE_LINUX || JUCE_MAC || JUCE_BSD

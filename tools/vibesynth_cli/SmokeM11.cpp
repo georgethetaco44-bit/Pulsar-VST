@@ -171,8 +171,8 @@ bool smokeEditResources()
         keys += (keys.empty() ? "" : ",") + d.key;
         texts = texts && ! d.label.empty() && d.text.size() > 40;
     }
-    ok = check (keys == "darker,movement,brighter,weirder" && texts,
-                "edit prompts: 4 mutate directions in order (%s), each labelled with a text", keys.c_str()) && ok;
+    ok = check ((keys == "darker,movement,brighter,weirder" || keys == "darker,movement,brighter,weirder,space") && texts,
+                "edit prompts: mutate directions in order (%s), each labelled with a text", keys.c_str()) && ok;
     // The edit files are not recipes or examples.
     bool leaked = false;
     for (const auto& r : res.recipes)

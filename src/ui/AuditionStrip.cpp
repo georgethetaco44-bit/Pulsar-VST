@@ -2,6 +2,7 @@
 
 #include "ui/AuditionStrip.h"
 
+#include "patch/PatchLibrary.h"
 #include "ui/PulsarLookAndFeel.h"
 
 namespace vibesynth::ui {
@@ -37,17 +38,66 @@ AuditionStrip::AuditionStrip()
     addAndMakeVisible (keepButton);
     addAndMakeVisible (discardButton);
     addChildComponent (stopButton);
+
+    for (int i = 0; i < MutateView::kSlots; ++i)
+    {
+        auto& c = cardUis[(size_t) i];
+        setButtonStyle (c.saveButton, ButtonStyle::Ghost);
+        c.saveButton.setTooltip ("Save this variation to your patches");
+        c.saveButton.onClick = [this, i] { startCardSave (i); };
+        addChildComponent (c.saveButton);
+
+        c.nameEditor.setFont (Theme::font (12.0f, Theme::Weight::Medium));
+        c.nameEditor.setColour (juce::TextEditor::backgroundColourId, Theme::control.darker (0.2f));
+        c.nameEditor.setColour (juce::TextEditor::outlineColourId, Theme::accent);
+        c.nameEditor.setColour (juce::TextEditor::textColourId, Theme::text);
+        c.nameEditor.onReturnKey = [this, i] { confirmCardSave (i); };
+        c.nameEditor.onEscapeKey = [this, i] { cancelCardSave (i); };
+        addChildComponent (c.nameEditor);
+
+        setButtonStyle (c.confirmButton, ButtonStyle::Primary);
+        c.confirmButton.onClick = [this, i] { confirmCardSave (i); };
+        addChildComponent (c.confirmButton);
+
+        setButtonStyle (c.cancelButton, ButtonStyle::Ghost);
+        c.cancelButton.onClick = [this, i] { cancelCardSave (i); };
+        addChildComponent (c.cancelButton);
+    }
+
     setTitle ("Variations");
     setOpaque (true);
 }
 
 void AuditionStrip::setView (const MutateView& v)
 {
-    if (v == view && juce::exactlyEqual (v.startedMs, view.startedMs))
+    const bool isNewSession = ! juce::exactlyEqual (v.startedMs, view.startedMs);
+    if (v == view && ! isNewSession)
         return;
+    if (isNewSession)
+    {
+        for (auto& c : cardUis)
+        {
+            c.mode = CardMode::Normal;
+            c.savedName.clear();
+            c.pendingName.clear();
+        }
+    }
     view = v;
     updateButtons();
+    updateCardComponents();
+    resized();
     repaint();
+}
+
+void AuditionStrip::showCardSavedForSnapshot (int slot, const juce::String& name)
+{
+    if (slot >= 0 && slot < MutateView::kSlots)
+    {
+        cardUis[(size_t) slot].savedName = name;
+        cardUis[(size_t) slot].mode = CardMode::Normal;
+        updateCardComponents();
+        repaint();
+    }
 }
 
 void AuditionStrip::tick (double nowMs)
@@ -64,10 +114,112 @@ void AuditionStrip::tick (double nowMs)
 
 void AuditionStrip::updateButtons()
 {
-    const bool ready = view.auditioning >= 0 && view.auditioning < MutateView::kSlots
+    const bool ready = view.auditioning >= 0 && view.auditioning < view.activeSlots()
                     && view.slots[(size_t) view.auditioning].state == State::Ready;
     keepButton.setEnabled (ready);
     stopButton.setVisible (view.running);
+}
+
+void AuditionStrip::updateCardComponents()
+{
+    const int n = view.activeSlots();
+    for (int i = 0; i < MutateView::kSlots; ++i)
+    {
+        auto& c = cardUis[(size_t) i];
+        const bool active = i < n;
+        const bool ready = active && view.slots[(size_t) i].state == State::Ready;
+        if (! ready)
+        {
+            c.saveButton.setVisible (false);
+            c.nameEditor.setVisible (false);
+            c.confirmButton.setVisible (false);
+            c.cancelButton.setVisible (false);
+            continue;
+        }
+        c.saveButton.setVisible (c.mode == CardMode::Normal);
+        c.nameEditor.setVisible (c.mode == CardMode::Naming);
+        c.confirmButton.setVisible (c.mode != CardMode::Normal);
+        c.cancelButton.setVisible (c.mode != CardMode::Normal);
+    }
+}
+
+void AuditionStrip::startCardSave (int slot)
+{
+    if (slot < 0 || slot >= view.activeSlots())
+        return;
+    auto& c = cardUis[(size_t) slot];
+    c.mode = CardMode::Naming;
+    juce::String defaultName;
+    if (c.savedName.isNotEmpty())
+        defaultName = c.savedName;
+    else
+        defaultName = juce::String (view.baseName) + " " + juce::String (view.slots[(size_t) slot].direction);
+    c.nameEditor.setText (defaultName, false);
+    c.nameEditor.selectAll();
+    c.confirmButton.setButtonText ("Save");
+    c.confirmButton.setTooltip ("Save to your patches (Enter)");
+    updateCardComponents();
+    resized();
+    c.nameEditor.grabKeyboardFocus();
+    repaint();
+}
+
+void AuditionStrip::confirmCardSave (int slot)
+{
+    if (slot < 0 || slot >= view.activeSlots())
+        return;
+    auto& c = cardUis[(size_t) slot];
+    if (c.mode == CardMode::Naming)
+    {
+        const auto name = c.nameEditor.getText().trim();
+        if (name.isEmpty())
+            return;
+        const auto file = vibesynth::PatchLibrary::userPatchFile (vibesynth::PatchLibrary::userFolder(), name);
+        if (file.exists())
+        {
+            c.pendingName = name;
+            c.mode = CardMode::ConfirmReplace;
+            c.confirmButton.setButtonText ("Replace");
+            c.confirmButton.setTooltip ("Overwrite existing patch");
+            updateCardComponents();
+            resized();
+            repaint();
+            return;
+        }
+        juce::String error;
+        if (onSaveVariation && onSaveVariation (slot, name, false, error))
+        {
+            c.savedName = name;
+            c.mode = CardMode::Normal;
+            updateCardComponents();
+            resized();
+            repaint();
+        }
+    }
+    else if (c.mode == CardMode::ConfirmReplace)
+    {
+        const auto name = c.pendingName;
+        juce::String error;
+        if (onSaveVariation && onSaveVariation (slot, name, true, error))
+        {
+            c.savedName = name;
+            c.mode = CardMode::Normal;
+            updateCardComponents();
+            resized();
+            repaint();
+        }
+    }
+}
+
+void AuditionStrip::cancelCardSave (int slot)
+{
+    if (slot < 0 || slot >= MutateView::kSlots)
+        return;
+    auto& c = cardUis[(size_t) slot];
+    c.mode = CardMode::Normal;
+    updateCardComponents();
+    resized();
+    repaint();
 }
 
 void AuditionStrip::resized()
@@ -82,21 +234,79 @@ void AuditionStrip::resized()
     buttons.removeFromRight (grid);
     stopButton.setBounds (buttons.removeFromRight (grid * 9));
     r.removeFromTop (grid);
+
+    const int n = view.activeSlots();
     cards[0] = r.removeFromLeft (grid * 17);
     const int gap = grid;
-    const int w = (r.getWidth() - gap * MutateView::kSlots) / MutateView::kSlots;
-    for (int i = 0; i < MutateView::kSlots; ++i)
+    const int w = n > 0 ? (r.getWidth() - gap * n) / n : 0;
+    for (int i = 0; i < n; ++i)
     {
         r.removeFromLeft (gap);
-        cards[(size_t) i + 1] = r.removeFromLeft (w);
+        cards[(size_t) i + 1] = (i == n - 1) ? r : r.removeFromLeft (w);
+    }
+    for (int i = n; i < MutateView::kSlots; ++i)
+        cards[(size_t) i + 1] = {};
+
+    for (int i = 0; i < MutateView::kSlots; ++i)
+    {
+        auto& c = cardUis[(size_t) i];
+        const auto rCard = cards[(size_t) i + 1];
+        if (rCard.isEmpty() || i >= n)
+        {
+            c.saveButton.setBounds ({});
+            c.nameEditor.setBounds ({});
+            c.confirmButton.setBounds ({});
+            c.cancelButton.setBounds ({});
+            continue;
+        }
+        auto inner = rCard.reduced (grid + grid / 2, grid);
+        inner.removeFromTop (grid * 2 + grid / 2); // caption row (20 px)
+
+        if (c.mode == CardMode::Naming)
+        {
+            c.nameEditor.setBounds (inner.removeFromTop (22));
+            inner.removeFromTop (6);
+            auto btnRow = inner.removeFromTop (20);
+            const int btnW = (btnRow.getWidth() - 6) / 2;
+            c.confirmButton.setBounds (btnRow.removeFromLeft (btnW));
+            btnRow.removeFromLeft (6);
+            c.cancelButton.setBounds (btnRow.removeFromLeft (btnW));
+        }
+        else if (c.mode == CardMode::ConfirmReplace)
+        {
+            inner.removeFromTop (22);
+            inner.removeFromTop (6);
+            auto btnRow = inner.removeFromTop (20);
+            const int btnW = (btnRow.getWidth() - 6) / 2;
+            c.confirmButton.setBounds (btnRow.removeFromLeft (btnW));
+            btnRow.removeFromLeft (6);
+            c.cancelButton.setBounds (btnRow.removeFromLeft (btnW));
+        }
+        else // CardMode::Normal
+        {
+            c.nameEditor.setBounds ({});
+            c.confirmButton.setBounds ({});
+            c.cancelButton.setBounds ({});
+            inner.removeFromTop (grid * 3); // name row
+            c.saveButton.setBounds (inner.removeFromBottom (20).removeFromLeft (56));
+        }
     }
 }
 
 int AuditionStrip::cardAt (juce::Point<int> p) const
 {
-    for (int i = 0; i <= MutateView::kSlots; ++i)
-        if (cards[(size_t) i].contains (p))
-            return i - 1;
+    if (cards[0].contains (p))
+        return -1;
+    const int n = view.activeSlots();
+    for (int i = 0; i < n; ++i)
+    {
+        if (cards[(size_t) i + 1].contains (p))
+        {
+            if (cardUis[(size_t) i].mode != CardMode::Normal)
+                return -2;
+            return i;
+        }
+    }
     return -2;
 }
 
@@ -167,8 +377,10 @@ void AuditionStrip::paint (juce::Graphics& g)
     juce::String caption = "VARIATIONS OF " + juce::String (view.baseName).toUpperCase();
     g.drawText (caption, title.removeFromLeft (grid * 40), juce::Justification::centredLeft);
 
-    for (int i = 0; i <= MutateView::kSlots; ++i)
-        paintCard (g, i - 1, cards[(size_t) i]);
+    const int n = view.activeSlots();
+    paintCard (g, -1, cards[0]);
+    for (int i = 0; i < n; ++i)
+        paintCard (g, i, cards[(size_t) i + 1]);
 }
 
 void AuditionStrip::paintCard (juce::Graphics& g, int card, juce::Rectangle<int> r) const
@@ -198,6 +410,28 @@ void AuditionStrip::paintCard (juce::Graphics& g, int card, juce::Rectangle<int>
     }
 
     auto inner = r.reduced (grid + grid / 2, grid);
+
+    const auto* ui = (card >= 0 && card < MutateView::kSlots) ? &cardUis[(size_t) card] : nullptr;
+    if (ui != nullptr && ui->mode == CardMode::ConfirmReplace)
+    {
+        g.setColour (warning);
+        g.setFont (font (captionSize, Weight::SemiBold).withExtraKerningFactor (0.12f));
+        g.drawText ("REPLACE FILE?", inner.removeFromTop (grid * 2), juce::Justification::centredLeft);
+        inner.removeFromTop (grid / 2);
+
+        g.setColour (text);
+        g.setFont (font (12.0f, Weight::Medium));
+        g.drawFittedText ("Overwrite existing?", inner.removeFromTop (grid * 3), juce::Justification::centredLeft, 2, 0.9f);
+        return;
+    }
+    if (ui != nullptr && ui->mode == CardMode::Naming)
+    {
+        g.setColour (accent);
+        g.setFont (font (captionSize, Weight::SemiBold).withExtraKerningFactor (0.12f));
+        g.drawText ("SAVE AS", inner.removeFromTop (grid * 2), juce::Justification::centredLeft);
+        return;
+    }
+
     // Caption: the direction, or ORIGINAL.
     g.setColour (playing ? accent : dimText);
     g.setFont (font (captionSize, Weight::SemiBold).withExtraKerningFactor (0.12f));
@@ -206,8 +440,20 @@ void AuditionStrip::paintCard (juce::Graphics& g, int card, juce::Rectangle<int>
     inner.removeFromTop (grid / 2);
 
     // Name.
-    const juce::String name = original ? juce::String (view.baseName)
-                                       : (s->state == State::Ready ? juce::String (s->name) : juce::String());
+    juce::String name;
+    if (original)
+    {
+        name = juce::String (view.baseName);
+    }
+    else if (ui != nullptr && ui->savedName.isNotEmpty())
+    {
+        name = "Saved: " + ui->savedName;
+    }
+    else if (s != nullptr && s->state == State::Ready)
+    {
+        name = juce::String (s->name);
+    }
+
     g.setColour (text);
     g.setFont (font (15.0f, Weight::SemiBold));
     if (name.isNotEmpty())
@@ -244,7 +490,10 @@ void AuditionStrip::paintCard (juce::Graphics& g, int card, juce::Rectangle<int>
     }
     if (playing)
         dot = ink = accent;
+
     auto row = inner;
+    if (ready && ! original)
+        row.removeFromBottom (22); // space for Save button
     const int lines = failed ? 3 : 1;
     auto textArea = failed ? row : row.removeFromBottom (grid * 2);
     const float cy = (float) textArea.getY() + (failed ? 8.0f : (float) textArea.getHeight() * 0.5f);

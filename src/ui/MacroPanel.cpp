@@ -139,14 +139,22 @@ void MacroKnob::setLiveModValue (double liveValue)
     slider.setModulation (true, modSource, modDepth, liveMod);
 }
 
+juce::Rectangle<int> MacroKnob::getValueBounds() const
+{
+    auto r = getLocalBounds();
+    r.removeFromTop (slider.getBottom() + 1 + 13);
+    return r.removeFromTop (14);
+}
+
 void MacroKnob::showModMenu()
 {
     juce::PopupMenu m;
     m.addSectionHeader (label.isNotEmpty() ? label : "Macro " + juce::String (index + 1));
+    m.addItem (10, juce::String::fromUTF8 ("Type value\xe2\x80\xa6"));
     if (isRangeEditorOpen())
         m.addItem (1, "Hide range slider");
     else
-        m.addItem (1, "Set range…");
+        m.addItem (1, juce::String::fromUTF8 ("Set range\xe2\x80\xa6"));
 
     if (hasRange)
         m.addItem (2, "Reset range (0.00 – 1.00)");
@@ -174,7 +182,11 @@ void MacroKnob::showModMenu()
                      {
                          if (safe == nullptr || result == 0)
                              return;
-                         if (result == 1)
+                         if (result == 10 && safe->onTypeValue)
+                         {
+                             safe->onTypeValue();
+                         }
+                         else if (result == 1)
                          {
                              if (safe->isRangeEditorOpen())
                                  safe->closeRangeEditor();
@@ -234,7 +246,16 @@ void MacroKnob::itemDropped (const SourceDetails& details)
 void MacroKnob::mouseDown (const juce::MouseEvent& e)
 {
     if (e.mods.isPopupMenu())
+    {
         showModMenu();
+        return;
+    }
+    if (getValueBounds().contains (e.getPosition()))
+    {
+        if (onTypeValue)
+            onTypeValue();
+        return;
+    }
 }
 
 namespace {
@@ -466,6 +487,10 @@ MacroPanel::MacroPanel (juce::AudioProcessorValueTreeState& s, VibeSynthAudioPro
         {
             return rangePopover.isOpen() && rangePopover.getTargetIndex() == i;
         };
+        knobs[(size_t) i]->onTypeValue = [this, i]
+        {
+            openTypeValueEditorForMacro (i);
+        };
         addAndMakeVisible (*knobs[(size_t) i]);
     }
 
@@ -481,6 +506,7 @@ MacroPanel::MacroPanel (juce::AudioProcessorValueTreeState& s, VibeSynthAudioPro
     };
     rangePopover.onClose = [this] { repaint(); };
     addChildComponent (rangePopover);
+    addChildComponent (valueEditor);
 
     voiceMode.onChange = [this] { updateGlide(); };
     addAndMakeVisible (voiceMode);
@@ -493,6 +519,7 @@ MacroPanel::MacroPanel (juce::AudioProcessorValueTreeState& s, VibeSynthAudioPro
     glideAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         state, VibeSynthAudioProcessor::glideParamId, glide);
     glide.onValueChange = [this] { updateGlide(); };
+    glide.addMouseListener (this, false);
     addAndMakeVisible (glide);
     updateGlide();
 }
@@ -657,6 +684,80 @@ void MacroPanel::resized()
 
     if (rangePopover.isOpen())
         openMacroRange (rangePopover.getTargetIndex());
+}
+
+void MacroPanel::openTypeValueEditorForMacro (int index)
+{
+    if (index < 0 || index >= 8)
+        return;
+    auto& k = *knobs[(size_t) index];
+    const auto valBoundsInKnob = k.getValueBounds();
+    const auto target = k.getBounds().withY (k.getY() + valBoundsInKnob.getY())
+                                    .withHeight (valBoundsInKnob.getHeight())
+                                    .withWidth (juce::jmax (52, k.getWidth() - 8))
+                                    .withCentre (juce::Point<int> (k.getBounds().getCentreX(), k.getY() + valBoundsInKnob.getCentreY()));
+    const double curVal = k.slider.getValue();
+    valueEditor.open (target, juce::String (curVal, 2), KnobUnitKind::Macro, 0.0, 1.0,
+                      [this, index] (double newVal)
+                      {
+                          auto& knob = *knobs[(size_t) index];
+                          knob.slider.startedDragging();
+                          knob.slider.setValue (newVal, juce::sendNotificationSync);
+                          knob.slider.stoppedDragging();
+                      });
+}
+
+void MacroPanel::openGlideEditor()
+{
+    const double curVal = glide.getValue();
+    const juce::String curText = glideText (curVal);
+    valueEditor.open (glideValueArea, curText, KnobUnitKind::Glide, 0.0, 1.0,
+                      [this] (double newVal)
+                      {
+                          glide.startedDragging();
+                          glide.setValue (newVal, juce::sendNotificationSync);
+                          glide.stoppedDragging();
+                      });
+}
+
+void MacroPanel::showGlideMenu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader ("Glide");
+    m.addItem (1, juce::String::fromUTF8 ("Type value\xe2\x80\xa6"));
+    auto* top = getTopLevelComponent();
+    if (auto* editor = findParentComponentOfClass<juce::AudioProcessorEditor>())
+        top = editor;
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&glide).withParentComponent (top),
+                     [this] (int result)
+                     {
+                         if (result == 1)
+                             openGlideEditor();
+                     });
+}
+
+void MacroPanel::openTypeValueEditorForSnapshot (int macroIndex)
+{
+    openTypeValueEditorForMacro (macroIndex);
+}
+
+void MacroPanel::closeTypeValueEditorForSnapshot()
+{
+    valueEditor.close();
+}
+
+void MacroPanel::mouseDown (const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu() && (e.eventComponent == &glide || glideValueArea.contains (e.getPosition())))
+    {
+        showGlideMenu();
+        return;
+    }
+    if (! e.mods.isPopupMenu() && glideValueArea.contains (e.getPosition()))
+    {
+        openGlideEditor();
+        return;
+    }
 }
 
 } // namespace vibesynth::ui

@@ -21,8 +21,9 @@ MutateView fakeView (bool finished)
     v.baseName = "Reese";
     v.startedMs = juce::Time::getMillisecondCounterHiRes() - 9400.0;
     v.auditioning = finished ? 2 : 0;
-    const char* dirs[] = { "Darker", "Movement", "Brighter", "Weirder" };
-    for (int i = 0; i < MutateView::kSlots; ++i)
+    v.numSlots = 4;
+    const char* dirs[] = { "Darker", "Movement", "Brighter", "Weirder", "Space" };
+    for (int i = 0; i < 4; ++i)
         v.slots[(size_t) i].direction = dirs[i];
     v.slots[0] = { State::Ready, "Darker", "Abyss Reese", "Ready", "" };
     v.slots[1] = { State::Failed, "Movement",  "", "too loud: peak +14.2 dBFS (max +12) at note 28, macros all 1",

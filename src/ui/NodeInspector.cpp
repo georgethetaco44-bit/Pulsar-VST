@@ -513,11 +513,39 @@ void ArgKnob::modeClicked (bool replace)
     configureKnob();
 }
 
+void ArgKnob::switchToReplace (double replaceValue)
+{
+    replaceSelected = true;
+    if (onTweak)
+        onTweak (ArgTweak::kReplace, juce::jlimit (meta.lo, meta.hi, replaceValue));
+    configureKnob();
+}
+
+juce::Rectangle<int> ArgKnob::getValueBounds() const
+{
+    auto r = getLocalBounds();
+    r.removeFromTop (16 + kKnobSize + 2);
+    return r.removeFromTop (25);
+}
+
+juce::String ArgKnob::formatCurrent() const
+{
+    if (replaceShown())
+        return format (mode == ArgMode::Replace ? value : (haveLive ? live : meta.lo), false);
+    return format (mode == ArgMode::Offset ? value : 0.0, true);
+}
+
 void ArgKnob::mouseDown (const juce::MouseEvent& e)
 {
     if (e.mods.isPopupMenu())
     {
         showMenu();
+        return;
+    }
+    if (getValueBounds().contains (e.getPosition()))
+    {
+        if (onTypeValue)
+            onTypeValue();
         return;
     }
     if (e.eventComponent == this && mode != ArgMode::Macro && toggleArea.contains (e.getPosition()))
@@ -584,6 +612,10 @@ void ArgKnob::showMenu()
                          else if (result == 110 && k.onRemoveMod)
                          {
                              k.onRemoveMod();
+                         }
+                         else if (result == 200 && k.onTypeValue)
+                         {
+                             k.onTypeValue();
                          }
                      });
 }
@@ -684,6 +716,7 @@ NodeInspector::NodeInspector (VibeSynthAudioProcessor& p) : processor (p)
     setChangeEnabled (false);
 
     addAndMakeVisible (trace);
+    addChildComponent (valueEditor);
     setOpaque (true);
 }
 
@@ -769,12 +802,16 @@ void NodeInspector::rebuild()
         { processor.setNodeArgMod (src, id, name, depth); };
         knob->onRemoveMod = [this, name] { processor.clearNodeArgMod (id, name); };
         auto* raw = knob.get();
+        knob->onTypeValue = [this, raw] { openTypeValueEditorForKnob (raw); };
         knob->buildMenu = [this, raw] (juce::PopupMenu& m)
         {
             const auto& patch = processor.getUiPatch();
             const unsigned read = macrosRead (patch);
             const auto* map = findMacroMap (patch, id, raw->arg().name);
             const auto* mod = findArgMod (patch, id, raw->arg().name);
+            m.addSectionHeader (raw->arg().label);
+            m.addItem (200, juce::String::fromUTF8 ("Type value\xe2\x80\xa6"));
+            m.addSeparator();
             m.addSectionHeader ("Modulate " + juce::String (raw->arg().label));
             static const char* kModItems[] = {
                 "Modulate with LFO 1",
@@ -966,6 +1003,97 @@ void NodeInspector::resized()
         for (auto& k : knobs)
             k->setBounds (row.removeFromLeft (w));
     }
+}
+
+
+void NodeInspector::openTypeValueEditorForKnob (ArgKnob* k)
+{
+    if (k == nullptr)
+        return;
+
+    const bool isFilterCutoff = (current.module == ModuleId::FltLp
+                                 || current.module == ModuleId::FltHp
+                                 || current.module == ModuleId::FltBp
+                                 || current.module == ModuleId::FltLadder
+                                 || current.module == ModuleId::FltNotch
+                                 || current.module == ModuleId::FltPeak)
+                                && std::strcmp (k->arg().name, "cutoff") == 0;
+
+    KnobUnitKind unitKind = KnobUnitKind::Generic;
+    double minVal = 0.0, maxVal = 1.0;
+
+    if (isFilterCutoff)
+    {
+        unitKind = KnobUnitKind::FilterCutoff;
+        if (k->replaceShown())
+        {
+            minVal = 0.0;
+            maxVal = 1.0;
+        }
+        else
+        {
+            minVal = -1.0;
+            maxVal = 1.0;
+        }
+    }
+    else if (k->replaceShown())
+    {
+        minVal = k->arg().lo;
+        maxVal = k->arg().hi;
+        if (k->arg().kind == ArgKind::Hz)
+            unitKind = KnobUnitKind::Hz;
+        else if (k->arg().kind == ArgKind::Choice)
+            unitKind = KnobUnitKind::Choice;
+        else
+            unitKind = KnobUnitKind::Generic;
+    }
+    else
+    {
+        if (k->arg().kind == ArgKind::Hz)
+        {
+            unitKind = KnobUnitKind::Semitones;
+            minVal = -36.0;
+            maxVal = 36.0;
+        }
+        else
+        {
+            unitKind = KnobUnitKind::Generic;
+            minVal = -1.0;
+            maxVal = 1.0;
+        }
+    }
+
+    const auto vb = k->getValueBounds();
+    const auto target = k->getBounds().withY (k->getY() + vb.getY())
+                                      .withHeight (vb.getHeight())
+                                      .withWidth (juce::jmax (52, k->getWidth() - 8))
+                                      .withCentre (juce::Point<int> (k->getBounds().getCentreX(), k->getY() + vb.getCentreY()));
+
+    valueEditor.open (target, k->formatCurrent(), unitKind, minVal, maxVal,
+                      [k, isFilterCutoff] (const KnobParseResult& res)
+                      {
+                          if (isFilterCutoff && ! k->replaceShown() && res.isHz)
+                          {
+                              // In Offset mode, a typed Hz value switches that knob to Replace at that value,
+                              // through the same path as clicking Replace.
+                              k->switchToReplace (res.value);
+                          }
+                          else
+                          {
+                              k->knob.setValue (res.value, juce::sendNotificationSync);
+                          }
+                      });
+}
+
+void NodeInspector::openTypeValueEditorForSnapshot (int knobIndex)
+{
+    if (knobIndex >= 0 && knobIndex < (int) knobs.size())
+        openTypeValueEditorForKnob (knobs[(size_t) knobIndex].get());
+}
+
+void NodeInspector::closeTypeValueEditorForSnapshot()
+{
+    valueEditor.close();
 }
 
 } // namespace vibesynth::ui

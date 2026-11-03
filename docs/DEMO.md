@@ -8,14 +8,14 @@
 
 ### Shot List & Narration Timeline
 
-#### 0:00 – 0:25 | 1. Introduction & Natural Language Generation (25s)
+#### 0:00 – 0:25 | 1. Introduction & Natural Language Generation with Takes (25s)
 - **Visual:** Standalone or DAW window open with the clean Pulsar interface. The prompt field is focused.
-- **Action:** Type into the prompt bar:  
+- **Action:** Select **3** takes below Generate. Type into the prompt bar:  
   `huge analog reese into a ladder filter with warm saturation and sub pressure`  
-  Press **Enter**.
-- **Visual Details:** Status line pulses cyan: `"Waiting for model"`, advances through parsing, offline safety testing, and compiles. The audio crossfades smoothly into the new patch as a sustained MIDI bass note plays.
+  Press **Enter** (or click **Generate**). Generate 3 takes, audition, Keep one.
+- **Visual Details:** Status line pulses: `"Generating 3 takes: waiting for model"`. As the 3 takes compile and validate in parallel, the **Audition Strip** opens displaying the original playing patch alongside the 3 new takes (Literal, Alt source, Alt motion). Click each take card to audition seamlessly while playing notes; click **Keep** on Take 2.
 - **Voiceover:**  
-  *"This is Pulsar—an AI synthesiser that doesn't just load presets or tweak pre-built wavetables. When you describe a sound, it writes real-time sample-rate DSP code on the fly. We type 'huge analog reese into a ladder filter', hit Enter, and in seconds, the Meta API generates native code, tests it offline for safety, and hot-swaps it in seamlessly while we play."*
+  *"This is Pulsar—an AI synthesiser that doesn't just load presets or tweak pre-built wavetables. When you describe a sound, it writes real-time sample-rate DSP code on the fly. We select 3 takes, type 'huge analog reese into a ladder filter', hit Enter, and Pulsar generates three distinct takes in parallel—a literal reading, an alternative sound source, and a different rhythmic motion. We audition them live in the audition strip, and click Keep on our favorite."*
 
 ---
 
@@ -28,16 +28,17 @@
 
 ---
 
-#### 0:50 – 1:20 | 3. The Node Inspector: Tweak, Bypass, Macro Map & Set Range (30s)
+#### 0:50 – 1:20 | 3. The Node Inspector: Tweak, Bypass, Macro Map & Type Values (30s)
 - **Visual:** Cursor moves down to the bottom panel.
 - **Action:**
   1. Click on the `flt_ladder:0` node pill in the graph. The **Node Inspector** opens below, revealing its frequency response curve and Cutoff / Resonance knobs.
   2. Tweak the **Cutoff** knob live while playing a note to hear the filter sweep.
-  3. Click **Bypass** to instantly cut the filter out, then click again to re-engage it.
-  4. Right-click the **Resonance** knob → select **Map to macro** → assign to **Macro 3**.
-  5. Right-click Macro 3 in the macro panel → choose **Set range…**. A small popover appears. Adjust the min and max sliders to constrain the sweep range (e.g. `0.20 – 0.75`).
+  3. Click the readout below Cutoff, type `440 Hz`, and hit Enter. The knob snaps precisely to 440 Hz.
+  4. Click **Bypass** to instantly cut the filter out, then click again to re-engage it.
+  5. Right-click the **Resonance** knob → select **Map to macro** → assign to **Macro 3**.
+  6. Right-click Macro 3 in the macro panel → choose **Set range…**. A small popover appears. Adjust the min and max sliders to constrain the sweep range (e.g. `0.20 – 0.75`).
 - **Voiceover:**  
-  *"Clicking any node brings up the Node Inspector. Here we have live frequency response curves and parameter controls. We can adjust cutoff, instantly bypass the module, map parameters directly to any of the 8 macro knobs, or open the range popover to constrain exactly how far that macro can travel."*
+  *"Clicking any node brings up the Node Inspector. Here we have live frequency response curves and parameter controls. We can adjust cutoff, type precise values with units like '440 Hz' into any knob or readout, bypass modules instantly, map parameters to macros, or constrain parameter ranges with a dedicated range popover."*
 
 ---
 
@@ -53,15 +54,17 @@
 
 ---
 
-#### 1:45 – 2:15 | 5. Mutate & 4-Way Audition Strip (30s)
+#### 1:45 – 2:15 | 5. Steered Mutate & Audition Strip with Instant Card Save (30s)
 - **Visual:** Top bar near the prompt input.
 - **Action:**
-  1. Click the **Mutate** button.
-  2. The **Audition Strip** appears: the original plus four variations, *Darker*, *Movement*, *Brighter* and *Weirder*.
-  3. Play repeated notes while clicking between the cards. Each click swaps the sound with a short fade.
-  4. Click the card you like best, then **Keep**.
+  1. Click the **Mutate** button. A popover opens anchored to the button.
+  2. In **Your direction**, type `faster wobble, keep the sub clean`, select **3 variations**, and click **Mutate**.
+  3. The **Audition Strip** appears showing the original plus 3 steered variations spread from subtle to bold.
+  4. Play repeated notes while clicking between cards. Each click seamlessly auditions the variation.
+  5. On variation card 2, click **Save…**, hit Enter on the default name `Reese faster wobble · moderate`, and confirm it saves immediately with a `Saved: …` badge while the strip stays open.
+  6. Click **Keep** on your favorite variation.
 - **Voiceover:**  
-  *"When you want inspiration, hit Mutate. Pulsar immediately generates four parallel musical variations. With the audition strip, you can jump between them in real time while continuing to play your keyboard. Find the one you like, click Keep, and it becomes your new active sound."*
+  *"When you want inspiration, click Mutate to open the steering popover. You can steer the sound with natural language instructions, pick how many variations you want, or run automatic musical directions like Darker or Space. The audition strip lets you jump between variations live while playing, and you can save any sounding variation straight to your presets without leaving the strip."*
 
 ---
 

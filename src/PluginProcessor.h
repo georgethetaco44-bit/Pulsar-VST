@@ -210,7 +210,7 @@ public:
     //==============================================================================
     // M8 generation (message thread). generate() cancels any generation in
     // flight; without an API key it only sets the status.
-    void generate (const juce::String& prompt);
+    void generate (const juce::String& prompt, int takes = -1);
     void cancelGeneration();
     bool isGenerating() const noexcept { return generating.load() || generationPending.load(); }
     bool canGenerate() { return aiSettings().hasKey(); }
@@ -245,16 +245,19 @@ public:
     bool requestNodeChange (const juce::String& nodeId, const juce::String& instruction);
     bool isChangingNode() const noexcept { return changeRunning; }
 
-    // Mutate: 4 variations of the active patch, requested in parallel,
+    // Mutate: 1-5 variations of the active patch, requested in parallel,
     // land in the audition strip (getMutateView) as they finish.
     // Mutating while a variation is auditioned keeps it first.
     bool canMutate();                   // a key, and no Mutate running
-    void startMutate();
+    void startMutate (std::vector<vibesynth::MutateDirection> directions = {});
     void cancelMutate();                // stops what is in flight; finished slots stay
     void auditionMutation (int slot);   // swaps a ready slot in; -1 = the original
     void keepMutation();                // the auditioned slot stays (Undo goes back to the original)
     void discardMutation();             // back to the original (exact macros); closes the strip
     const vibesynth::MutateView& getMutateView() const noexcept { return mutateView; }
+    vibesynth::Patch getPatchForVariation (int slot) const;
+    bool saveVariationPreset (int slot, const juce::String& name, bool overwrite, juce::String& error);
+    int getUserPresetsVersion() const noexcept { return userPresetsVersion; }
 
     // Undo: every swap (generate, change, Mutate Keep, preset or file
     // load) pushes what played before it (patch with its tweaks and macro
@@ -430,6 +433,7 @@ private:
     void postKeyTest (int id, const KeyTest& result);
     void runGeneration (const vibesynth::GenerationRequest& request);
     void postGenerationStatus (StatusKind kind, const juce::String& text, const juce::String& detail = {});
+    void applyTakesResult (const vibesynth::MutateResult& result, int numTakes);
     void probeActivePatch();  // load worker, when idle and probeRequested
 
     void postJob (LoadJob job);
@@ -487,6 +491,12 @@ private:
     std::vector<LoadResult> results;
     Status generationStatus;          // newest generation status (under resultMutex)
     bool generationStatusPending = false;
+    struct TakesResultEvent
+    {
+        vibesynth::MutateResult result;
+        int numTakes = 0;
+    };
+    std::vector<TakesResultEvent> takesEvents;
     std::atomic<bool> probeRequested { false };  // the active patch's nodes are unknown
     std::atomic<bool> nodesWanted { false };     // an editor has been opened
 
@@ -543,6 +553,7 @@ private:
     // M11 (message thread unless noted).
     vibesynth::UndoStack undoStack;
     int editVersion = 0;
+    int userPresetsVersion = 0;
     vibesynth::MutateView mutateView;
     std::array<std::shared_ptr<vibesynth::GenerationResult>, vibesynth::MutateView::kSlots> mutateResults;
     vibesynth::PatchSnapshot mutateOriginal;   // what played when Mutate was pressed (tweaks included)

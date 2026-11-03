@@ -31,6 +31,7 @@ VibeSynthAudioProcessorEditor::VibeSynthAudioProcessorEditor (VibeSynthAudioProc
       macros (p.apvts, &p),
       modStrip (p),
       modPopover (p),
+      mutatePopover (p),
       presets (p),
       history (p),
       inspector (p),
@@ -39,19 +40,42 @@ VibeSynthAudioProcessorEditor::VibeSynthAudioProcessorEditor (VibeSynthAudioProc
     setLookAndFeel (&lookAndFeel);
     setTitle ("Pulsar");
 
-    header.onGenerate = [this] (const juce::String& prompt) { processor.generate (prompt); };
+    header.setTakes (processor.aiSettings().generateTakes());
+    header.onTakesChanged = [this] (int t)
+    {
+        auto& s = processor.aiSettings();
+        s.setGenerateTakes (t);
+        s.save();
+    };
+    header.onGenerate = [this] (const juce::String& prompt) { processor.generate (prompt, header.getTakes()); };
     header.onCancel = [this] { processor.cancelGeneration(); };
     header.onToggleDetail = [this] { setErrorDetailOpen (! errorOpen); };
     header.onAddKey = [this] { settings.open(); };
     errorDetail.onClose = [this] { setErrorDetailOpen (false); };
 
     // M11 (SPEC §9.7): Mutate, Undo, the audition strip, Change this node.
-    header.onMutate = [this] { processor.startMutate(); };
+    header.onMutate = [this]
+    {
+        if (mutatePopover.isOpen())
+            closeMutatePopover();
+        else
+            openMutatePopover();
+    };
+    mutatePopover.onMutate = [this] (const std::vector<vibesynth::MutateDirection>& dirs)
+    {
+        processor.startMutate (dirs);
+    };
+    content.addChildComponent (mutatePopover);
+
     header.onUndo = [this] { processor.undo(); };
     strip.onAudition = [this] (int slot) { processor.auditionMutation (slot); };
     strip.onKeep = [this] { processor.keepMutation(); };
     strip.onDiscard = [this] { processor.discardMutation(); };
     strip.onStop = [this] { processor.cancelMutate(); };
+    strip.onSaveVariation = [this] (int slot, const juce::String& name, bool overwrite, juce::String& error)
+    {
+        return processor.saveVariationPreset (slot, name, overwrite, error);
+    };
     // "Change this node" is the inspector's text box (SPEC §9.6, §9.7):
     // progress and refusals show in the status line, as for Generate.
     inspector.onChangeRequested = [this] (const juce::String& id, const juce::String& text)
@@ -308,6 +332,21 @@ void VibeSynthAudioProcessorEditor::closeModPopover()
     modStrip.setSelectedSource (std::nullopt);
 }
 
+void VibeSynthAudioProcessorEditor::openMutatePopover()
+{
+    if (modPopover.isOpen())
+        closeModPopover();
+    const auto mutateInContent = header.mutateButton.getBounds() + header.getPosition();
+    mutatePopover.open (mutateInContent, content.getLocalBounds());
+    errorDetail.toFront (false);
+    settings.toFront (false);
+}
+
+void VibeSynthAudioProcessorEditor::closeMutatePopover()
+{
+    mutatePopover.close();
+}
+
 void VibeSynthAudioProcessorEditor::closeInspector()
 {
     inspector.setVisible (false);
@@ -358,6 +397,8 @@ bool VibeSynthAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
             processor.cancelGeneration();
         else if (modPopover.isOpen())
             closeModPopover();
+        else if (mutatePopover.isOpen())
+            closeMutatePopover();
         else if (inspector.isVisible())
             closeInspector();
         else
@@ -472,6 +513,11 @@ void VibeSynthAudioProcessorEditor::refresh()
     {
         shownSource = processor.getActiveSource();
         presets.refresh();
+    }
+    if (processor.getUserPresetsVersion() != shownUserPresetsVersion)
+    {
+        shownUserPresetsVersion = processor.getUserPresetsVersion();
+        presets.rescanUser();
     }
     history.refresh();
     settings.setKeyTest (processor.getKeyTest());

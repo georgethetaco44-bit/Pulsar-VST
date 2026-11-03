@@ -103,13 +103,31 @@ export VIBESYNTH_API_KEY="your-api-key-here"
 ### 1. Generate
 Type a description of your sound into the prompt bar at the top (e.g. *"gritty neuro bass with a morphing vowel filter"*) and press **Enter** (or click **Generate**). The status indicator displays the compilation and validation stages in real time.
 
-### 2. Macros
+#### Takes (1 to 4)
+Under the **Generate** button, select how many takes to produce (1, 2, 3, or 4; default is 1, saved in settings).
+- **1 take:** Generates a single patch directly into the editor as usual.
+- **2 to 4 takes:** Generates $N$ takes in parallel, each exploring a different angle:
+  - **Take 1 (Literal):** The most literal reading of the request.
+  - **Take 2 (Alt source):** The same intent built on a different main sound source (square/pulse, FM, wavetable, sync, noise, or a physical model).
+  - **Take 3 (Alt motion):** A different rhythm or style of movement.
+  - **Take 4 (Bold):** A bolder, more extreme interpretation.
+Passing takes open immediately in the **Audition Strip** alongside the previous sound, allowing seamless auditioning, per-card **Save…**, **Keep** (pushes Undo), or **Discard** (reverts to original). Every passing take is also preserved in History (`"<name> (take k)"`).
+
+### 2. Macros & Parameter Control
 Each patch defines up to 8 named macro controls tailored to its architecture. Turn knobs to shape the sound. Double-click any knob to reset it to its patch default.
+
+#### Type Values Directly Into Knobs
+Every knob in Pulsar supports exact text entry (macros, inspector knobs, MOD strip knobs, and the glide knob):
+- **Right-click** any knob and select **Type value…**, or **click the readout** directly below or next to the knob.
+- A small inline text editor appears with the current value selected.
+- Accepts standard engineering and musical units case-insensitively: `"250 Hz"`, `"1.2 kHz"`, `"-6 dB"`, `"40%"`, `"120 ms"`, `"0.5 s"`, `"1/8"` (sync divisions), `"7 st"` (semitones), or plain numeric values (e.g. `0.5` or `50%` for macros).
+- Out-of-range numbers clamp safely to valid parameter limits; invalid input briefly flashes red without affecting audio.
+- Press **Enter** or click away to commit; press **Esc** to cancel. Edits are fully undoable and notify host automation.
 
 ### 3. Node View & Inspector
 The center view visualizes the live audio processing graph, distinguishing between per-voice processing (**VOICE**) and master bus processing (**MASTER**). Nodes feature live activity meters.
 - **Click any node:** Opens the **Node Inspector** below the signal graph.
-- **Tweak arguments:** Adjust cutoff frequencies, resonance, drive, or envelope timings in real time.
+- **Tweak arguments:** Adjust cutoff frequencies, resonance, drive, or envelope timings in real time via knob drag or typed values.
 - **Bypass:** Click **Bypass** to cleanly toggle individual processing nodes in and out of the signal path.
 - **Map to macro:** Right-click an argument knob and choose **Map to macro** to drive that parameter from any macro.
 - **Set range:** Right-click a macro knob to open **Set range…**. A popover lets you constrain the minimum and maximum parameter range sent to the synthesis code.
@@ -120,11 +138,16 @@ Want to swap a standard lowpass for a vowel formant filter or change distortion 
 2. Type your instruction into the **Change this node…** box (e.g. *"make this filter sweep down quickly with high resonance"*).
 3. Press **Enter**. Pulsar asks the model to rewrite only that stage of the DSP graph, preserving your modulation mappings, macros, and other nodes.
 
-### 5. Mutate & Audition Strip
-Click the **Mutate** button next to Generate:
-1. Pulsar requests four variations at once, one per direction: **Darker**, **Movement**, **Brighter** and **Weirder**.
-2. The **Audition Strip** appears with your original and the four variations. Click any card to audition it live while you play.
-3. Click **Keep** to make the playing variation your sound, or **Discard** to go back to the original.
+### 5. Steerable Mutate & Audition Strip
+Click the **Mutate** button next to Generate to open the mutation popover:
+- **Your direction:** Type your own steering instructions (e.g. *"more metallic, faster wobble, keep the sub clean"*), choose how many variations you want (1 to 5, default 3), and click **Mutate**. Slots receive your direction with progressive intensity levels (from subtle to bold).
+- **Auto:** Choose from 5 automatic direction chips (**Darker**, **Movement**, **Brighter**, **Weirder**, and **Space**), and click **Auto-mutate**.
+- Settings persist across sessions in your preferences.
+
+#### Auditioning and Saving Variations
+1. The **Audition Strip** appears with your original patch plus the variations you asked for filling the strip. Click any card to audition it live with seamless fades while playing notes.
+2. **Save Variations Immediately:** Click the **Save…** button directly on any variation card to save it as a user preset. An inline name field appears with a suggested default name (`<base name> <direction>`); if a preset already exists with that name, an inline replace confirmation appears. Saved variations appear in your Preset Browser right away while the strip stays open so you can continue auditioning.
+3. Click **Keep** to make the playing variation your active sound, or **Discard** to revert back to the original.
 
 ### 6. Undo
 Click **Undo** at any time to revert back through previous patch iterations, generated sounds, mutations, or preset loads.

@@ -327,11 +327,20 @@ int runMutate (int argc, char** argv, int oversampling)
     const juce::String in (argv[0]);
     juce::File outDir;
     ServiceOptions so;
+    std::string directionText;
+    int count = 0;
+    std::string autoList;
     for (int i = 1; i < argc; ++i)
     {
         const std::string opt = argv[i];
         if (opt == "--outdir" && i + 1 < argc)
             outDir = cwdFile (argv[++i]);
+        else if (opt == "--direction" && i + 1 < argc)
+            directionText = argv[++i];
+        else if (opt == "--count" && i + 1 < argc)
+            count = std::atoi (argv[++i]);
+        else if (opt == "--auto" && i + 1 < argc)
+            autoList = argv[++i];
         else if (! serviceOption (argc, argv, i, so))
         {
             std::printf ("unknown --mutate option %s\n", opt.c_str());
@@ -344,6 +353,26 @@ int runMutate (int argc, char** argv, int oversampling)
         return 2;
     }
     MutateRequest req;
+    if (! directionText.empty())
+    {
+        if (count <= 0)
+            count = 3;
+        count = juce::jlimit (1, 5, count);
+        req.directions = Mutator::buildSteeredDirections (directionText, count);
+    }
+    else if (! autoList.empty())
+    {
+        std::vector<std::string> keys;
+        juce::StringArray parts;
+        parts.addTokens (autoList, ",", "");
+        for (const auto& p : parts)
+        {
+            auto k = p.trim().toLowerCase().toStdString();
+            if (! k.empty())
+                keys.push_back (k);
+        }
+        req.directions = Mutator::buildAutoDirections (keys);
+    }
     std::string error;
     if (! loadBase (in, req.base, req.baseNodes, error))
     {
@@ -374,7 +403,7 @@ int runMutate (int argc, char** argv, int oversampling)
     if (mb.hadTweaks)
         log.line ("  tweaks: %s", mb.baked ? "baked into the code sent" : mb.note.c_str());
     const double t0 = juce::Time::getMillisecondCounterHiRes();
-    const auto& dirs = PromptResources::embedded().mutateDirections;
+    const auto& dirs = ! req.directions.empty() ? req.directions : PromptResources::embedded().mutateDirections;
     const MutateResult mr = Mutator::run (req, nullptr, {}, [&] (int slot, const GenerationResult& r)
     {
         log.line ("  slot %d %-9s finished at %5.1f s: %s", slot + 1, dirs[(size_t) slot].label.c_str(),

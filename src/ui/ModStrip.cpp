@@ -273,6 +273,11 @@ ModPopover::ModPopover (VibeSynthAudioProcessor& processor) : processor_ (proces
         };
         addChildComponent (k);
     }
+
+    addChildComponent (valueEditor);
+    rateSlider_.addMouseListener (this, false);
+    for (auto& k : envKnobs_)
+        k.addMouseListener (this, false);
 }
 
 ModPopover::~ModPopover() = default;
@@ -441,6 +446,119 @@ void ModPopover::resized()
             auto cell = r.removeFromLeft (i < 3 ? cellW : r.getWidth());
             envLabelAreas_[i] = cell.removeFromBottom (14);
             envKnobs_[(size_t) i].setBounds (cell.withSizeKeepingCentre (36, 36));
+        }
+    }
+}
+
+void ModPopover::openRateEditor()
+{
+    const int idx = source_ == ModSource::Lfo2 ? 1 : 0;
+    const auto& lfo = processor_.getUiPatch().mods.lfos[(size_t) idx];
+    const bool isSync = lfo.sync;
+    const juce::String curText = isSync ? juce::String (lfoSyncDivLabel (lfo.syncDiv))
+                                        : juce::String (lfo.rateHz, lfo.rateHz < 10.0 ? 2 : 1) + " Hz";
+    const auto kind = isSync ? KnobUnitKind::SyncedRate : KnobUnitKind::Hz;
+    const double mn = isSync ? 0.0 : 0.05;
+    const double mx = isSync ? static_cast<double> (static_cast<int> (LfoSyncDiv::Count) - 1) : 30.0;
+
+    valueEditor.open (rateLabelArea_, curText, kind, mn, mx,
+                      [this] (double newVal)
+                      {
+                          rateSlider_.setValue (newVal, juce::sendNotificationSync);
+                      });
+}
+
+void ModPopover::openEnvEditor (int i)
+{
+    if (i < 0 || i >= 4)
+        return;
+    const int idx = source_ == ModSource::Env2 ? 1 : 0;
+    const auto& env = processor_.getUiPatch().mods.envs[(size_t) idx];
+    if (i == 2)
+    {
+        const juce::String curText = juce::String (juce::roundToInt (env.sustain * 100.0)) + "%";
+        valueEditor.open (envLabelAreas_[2], curText, KnobUnitKind::Macro, 0.0, 1.0,
+                          [this] (double newVal)
+                          {
+                              envKnobs_[2].setValue (newVal, juce::sendNotificationSync);
+                          });
+    }
+    else
+    {
+        const double val = (i == 0 ? env.attack : (i == 1 ? env.decay : env.release));
+        const juce::String curText = formatSecondsShort (val);
+        valueEditor.open (envLabelAreas_[i], curText, KnobUnitKind::Time, 0.001, 10.0,
+                          [this, i] (double newVal)
+                          {
+                              envKnobs_[(size_t) i].setValue (newVal, juce::sendNotificationSync);
+                          });
+    }
+}
+
+void ModPopover::showRateMenu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader ("LFO Rate");
+    m.addItem (1, juce::String::fromUTF8 ("Type value\xe2\x80\xa6"));
+    auto* top = getTopLevelComponent();
+    if (auto* editor = findParentComponentOfClass<juce::AudioProcessorEditor>())
+        top = editor;
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&rateSlider_).withParentComponent (top),
+                     [this] (int result)
+                     {
+                         if (result == 1)
+                             openRateEditor();
+                     });
+}
+
+void ModPopover::showEnvMenu (int i)
+{
+    if (i < 0 || i >= 4)
+        return;
+    static const char* kNames[] = { "Attack", "Decay", "Sustain", "Release" };
+    juce::PopupMenu m;
+    m.addSectionHeader (kNames[i]);
+    m.addItem (1, juce::String::fromUTF8 ("Type value\xe2\x80\xa6"));
+    auto* top = getTopLevelComponent();
+    if (auto* editor = findParentComponentOfClass<juce::AudioProcessorEditor>())
+        top = editor;
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&envKnobs_[(size_t) i]).withParentComponent (top),
+                     [this, i] (int result)
+                     {
+                         if (result == 1)
+                             openEnvEditor (i);
+                     });
+}
+
+void ModPopover::mouseDown (const juce::MouseEvent& e)
+{
+    if (source_ == ModSource::Lfo1 || source_ == ModSource::Lfo2)
+    {
+        if (e.mods.isPopupMenu() && (e.eventComponent == &rateSlider_ || rateLabelArea_.contains (e.getPosition())))
+        {
+            showRateMenu();
+            return;
+        }
+        if (! e.mods.isPopupMenu() && rateLabelArea_.contains (e.getPosition()))
+        {
+            openRateEditor();
+            return;
+        }
+    }
+    else
+    {
+        for (int i = 0; i < 4; ++i)
+        {
+            if (e.mods.isPopupMenu() && (e.eventComponent == &envKnobs_[(size_t) i] || envLabelAreas_[i].contains (e.getPosition())))
+            {
+                showEnvMenu (i);
+                return;
+            }
+            if (! e.mods.isPopupMenu() && envLabelAreas_[i].contains (e.getPosition()))
+            {
+                openEnvEditor (i);
+                return;
+            }
         }
     }
 }

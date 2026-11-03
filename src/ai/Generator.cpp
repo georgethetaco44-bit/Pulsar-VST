@@ -220,7 +220,7 @@ GenerationResult Generator::run (const GenerationRequest& request, const std::at
         }
         progress (GenerationStage::Building, n);
         const BuiltPrompt bp = isEdit ? builder.buildEdit (edit, haveRetry ? &retry : nullptr)
-                                      : builder.build (request.prompt, haveRetry ? &retry : nullptr);
+                                      : builder.build (request.prompt, haveRetry ? &retry : nullptr, request.extraUserLine);
         ChatRequest cr;
         cr.endpoint = request.config.endpoint;
         cr.model = n > 0 ? request.config.retryModel

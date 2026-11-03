@@ -13,6 +13,8 @@
 // Patch.cpp. Message thread or the CLI; never the audio thread. Reading
 // the file is the only I/O: no network here.
 
+#include <algorithm>
+#include <array>
 #include <string>
 
 namespace vibesynth {
@@ -62,9 +64,32 @@ public:
     // Where the file lives (for messages; never prints the key).
     std::string filePath() const;
 
+    // M14b Mutate steering settings (SPEC §9.7).
+    int mutateCount() const noexcept { return mutateCount_; }
+    void setMutateCount (int n) { mutateCount_ = std::clamp (n, 1, 5); }
+
+    // M14e Takes settings.
+    int generateTakes() const noexcept { return generateTakes_; }
+    void setGenerateTakes (int n) { generateTakes_ = std::clamp (n, 1, 4); }
+
+    bool mutateChip (int index) const noexcept
+    {
+        return index >= 0 && index < 5 ? mutateChips_[(size_t) index] : false;
+    }
+    void setMutateChip (int index, bool lit)
+    {
+        if (index >= 0 && index < 5)
+            mutateChips_[(size_t) index] = lit;
+    }
+    const std::array<bool, 5>& mutateChips() const noexcept { return mutateChips_; }
+    void setMutateChips (const std::array<bool, 5>& chips) { mutateChips_ = chips; }
+
 private:
     AiConfig config_;
     std::string savedKey_;
+    int mutateCount_ = 3;
+    std::array<bool, 5> mutateChips_ { true, true, true, true, false };
+    int generateTakes_ = 1;
 };
 
 // M9: the "Pulsar" app-data folder the settings file lives in (user

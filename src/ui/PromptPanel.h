@@ -87,9 +87,14 @@ public:
     std::function<void()> onAddKey;
     std::function<void()> onMutate;   // M11
     std::function<void()> onUndo;     // M11
+    std::function<void (int)> onTakesChanged; // M14e
+
+    int getTakes() const noexcept { return takes_; }
+    void setTakes (int t);
 
     PromptEditor prompt;
     juce::TextButton actionButton;
+    std::array<juce::TextButton, 4> takesButtons;
     juce::TextButton mutateButton { "Mutate" };
     juce::TextButton undoButton { "Undo" };
     juce::TextButton addKeyButton { "Add key" };
@@ -97,10 +102,12 @@ public:
 
 private:
     void actionClicked();
+    void updateTakesButtons();
 
     bool needsKey() const noexcept { return ! state.canGenerate && ! state.generating; }
 
     HeaderState state;
+    int takes_ = 1;
     juce::Rectangle<int> wordmarkArea, keyCardArea;
 };
 

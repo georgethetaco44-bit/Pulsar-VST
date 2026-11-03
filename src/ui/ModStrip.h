@@ -14,6 +14,7 @@
 #include "engine/Modulators.h"
 #include "patch/Patch.h"
 #include "ui/Theme.h"
+#include "ui/ValueEditorOverlay.h"
 
 class VibeSynthAudioProcessor;
 
@@ -90,8 +91,14 @@ public:
 
     std::function<void()> onClose;
 
+    void openRateEditor();
+    void openEnvEditor (int envIndex);
+    void showRateMenu();
+    void showEnvMenu (int envIndex);
+
     void paint (juce::Graphics& g) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent& e) override;
 
 private:
     void applyLfoEdit (const std::function<void (ModLfoSpec&)>& fn);
@@ -111,6 +118,7 @@ private:
 
     // Env controls (A, D, S, R)
     std::array<juce::Slider, 4> envKnobs_;
+    ValueEditorOverlay valueEditor;
 
     juce::Rectangle<int> headerArea_, rateLabelArea_, envLabelAreas_[4];
 };

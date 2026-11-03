@@ -47,6 +47,8 @@ struct GenerationRequest
 {
     GenerationKind kind = GenerationKind::Generate;
     std::string prompt;
+    std::string extraUserLine;      // M14e: take line appended to user message after request
+    int takes = 1;                  // M14e: 1..4 takes
     Patch base;                     // Change, Mutate: the active patch (trim set)
     TouchedNodes baseNodes;         // its node list, if known (else probed here)
     bool baseNodesKnown = false;

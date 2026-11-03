@@ -1027,10 +1027,67 @@ Each milestone has an exit test. Don't start the next until it passes.
     user's own direction text (one intensity per slot, subtle to bold) or
     Auto chips (Darker, Movement, Brighter, Weirder, and a new Space);
     "Type value…" on every knob, with unit-aware parsing.
+    **Done Nov 2:** as planned. kSlots is 5; the direction text is kept for
+    the session; chips and count are kept in AiSettings. Real runs on Reese:
+    steered 3/3 and auto (5 chips) 5/5 passed, both in about 30 s. Advisor
+    fixes: non-ASCII literals ("Save…", "Type value…", "Set range…") went
+    through juce::String(const char*) and showed as "Saveâ¦"; they now use
+    fromUTF8, and the card-label shortener no longer cuts inside a UTF-8
+    character. Known bug, fixed in 14e task 0: typed Hz on a normalised
+    filter cutoff clamps to the maximum.
+14e. **Generate several takes (planned Nov 2, after 14b):** a Takes selector
+    (1–4, default 1 = today's behaviour) next to Generate. With 2 or more, the
+    same prompt is sent as N parallel requests, each with a different
+    "take" angle (literal reading; a different sound source; different
+    movement; a bolder reading), through Mutate's parallel runner (shared
+    test gate, 429 fallback, cancel). The passing takes open in the audition
+    strip against the patch that was playing before; Keep, Discard and the
+    per-card Save… work as in Mutate. Every passing take is also written to
+    History.
+14c. **Wider lexicon (planned Nov 3):** the user's problem: most prompts come
+    back reese-like. Causes found Nov 2:
+    - Only 3 worked examples (reese bass, pluck, FM texture). Two are sent
+      per request, padded in file order, so the reese is in almost every
+      request, including prompts that match nothing.
+    - No recipe or example uses osc_square as the main voice ("square"
+      matches nothing), and the bass rule lists only wt/fm/sync/supersaw as
+      mid sources.
+    - Every bass follows one chain (sine sub + driven mid + hp + OTT + sat).
+    - When fewer than 2 recipes match, ott_glue and tempo_sync are always
+      added, so everything is squashed and wobbled.
+    - No examples or recipes for leads, pads, keys, bells, FX, sirens or
+      risers.
+    Fix (prompt resources and PromptBuilder only, no engine code):
+    - about 8 worked examples by category: reese, square/riddim, FM wub, noise
+      bass, lead, pad, pluck, FX. Made from the user's M14 keepers via --bake
+      where possible.
+    - padding by best category, never a fixed reese
+    - new recipes: square/PWM, 808 glide, acid, hoover, clean FM wub, noise
+      bass, lead, pad/chords, siren/riser
+    - a looser bass rule that names square, pulse and saw sources and allows
+      other chains
+    - neutral default padding
+    - a wider keyword vocabulary
+    - the user's saved presets as candidate examples (local only; they never
+      enter the repo)
+    - one batch30 run with the larger Meta model for Generate, to compare
+    - an LLM judge score ("does this patch match the prompt, 1–5") added to
+      --batch, so accuracy is measured, not guessed
+14d. **"How I understood it" card + web lookup (if time before the
+    freeze):** before writing code, the model turns the prompt into a short,
+    editable plan (source, filter, movement, grit, sub, mode, tempo), with
+    at most two multiple-choice questions when the prompt is ambiguous. The
+    user edits it, then confirms. An opt-in "Look up references" toggle fills
+    the plan through the Responses API's `web_search` tool (POST
+    /v1/responses, the same key; Chat Completions can't search; about
+    $2.50 per 1,000 searches), showing cited sources. Artist or genre names
+    travel only at runtime in what the user typed; none go in the repo. The
+    confirmed plan is appended to the normal Generate request, and its
+    plain sound words also drive recipe matching.
 14. **Sound pass 2.** The user designs presets by hand with M10–M12; the best
     become the LLM examples (via `--bake`). *Exit: the user keeps ≥ 10 of 15.*
 15. **Release polish.** README with Gatekeeper instructions, tagged GitHub
-    release, demo video script. Code freeze the evening of Nov 3.
+    release, demo video script. Code freeze Nov 4, 12:00 PM PST.
     UI nits from the M10/M11 merge: the status line says "Generating:" during
     a Change; the response readout shows "957.403 HZ" (should be "957 Hz");
     slotless bus pills read "bus_mono_low 0".
@@ -1041,7 +1098,22 @@ Each milestone has an exit test. Don't start the next until it passes.
     release zips named Pulsar-<version>-<os>.zip with README-INSTALL.txt,
     docs/DEMO.md, and all four nits fixed (Set range is now a popover).
 16. **[LATER]** extra libraries (§5.2 LATER list), editable wiring, Breed.
+    Accuracy, after the hackathon:
+    - Reference-sound matching: the user drops in a WAV; Pulsar measures
+      brightness, noisiness, movement rate, envelope and sub level, turns
+      them into a description, then renders each attempt, compares and sends
+      the differences back.
+    - A self-check loop: the model states target descriptors with the patch;
+      Pulsar measures the render (reusing the M14a STFT code) and retries
+      once on a clear miss.
 
 **Schedule (deadline Nov 4, 6 PM PST):** Oct 31: M10 and M11 in parallel
 (two worktrees). Nov 1: M12, then M13 in parallel if M10 is merged; README.
-Nov 2: M14. Nov 3: fixes only, tag, freeze. Nov 4: demo video, submit.
+Nov 2: M14. Revised Nov 2: code may change until the submission deadline
+(Nov 4, 6 PM PST); Nov 3 is the last day to send questions to the organisers.
+Nov 3: 14e, 14c, 14d. Nov 4: code freeze at 12:00 PM PST, tag, release CI,
+demo video, submit by 5 PM (one hour of buffer).
+**Final roadmap (set Nov 2):** 14b (running) → 14e → 14c → 14d if time →
+M15 refresh (README, DEMO.md for every new feature), freeze at 12:00 PM PST
+on Nov 4, tag. Cut order if late: 14d first, then 14e; 14c stays. Every
+feature that ships must be in the demo video and the README by the freeze.

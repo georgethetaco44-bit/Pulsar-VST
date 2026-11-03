@@ -235,7 +235,10 @@ set(VIBESYNTH_UI_SOURCES
     src/ui/PresetBrowser.cpp
     src/ui/CodeView.cpp
     src/ui/SettingsPanel.cpp
-    src/ui/Snapshot.cpp)
+    src/ui/Snapshot.cpp
+    src/ui/MutatePopover.cpp
+    src/ui/KnobValueParser.cpp
+    src/ui/ValueEditorOverlay.cpp)
 
 target_sources(VibeSynthVST PRIVATE
     src/PluginProcessor.cpp
@@ -253,7 +256,9 @@ target_sources(VibeSynthVST PRIVATE
     src/ui/AuditionStrip.cpp
     src/ui/SnapshotM11.cpp
     src/ui/ModStrip.cpp
-    src/ui/SnapshotM13.cpp)
+    src/ui/SnapshotM13.cpp
+    src/ui/SnapshotM14b.cpp
+    src/ui/SnapshotM14e.cpp)
 
 target_include_directories(VibeSynthVST PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -364,7 +369,10 @@ target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/SmokeM12b.cpp
     tools/vibesynth_cli/SmokeMerge.cpp
     tools/vibesynth_cli/SmokeM13.cpp
-    tools/vibesynth_cli/SmokeM14a.cpp)
+    tools/vibesynth_cli/SmokeM14a.cpp
+    src/ui/KnobValueParser.cpp
+    tools/vibesynth_cli/SmokeM14b.cpp
+    tools/vibesynth_cli/SmokeM14e.cpp)
 # --render writes WAV only: keep JUCE's bundled FLAC/Ogg Vorbis codecs (and
 # the Windows Media reader) out of the CLI.
 target_compile_definitions(vibesynth_cli PRIVATE

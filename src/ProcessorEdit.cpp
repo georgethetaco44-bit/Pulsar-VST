@@ -179,10 +179,77 @@ bool VibeSynthAudioProcessor::requestNodeChange (const juce::String& nodeId, con
 bool VibeSynthAudioProcessor::canMutate()
 {
     const bool running = mutateView.running && mutateThread != nullptr && mutateThread->isThreadRunning();
-    return aiSettings().hasKey() && ! running;
+    return aiSettings().hasKey() && ! running && ! mutateView.open;
 }
 
-void VibeSynthAudioProcessor::startMutate()
+void VibeSynthAudioProcessor::applyTakesResult (const vibesynth::MutateResult& result, int numTakes)
+{
+    generating = false;
+    const int ready = result.passed();
+    if (ready == 0)
+    {
+        const juce::String reason = result.slots.empty() ? "Generation failed"
+                                                         : juce::String (result.slots[0].reason);
+        setStatus ("Generation failed: " + reason, StatusKind::Error,
+                   reason + "\n\nThe current patch is still playing.");
+        sendChangeMessage();
+        return;
+    }
+
+    ++mutateSession;
+    mutateResults = {};
+    mutateView = {};
+    mutateView.open = true;
+    mutateView.running = false;
+    mutateView.auditioning = -1;
+    mutateView.numSlots = numTakes;
+    mutateView.baseName = mutateOriginal.patch.name;
+    mutateView.startedMs = juce::Time::getMillisecondCounterHiRes();
+
+    for (int i = 0; i < numTakes; ++i)
+    {
+        auto& v = mutateView.slots[(size_t) i];
+        v.direction = result.directions[(size_t) i].label;
+        if (result.slots[(size_t) i].ok)
+        {
+            v.state = vibesynth::MutateSlotView::State::Ready;
+            auto r = std::make_shared<vibesynth::GenerationResult> (result.slots[(size_t) i]);
+            r->patch.name = r->patch.name + " (take " + std::to_string (i + 1) + ")";
+            v.name = r->patch.name;
+            v.text = "Ready";
+            mutateResults[(size_t) i] = r;
+
+            juce::String histErr;
+            const auto saved = vibesynth::PatchLibrary::addToHistory (
+                vibesynth::PatchLibrary::historyFolder(), r->patch, juce::Time::getCurrentTime(), histErr);
+            if (saved != juce::File())
+                ++historyVersion;
+        }
+        else if (result.slots[(size_t) i].cancelled)
+        {
+            v.state = vibesynth::MutateSlotView::State::Cancelled;
+            v.text = "Cancelled";
+        }
+        else
+        {
+            v.state = vibesynth::MutateSlotView::State::Failed;
+            v.text = juce::String (result.slots[(size_t) i].reason).upToFirstOccurrenceOf ("\n", false, false).toStdString();
+            v.detail = result.slots[(size_t) i].reason;
+        }
+    }
+    for (int i = numTakes; i < vibesynth::MutateView::kSlots; ++i)
+    {
+        mutateView.slots[(size_t) i].state = vibesynth::MutateSlotView::State::Empty;
+    }
+
+    status = { StatusKind::Success,
+               juce::String (ready) + " of " + juce::String (numTakes) + " takes ready: click one to hear it, Keep to use it",
+               {} };
+    ++editVersion;
+    sendChangeMessage();
+}
+
+void VibeSynthAudioProcessor::startMutate (std::vector<vibesynth::MutateDirection> directions)
 {
     auto& settingsRef = aiSettings();
     if (! settingsRef.hasKey())
@@ -205,21 +272,35 @@ void VibeSynthAudioProcessor::startMutate()
         mutateThread.reset();
     }
 
+    if (directions.empty())
+    {
+        const auto& all = vibesynth::PromptResources::embedded().mutateDirections;
+        for (size_t i = 0; i < std::min<size_t> (4, all.size()); ++i)
+            directions.push_back (all[i]);
+    }
+    if ((int) directions.size() > vibesynth::MutateView::kSlots)
+        directions.resize ((size_t) vibesynth::MutateView::kSlots);
+
+    const int n = (int) directions.size();
     mutateOriginal = captureSnapshot();
     ++mutateSession;
     mutateResults = {};
     mutateView = {};
     mutateView.open = true;
     mutateView.running = true;
+    mutateView.numSlots = n;
     mutateView.baseName = uiPatch.name;
     mutateView.startedMs = juce::Time::getMillisecondCounterHiRes();
-    const auto& dirs = vibesynth::PromptResources::embedded().mutateDirections;
-    for (int i = 0; i < vibesynth::MutateView::kSlots; ++i)
+    for (int i = 0; i < n; ++i)
     {
         auto& v = mutateView.slots[(size_t) i];
         v.state = vibesynth::MutateSlotView::State::Waiting;
-        v.direction = i < (int) dirs.size() ? dirs[(size_t) i].label : "Variation " + std::to_string (i + 1);
+        v.direction = directions[(size_t) i].label;
         v.text = "Waiting for model";
+    }
+    for (int i = n; i < vibesynth::MutateView::kSlots; ++i)
+    {
+        mutateView.slots[(size_t) i].state = vibesynth::MutateSlotView::State::Empty;
     }
 
     // M10 merge (SPEC §9.6): the tweaks are baked into the code sent, so the
@@ -232,12 +313,13 @@ void VibeSynthAudioProcessor::startMutate()
     req.baseNodesKnown = nodesKnown && ! base.baked;
     req.config = settingsRef.config();
     req.apiKey = settingsRef.apiKey();
+    req.directions = directions;
     const double rate = preparedRate.load();
     req.sampleRate = rate > 0.0 ? rate : 48000.0;
     mutateThread = std::make_unique<MutateThread> (*this, std::move (req), mutateSession);
     mutateThread->startThread();
     ++editVersion;
-    setStatus ("Mutating '" + juce::String (uiPatch.name) + "': 4 variations on their way"
+    setStatus ("Mutating '" + juce::String (uiPatch.name) + "': " + juce::String (n) + " variations on their way"
                    + (mutateNote.isNotEmpty() ? " (without your tweaks)" : ""),
                StatusKind::Info, mutateNote);
 }
@@ -348,11 +430,12 @@ void VibeSynthAudioProcessor::applyMutateEvents()
     if (finished)
     {
         int ready = 0;
-        for (const auto& v : mutateView.slots)
-            ready += v.state == State::Ready ? 1 : 0;
+        const int n = mutateView.activeSlots();
+        for (int i = 0; i < n; ++i)
+            ready += mutateView.slots[(size_t) i].state == State::Ready ? 1 : 0;
         if (ready > 0)
             status = { StatusKind::Success,
-                       juce::String (ready) + " of 4 variations ready: click one to hear it, Keep to use it",
+                       juce::String (ready) + " of " + juce::String (n) + " variations ready: click one to hear it, Keep to use it",
                        mutateNote };
         else if (mutateView.slots[0].state == State::Cancelled)
             status = { StatusKind::Info, "Mutate cancelled", {} };
@@ -370,10 +453,62 @@ void VibeSynthAudioProcessor::cancelMutate()
         mutateThread->cancel = true;
 }
 
+vibesynth::Patch VibeSynthAudioProcessor::getPatchForVariation (int slot) const
+{
+    if (slot < 0 || slot >= mutateView.activeSlots())
+        return {};
+    if (mutateView.auditioning == slot)
+    {
+        auto p = uiPatch;
+        for (int i = 0; i < 8; ++i)
+            if (auto* param = apvts.getParameter ("macro" + juce::String (i + 1)))
+            {
+                const double v = vibesynth::quantisePatchNumber (param->getValue());
+                if (i >= (int) p.macros.size() && std::abs (v - 0.5) > 1.0e-6)
+                    p.macros.resize ((size_t) i + 1);
+                if (i < (int) p.macros.size())
+                    p.macros[(size_t) i].defaultValue = v;
+            }
+        return p;
+    }
+    if (mutateResults[(size_t) slot] != nullptr)
+        return mutateResults[(size_t) slot]->patch;
+    return {};
+}
+
+bool VibeSynthAudioProcessor::saveVariationPreset (int slot, const juce::String& name, bool overwrite, juce::String& error)
+{
+    if (slot < 0 || slot >= mutateView.activeSlots())
+    {
+        error = "invalid variation slot";
+        return false;
+    }
+    auto patch = getPatchForVariation (slot);
+    if (patch.init.empty() && patch.voice.empty())
+    {
+        error = "variation not ready";
+        return false;
+    }
+    patch.name = name.trim().toStdString();
+    const auto file = vibesynth::PatchLibrary::saveUserPatch (vibesynth::PatchLibrary::userFolder(), name, patch, overwrite, error);
+    if (file == juce::File())
+        return false;
+    ++userPresetsVersion;
+    setStatus ("Saved variation '" + name + "'", StatusKind::Info, file.getFullPathName());
+    sendChangeMessage();
+    return true;
+}
+
 void VibeSynthAudioProcessor::auditionMutation (int slot)
 {
-    if (! mutateView.open || slot == mutateView.auditioning || slot >= vibesynth::MutateView::kSlots)
+    if (! mutateView.open || slot == mutateView.auditioning || slot >= mutateView.activeSlots())
         return;
+    // Remember tweaks made to the variation playing before switching
+    if (mutateView.auditioning >= 0 && mutateView.auditioning < mutateView.activeSlots()
+        && mutateResults[(size_t) mutateView.auditioning] != nullptr)
+    {
+        mutateResults[(size_t) mutateView.auditioning]->patch = getPatchForVariation (mutateView.auditioning);
+    }
     if (slot < 0)
     {
         applySnapshot (mutateOriginal, "Original:");

@@ -235,7 +235,8 @@ std::string PromptBuilder::patchRequest (const std::string& userPrompt)
     return "Write a Pulsar patch for: " + userPrompt;
 }
 
-BuiltPrompt PromptBuilder::build (const std::string& userPrompt, const RetryContext* retry) const
+BuiltPrompt PromptBuilder::build (const std::string& userPrompt, const RetryContext* retry,
+                                  const std::string& extraUserLine) const
 {
     BuiltPrompt b;
     b.messages.push_back ({ "system", res_.systemPrompt + "\n\n" + res_.apiReference });
@@ -255,6 +256,8 @@ BuiltPrompt PromptBuilder::build (const std::string& userPrompt, const RetryCont
         b.recipeFiles.push_back (res_.recipes[(size_t) i].file);
     }
     user += "\n\n" + patchRequest (userPrompt);
+    if (! extraUserLine.empty())
+        user += "\n" + extraUserLine;
     b.messages.push_back ({ "user", user });
 
     if (retry != nullptr)

@@ -296,7 +296,7 @@ vibesynth::AiSettings& VibeSynthAudioProcessor::aiSettings()
     return *settings;
 }
 
-void VibeSynthAudioProcessor::generate (const juce::String& prompt)
+void VibeSynthAudioProcessor::generate (const juce::String& prompt, int takes)
 {
     const auto text = prompt.trim();
     if (text.isEmpty())
@@ -311,8 +311,18 @@ void VibeSynthAudioProcessor::generate (const juce::String& prompt)
                    StatusKind::Error);
         return;
     }
+    if (takes <= 0)
+        takes = s.generateTakes();
+    takes = std::clamp (takes, 1, 4);
+
+    if (takes >= 2)
+    {
+        mutateOriginal = captureSnapshot();
+    }
+
     auto request = std::make_unique<vibesynth::GenerationRequest>();
     request->prompt = text.toStdString();
+    request->takes = takes;
     request->config = s.config();
     request->apiKey = s.apiKey();
     const double rate = preparedRate.load();
@@ -449,6 +459,42 @@ void VibeSynthAudioProcessor::runGeneration (const vibesynth::GenerationRequest&
             postGenerationStatus (StatusKind::Busy, s);
         }
     };
+
+    if (request.takes >= 2)
+    {
+        vibesynth::TakesRequest tr;
+        tr.prompt = request.prompt;
+        tr.takes = request.takes;
+        tr.config = request.config;
+        tr.apiKey = request.apiKey;
+        tr.sampleRate = request.sampleRate;
+        tr.measureVoice = request.measureVoice;
+        if (request.transport)
+            tr.transport = [t = request.transport] (const vibesynth::ChatRequest& c, const std::atomic<bool>*) { return t (c); };
+
+        const auto mutateRes = vibesynth::Mutator::runTakes (
+            tr, &cancelGenerationFlag,
+            [&] (int /*slot*/, const vibesynth::GenerationProgress& p)
+            {
+                onProgress (p);
+            });
+        generating = false;
+
+        if (mutateRes.cancelled || generationPending.load())
+        {
+            if (! generationPending.load())
+                postGenerationStatus (StatusKind::Info, "Generation cancelled");
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock (resultMutex);
+            takesEvents.push_back ({ mutateRes, request.takes });
+        }
+        triggerAsyncUpdate();
+        return;
+    }
+
     const auto res = vibesynth::Generator::run (request, &cancelGenerationFlag, onProgress);
     generating = false;
     const bool isChange = request.kind == vibesynth::GenerationKind::Change;  // M11
@@ -747,12 +793,14 @@ void VibeSynthAudioProcessor::postResult (LoadResult result)
 void VibeSynthAudioProcessor::handleAsyncUpdate()
 {
     std::vector<LoadResult> done;
+    std::vector<TakesResultEvent> takesDone;
     Status genStatus;
     bool genStatusChanged = false;
     bool keyTestChanged = false;
     {
         std::lock_guard<std::mutex> lock (resultMutex);
         done.swap (results);
+        takesDone.swap (takesEvents);
         if (keyTestPosted)
         {
             keyTestPosted = false;
@@ -767,6 +815,8 @@ void VibeSynthAudioProcessor::handleAsyncUpdate()
         generationStatusPending = false;
     }
     applyMutateEvents(); // M11: audition strip progress and results
+    for (const auto& te : takesDone)
+        applyTakesResult (te.result, te.numTakes);
 
     if (genStatusChanged)
     {

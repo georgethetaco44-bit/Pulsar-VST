@@ -12,3 +12,7 @@ Brighter and sharper: more upper harmonics and bite (fold, saturation, comb, res
 
 ## weirder: Weirder
 Weirder: bring in one surprising technique from the reference (chaos, FM, formants, comb steps, resonators, bytebeat, crush) that changes the character, still playable and in tune.
+
+## space: Space
+Space and width: open the top with bus_width and add a light, filtered bus_delay or bus_reverb on the master; the sub stays mono and dry; don't change the core tone.
+

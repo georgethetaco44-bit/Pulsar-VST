@@ -72,6 +72,8 @@
 #include "SmokeM12b.h"
 #include "SmokeM13.h"
 #include "SmokeM14a.h"
+#include "SmokeM14b.h"
+#include "SmokeM14e.h"
 #include "SmokeMerge.h"
 #include "engine/OutputStage.h"
 #include "patch/LexiconLint.h"
@@ -1176,6 +1178,8 @@ int runSmoketest()
     ok = vibesynth_cli::smokeMerge() && ok;
     ok = vibesynth_cli::smokeM13() && ok;
     ok = vibesynth_cli::smokeM14a() && ok;
+    ok = vibesynth_cli::smokeM14b() && ok;
+    ok = vibesynth_cli::smokeM14e() && ok;
     std::printf (ok ? "SMOKETEST PASS\n" : "SMOKETEST FAIL\n");
     return ok ? 0 : 1;
 }
@@ -1273,11 +1277,11 @@ int main (int argc, char** argvIn)
                      "                       [--sr HZ] [--seconds-tail S] [--bpm BPM] [--phrase default|riff] [--octave N]\n"
                      "                       [--mode patch|poly|mono] [--glide G] [--macro N=V]...\n"
                      "                     | --macro-scan [<patch.pulsar | built-in | all>]\n"
-                     "                     | --batch prompts.txt [--batch-limit N] [--out DIR] [--endpoint URL] [--model ID]\n"
+                     "                     | --batch prompts.txt [--batch-limit N] [--takes N] [--out DIR] [--endpoint URL] [--model ID]\n"
                      "                       [--effort low|minimal|medium|none]\n"
                      "                     | --bake in.pulsar out.pulsar\n"
                      "                     | --change <in.pulsar | built-in> --node ID --say \"instruction\" --out out.pulsar\n"
-                     "                     | --mutate <in.pulsar | built-in> --outdir DIR\n"
+                     "                     | --mutate <in.pulsar | built-in> --outdir DIR [--direction \"text\" --count N | --auto darker,space,...]\n"
                      "                     | --change-batch cases.txt [--out DIR])\n"
                      "                     [--os 1|2]  (bench/validate/render voice oversampling, default 2)\n");
         return 2;
