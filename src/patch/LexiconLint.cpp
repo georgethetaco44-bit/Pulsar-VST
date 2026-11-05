@@ -425,6 +425,105 @@ void checkCalls (const std::string& code, const std::string& section, const Scan
     }
 }
 
+// Where the voice writes its output variables. A voice that mentions outl or
+// outr anywhere is stereo (isStereoVoiceCode), and a stereo voice plays only
+// outl and outr, so a half-written pair leaves a channel silent and a write
+// to out goes nowhere. Function parameters and local(), static() or instance()
+// names are other variables that happen to share the name, so they don't count.
+void checkVoiceOutputs (const std::string& voiceCode, LintResult& r)
+{
+    const std::string s = blankCommentsAndStrings (voiceCode);
+    constexpr size_t kNone = std::string::npos;
+    size_t writeOut = kNone, writeL = kNone, writeR = kNone, mentionStereo = kNone;
+
+    std::set<std::string> declared;
+    bool afterFunctionKeyword = false;
+    for (size_t i = 0; i < s.size();)
+    {
+        if (! isIdentStart (s[i]) || (i > 0 && isIdentChar (s[i - 1])))
+        {
+            ++i;
+            continue;
+        }
+        const size_t start = i;
+        while (i < s.size() && isIdentChar (s[i]))
+            ++i;
+        const std::string word = lower (s.substr (start, i - start));
+        size_t j = i;
+        while (j < s.size() && isSpace (s[j]))
+            ++j;
+        const bool isCall = j < s.size() && s[j] == '(';
+        if (word == "function")
+        {
+            afterFunctionKeyword = true;
+            continue;
+        }
+        if (isCall && (afterFunctionKeyword || word == "local" || word == "static" || word == "instance"))
+        {
+            Call decl;
+            readArgs (s, j, decl);
+            for (const std::string& name : decl.args)
+                declared.insert (lower (name));
+        }
+        afterFunctionKeyword = false;
+    }
+
+    auto isAssignedAt = [&s] (size_t j)
+    {
+        const auto at = [&s] (size_t k) { return k < s.size() ? s[k] : '\0'; };
+        if (at (j) == '=')
+            return at (j + 1) != '=';
+        const char c = at (j);
+        const bool compound = c == '+' || c == '-' || c == '*' || c == '/' || c == '%'
+                              || c == '|' || c == '&' || c == '^' || c == '~';
+        return compound && at (j + 1) == '=' && at (j + 2) != '=';
+    };
+
+    for (size_t i = 0; i < s.size();)
+    {
+        if (! isIdentStart (s[i]) || (i > 0 && isIdentChar (s[i - 1])))
+        {
+            ++i;
+            continue;
+        }
+        const size_t start = i;
+        while (i < s.size() && isIdentChar (s[i]))
+            ++i;
+        const std::string word = lower (s.substr (start, i - start));
+        if ((word != "out" && word != "outl" && word != "outr") || declared.count (word) > 0)
+            continue;
+        size_t j = i;
+        while (j < s.size() && isSpace (s[j]))
+            ++j;
+        if (word != "out" && mentionStereo == kNone)
+            mentionStereo = start;
+        if (! isAssignedAt (j))
+            continue;
+        size_t& first = word == "out" ? writeOut : word == "outl" ? writeL : writeR;
+        if (first == kNone)
+            first = start;
+    }
+
+    if (writeL != kNone && writeR == kNone)
+        addIssue (r, "voice", voiceCode, writeL,
+                  "writes outl but never outr, so the right channel is silent. Add outr = ...; "
+                  "(outr = osc_unison_r(slot) after osc_unison, or outr = outl; for the same signal), "
+                  "or write only out for a mono voice");
+    if (writeR != kNone && writeL == kNone)
+        addIssue (r, "voice", voiceCode, writeR,
+                  "writes outr but never outl, so the left channel is silent. Add outl = ...; "
+                  "(outl = outr; for the same signal), or write only out for a mono voice");
+    if (writeOut != kNone && (writeL != kNone || writeR != kNone))
+        addIssue (r, "voice", voiceCode, writeOut,
+                  "writes out as well as outl/outr. A stereo voice plays only outl and outr, so what "
+                  "goes in out is lost. Use another name if it is a temporary (y = ...; outl = y; outr = y;), "
+                  "or write only out for a mono voice");
+    if (mentionStereo != kNone && writeL == kNone && writeR == kNone)
+        addIssue (r, "voice", voiceCode, mentionStereo,
+                  "mentions outl/outr without assigning them. Any mention makes the voice stereo and "
+                  "it would play silence. Assign both outl and outr, or remove them and write only out");
+}
+
 } // namespace
 
 std::string LintResult::message() const
@@ -452,6 +551,7 @@ LintResult lintPatch (const Patch& patch)
     LintResult r;
     for (int i = 0; i < 3; ++i)
         checkCalls (*sections[i].second, sections[i].first, scans[i], functions, r);
+    checkVoiceOutputs (patch.voice, r);
     return r;
 }
 
@@ -461,6 +561,8 @@ LintResult lintSection (const std::string& code, const std::string& section)
     scanSection (code, scan);
     LintResult r;
     checkCalls (code, section, scan, scan.functions, r);
+    if (section == "voice")
+        checkVoiceOutputs (code, r);
     return r;
 }
 

@@ -197,6 +197,7 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
             float voiceBufR[kChunk * PatchProgram::kMaxOversampling];
             float hostBufR[kChunk];
             double peak = 0.0;
+            double peakL = 0.0, peakR = 0.0;
             double sumL = 0.0, sumR = 0.0;
             // No host: 120 bpm, beat 0 at the note-on (SPEC §4.3).
             Transport transport;
@@ -287,6 +288,8 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
                         const double al = std::fabs (static_cast<double> (l));
                         const double ar = std::fabs (static_cast<double> (r));
                         peak = std::max (peak, std::max (al, ar));
+                        peakL = std::max (peakL, al);
+                        peakR = std::max (peakR, ar);
                         if (i >= dcStart)
                         {
                             sumL += l;
@@ -330,6 +333,8 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
                         const double al = std::fabs (static_cast<double> (l));
                         const double ar = std::fabs (static_cast<double> (r));
                         peak = std::max (peak, std::max (al, ar));
+                        peakL = std::max (peakL, al);
+                        peakR = std::max (peakR, ar);
                         if (i >= dcStart)
                         {
                             sumL += l;
@@ -366,6 +371,17 @@ ValidationResult validatePatch (const Patch& patch, double sampleRate,
                 return finish (reject (result, PatchStatus::DcOffset,
                                        "DC offset " + fmt ("%.2f", dc) + " (max 0.1) at "
                                            + where (note, set)));
+            // SPEC 8.1: the quiet channel must be well under the loud one too,
+            // so two channels fading out together near -80 dBFS aren't caught.
+            const double loud = std::max (peakL, peakR);
+            const double quiet = std::min (peakL, peakR);
+            if (loud >= kSilence && quiet < kSilence && quiet * 10.0 < loud)
+                return finish (reject (result, PatchStatus::OneChannel,
+                                       std::string (peakL < peakR ? "left" : "right")
+                                           + " channel is silent while the other peaks at "
+                                           + fmt ("%+.1f", 20.0 * std::log10 (loud)) + " dBFS (" + where (note, set)
+                                           + "). Make both channels sound at every macro setting: check what "
+                                             "writes outl and outr in voice and in master."));
         }
     }
 

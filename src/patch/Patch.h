@@ -43,6 +43,7 @@ enum class PatchStatus
     TooLoud,       // peak above +12 dBFS before the limiter
     DcOffset,      // |mean| above 0.1 over the last 0.5 s
     Silent,        // all 9 configurations below -80 dBFS
+    OneChannel,    // one channel below -80 dBFS while the other sounds, in any configuration
     TooSlow,       // CPU over 10 % of real time, or the 100 ms deadline
     MacroNoise     // M14a: macro at 1 turns sound into noise
 };

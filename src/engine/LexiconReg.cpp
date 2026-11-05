@@ -45,6 +45,7 @@ EEL_F NSEEL_CGEN_CALL fnEnvAdsr (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnEnvFollow (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnModLfo (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnModCurve (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnModCurveNote (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxFold (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxSat (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxShape (void*, INT_PTR, EEL_F**);
@@ -192,6 +193,10 @@ constexpr Registration kRegistrations[] = {
         kNoBypass, 0, 0.0, kControl, 0,
         { aSlot, beats ("beats", "Beats", 0.0625, 32.0), choice ("base", "Base", 0.0, 65535.0),
           choice ("points", "Points", 2.0, 32.0) } }, &fnModCurve },
+    { { "mod_curve_note", "slot, beats, base, points", 4, kNumModCurveSlots, kBoth, mod (ModuleId::ModCurveNote), true,
+        kNoBypass, 0, 0.0, kControl, 0,
+        { aSlot, beats ("beats", "Beats", 0.0625, 32.0), choice ("base", "Base", 0.0, 65535.0),
+          choice ("points", "Points", 2.0, 32.0) } }, &fnModCurveNote },
     { { "fx_fold", "in, amount", 2, 0, kBoth, mod (ModuleId::FxFold), true, kPass, 0, 0.0, kAudio, 0,
         { audio ("in"), norm ("amount", "Amount") } }, &fnFxFold },
     { { "fx_sat", "in, drive", 2, 0, kBoth, mod (ModuleId::FxSat), true, kPass, 0, 0.0, kAudio, 0,

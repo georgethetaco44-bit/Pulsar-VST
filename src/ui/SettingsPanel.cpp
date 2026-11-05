@@ -94,9 +94,11 @@ void SettingsPanel::open()
 
     const auto wtStatus = vibesynth::getWavetableFolderStatus();
     juce::String listText;
-    if (wtStatus.loaded.empty())
+    if (wtStatus.loading)
+        listText = "Still loading custom tables. Reopen this panel to see the full list.\n\n";
+    if (wtStatus.loaded.empty() && ! wtStatus.loading)
     {
-        listText = "No custom tables loaded (tables 0-7 are built-in).\nPlace 2048-sample/frame WAV files in this folder.";
+        listText += "No custom tables loaded (tables 0-7 are built-in).\nPlace 2048-sample/frame WAV files in this folder.";
     }
     else
     {

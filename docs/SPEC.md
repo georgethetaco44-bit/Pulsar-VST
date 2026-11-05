@@ -204,11 +204,11 @@ a bench line and an API reference line.
 
 | Item | State | Still needed |
 |---|---|---|
-| Stereo voices (`outl`, `outr`) | Prototype; all 23 built-ins matched main | Lint for half-written stereo; validate that neither channel is silent alone; measure CPU cost |
-| `osc_unison` (up to 16 voices) | Prototype; about 490–690 ns at 4 voices | Must fit the poly budget, or state the real limit in the prompt |
-| `mod_curve` drawn curves | Prototype; validates every point every sample | Make it cheaper; fix base rounding |
-| Loaded wavetables (tables 8–39) | Prototype; loads inside the plugin constructor | Load in background; normalise (remove DC, one gain per table); make portable (§6.5) |
-| Note-restarted curves | Not started | Curves restart on each note, with exponential bends. The rebuild had to code these by hand |
+| Stereo voices (`outl`, `outr`) | Built: lint and validator catch half-written stereo; adds about 6–12 ns per voice | Nothing |
+| `osc_unison` (up to 16 voices) | Built: about 85 ns at 4 voices, 150–175 at 16, including the empty voice | Listen to it |
+| `mod_curve` drawn curves | Built: about 75–90 ns at any point count, base rounding fixed, exponential bends | Nothing |
+| Loaded wavetables (tables 8–39) | Built: load in the background; DC removed, one gain per table, peak 0.9 | Make portable (§6.5). Until a table is published it plays as table 0, so a patch validated or a bounce started in that window (about 3.5 s for 32 tables) uses the wrong table; fix this with §6.5 |
+| Note-restarted curves | Built: `mod_curve_note`; it matched the rebuild's hand-coded curves | Nothing |
 | Usable reverb | Not started | `bus_reverb`'s wet signal sits about 17 dB below dry, and its mix is a crossfade, so it's nearly inaudible and just lowers the level. Used by 10 built-ins, so they need re-checking |
 | Flexible comb | Not started | Negative feedback and flanger forms; today's `fx_comb` is positive only |
 | Multiband compressor | Not started | Per-band gain and thresholds; `fx_ott` has one depth control |
@@ -220,8 +220,10 @@ Measured on the Steam Deck at 48 kHz, 2× oversampling:
 - Mono: ≤ 1,200 ns.
 - Master: ≤ 2 µs per sample. Heavy character processing belongs here.
 
-`--selftest --strict-cpu` enforces these on the Deck. CI only reports them, since
-its timings are unreliable. Budgets don't change without a measured reason.
+`tools/check.sh strict` enforces these on the Deck. CI only reports them, since
+its timings are unreliable. Timing noise only ever adds time, so the check runs on
+one core and a preset over budget is measured again, up to 3 tries in each of up to
+3 processes, keeping the lowest figure. Budgets don't change without a measured reason.
 Rosetta is not usable for real-time work (about 2,435 ns measured); the README
 tells Apple Silicon users to run their DAW natively.
 
@@ -295,7 +297,9 @@ address and models. Version 1 turns that into service profiles:
 - 9 configurations: notes 28, 40, 55 × macros at 0, default and 1. One second each.
 - Reject on: NaN or Inf (bit-pattern tests); peak above +12 dBFS before the limiter;
   DC above 0.1 over the last 0.5 s; all configurations silent; or over 50 % of real
-  time. New: one channel silent while the other sounds.
+  time. New: in any configuration, one channel below −80 dBFS while the other sounds
+  and is more than 10× louder. A hard pan held at a macro extreme is rejected; a
+  moving autopan passes.
 - Loops capped at 1,024 iterations and nesting at 2. Sections ≤ 32 KB. Per-sample
   deadline in the validator. Trim only attenuates, to −3 dBFS worst-case peak.
 
@@ -354,20 +358,23 @@ file and system access. Any patch from a file goes through the full offline test
   `tools/check.sh`.
 - Every merge passes CI on all three OSes.
 - Pre-push: `tools/check.sh strict` on the Deck.
+- Before a merge: pluginval at strictness 5, installed outside the repo. `tools/check.sh`
+  doesn't run it. Steinberg's own validator hasn't been run yet.
 - `vibesynth_cli` remains the headless test tool: `--selftest`, `--smoketest`,
-  `--render`, `--bench`, `--batch`, `--bake`, `--macro-scan`, `--judge`.
+  `--render`, `--bench`, `--batch`, `--bake`, `--macro-scan`, `--judge`,
+  `--wavetable-load-test`.
 - Include-path rule: no extensionless files or names matching standard headers.
 - Developer-only tools are fine as long as users never need them.
 
 ---
 
-## 11. Current state (checked Nov 4 2026)
+## 11. Current state (checked Nov 5 2026)
 
 - `main` is at b2e2356 and its latest CI run passed, so the macOS smoketest problem
   from the old release plan is resolved.
 - No releases or tags exist yet, so plugin identifiers can still change freely.
-- `engine-prototype` holds the uncommitted prototype and the parked 14f work. All
-  the §6.3 prototype fixes are still open.
+- `engine-prototype` holds the finished prototype and the parked 14f work. Its
+  §6.3 prototype fixes are done, and the built-ins still match main byte for byte.
 - 23 built-ins, 43 recipes and 11 examples exist. Most need review against §4.
 - README and `docs/DEMO.md` still contain hackathon wording.
 
@@ -382,12 +389,16 @@ and by using the plugin. No phase requires writing code by hand.**
 **Rebuild test: done Nov 5 2026 (§4.1).** The engine can reach the reference, so work
 shifts to tools, sounds and what the AI is taught.
 
-Still open: complete the §6.3 prototype fixes, run pluginval, and merge.
+§6.3 prototype fixes: done Nov 5 2026. pluginval passes at strictness 5. Still open:
+CI on all three systems, then merge.
 - *Exit:* built-ins still match main; budgets and CI pass; pluginval has really run.
 
 ### Phase 2: Finish the engine
 Build the §6.3 sound tools, then the compatibility system (§6.5), portable wavetables,
 original factory wavetables made from audio, and the audio measuring tool (§7.4).
+Also: replace the older bounds tests' `sqrt(-1)`, which is 1 in a patch rather than NaN,
+with real NaN written to memory. Find out why a filter's cost can jump about 5× with its
+memory address (seen on main with address randomisation on, gone with it off).
 - *You:* A/B each new tool and each technique test.
 - *Exit:* hand-tuned test patches for wobble, reese, square/riddim, FM and growl
   meet the §4.2 guard rails, and you'd use them.

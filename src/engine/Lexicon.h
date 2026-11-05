@@ -91,6 +91,7 @@ enum class ModuleId : int
     BusWidth,
     OscUnison,
     ModCurve,
+    ModCurveNote,
     Count
 };
 
@@ -167,8 +168,6 @@ struct VoiceRack
 
     SupersawState supersaw[kNumSupersawSlots];
     WtOscState oscWt[kNumWtOscSlots];
-    UnisonOscState oscUnison[kNumUnisonOscSlots];
-    float unisonR[kNumUnisonOscSlots] = {};
     FmOscState oscFm[kNumFmOscSlots];
     SyncOscState oscSync[kNumSyncOscSlots];
 
@@ -187,7 +186,6 @@ struct VoiceRack
 
     EnvFollowState envFollow[kNumEnvFollowSlots];
     ModLfoState modLfo[kNumModLfoSlots];
-    ModCurveState modCurve[kNumModCurveSlots];
     double currentBeat = 0.0;
     uint32_t seedValue = 1u;
 
@@ -239,6 +237,13 @@ struct VoiceRack
     const double* macroVars[8] = {};
     double modValues[4] = {}; // M13: current sample's LFO 1, LFO 2, Env 1, Env 2 outputs
 
+    // Keep new module state down here. A filter's cost depends on its offset in
+    // this struct (measured: flt_notch 15 ns or 93 ns per call, flt_lp 15 or 85),
+    // so growing a module above the filters can slow them with no change to their code.
+    UnisonOscState oscUnison[kNumUnisonOscSlots];
+    float unisonR[kNumUnisonOscSlots] = {};
+    ModCurveState modCurve[kNumModCurveSlots];
+    ModCurveNoteState modCurveNote[kNumModCurveSlots];
 
     void init (double newSampleRate, uint32_t voiceSeed);
     void reset() noexcept;

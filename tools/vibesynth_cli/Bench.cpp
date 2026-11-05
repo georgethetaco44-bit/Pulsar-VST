@@ -83,13 +83,29 @@ const BenchCase kBenchCases[] = {
     { "bus_width", "out = osc_saw(0, freq);", "outl = bus_width(inl, inr, 0.8); outr = bus_width_r();", true },
     { "fx_comp", "out = fx_comp(0, osc_saw(0, freq), 0.7);", "", false },
     { "fx_gate", "out = fx_gate(0, osc_saw(0, freq), 0.1);", "", false },
+    { "osc_unison (1v)", "outl = osc_unison(0, freq, 0, 0, 1, 0.5, 0.5); outr = osc_unison_r(0);", "outl = inl; outr = inr;", false },
+    { "osc_unison (2v)", "outl = osc_unison(0, freq, 0, 0, 2, 0.5, 0.5); outr = osc_unison_r(0);", "outl = inl; outr = inr;", false },
     { "osc_unison (4v)", "outl = osc_unison(0, freq, 0, 0, 4, 0.5, 0.5); outr = osc_unison_r(0);", "outl = inl; outr = inr;", false },
     { "osc_unison (8v)", "outl = osc_unison(0, freq, 0, 0, 8, 0.5, 0.5); outr = osc_unison_r(0);", "outl = inl; outr = inr;", false },
     { "osc_unison (16v)", "outl = osc_unison(0, freq, 0, 0, 16, 0.5, 0.5); outr = osc_unison_r(0);", "outl = inl; outr = inr;", false },
+    { "osc_unison (4v, detune moving)", "outl = osc_unison(0, freq, 0, 0, 4, 0.5 + 0.4 * sin(beat * 6.283), 0.5 + 0.4 * sin(beat * 3.1415)); outr = osc_unison_r(0);", "outl = inl; outr = inr;", false },
+    { "osc_unison (8v, detune moving)", "outl = osc_unison(0, freq, 0, 0, 8, 0.5 + 0.4 * sin(beat * 6.283), 0.5 + 0.4 * sin(beat * 3.1415)); outr = osc_unison_r(0);", "outl = inl; outr = inr;", false },
+    // Table 8 is table 0 unless the Wavetables folder holds a file.
+    { "osc_unison (4v, table 8, pos moving)", "outl = osc_unison(0, freq, 8, 0.5 + 0.45 * sin(beat * 6.283), 4, 0.5, 0.5); outr = osc_unison_r(0);", "outl = inl; outr = inr;", false },
+    { "osc_unison (16v, table 8, pos moving)", "outl = osc_unison(0, freq, 8, 0.5 + 0.45 * sin(beat * 6.283), 16, 0.5, 0.5); outr = osc_unison_r(0);", "outl = inl; outr = inr;", false },
+    { "osc_unison (4v, pitch moving)", "outl = osc_unison(0, freq * (1 + 0.1 * sin(beat * 6.283)), 0, 0, 4, 0.5, 0.5); outr = osc_unison_r(0);", "outl = inl; outr = inr;", false },
     { "mod_curve (4pt)", "out = mod_curve(0, 1.0, 0, 4);", "outl = inl; outr = inr;", false,
       "mem[0]=0; mem[1]=0; mem[2]=0; mem[3]=0.33; mem[4]=1; mem[5]=0; mem[6]=0.66; mem[7]=0.2; mem[8]=0; mem[9]=1; mem[10]=0.8; mem[11]=0;" },
     { "mod_curve (32pt)", "out = mod_curve(0, 1.0, 0, 32);", "outl = inl; outr = inr;", false,
       "i=0; loop(32, mem[i*3]=i/31.0; mem[i*3+1]=0.5; mem[i*3+2]=0; i+=1;);" },
+    { "mod_curve (4pt, bends)", "out = mod_curve(0, 1.0, 0, 4);", "outl = inl; outr = inr;", false,
+      "mem[0]=0; mem[1]=0; mem[2]=3; mem[3]=0.33; mem[4]=1; mem[5]=-3; mem[6]=0.66; mem[7]=0.2; mem[8]=5; mem[9]=1; mem[10]=0.8; mem[11]=0;" },
+    { "mod_curve (32pt, bends)", "out = mod_curve(0, 1.0, 0, 32);", "outl = inl; outr = inr;", false,
+      "i=0; loop(32, mem[i*3]=i/31.0; mem[i*3+1]=i%2; mem[i*3+2]=2; i+=1;);" },
+    { "mod_curve_note (4pt, bends)", "out = mod_curve_note(0, 1.0, 0, 4);", "outl = inl; outr = inr;", false,
+      "mem[0]=0; mem[1]=0; mem[2]=3; mem[3]=0.33; mem[4]=1; mem[5]=-3; mem[6]=0.66; mem[7]=0.2; mem[8]=5; mem[9]=1; mem[10]=0.8; mem[11]=0;" },
+    { "mod_curve_note (32pt, bends)", "out = mod_curve_note(0, 1.0, 0, 32);", "outl = inl; outr = inr;", false,
+      "i=0; loop(32, mem[i*3]=i/31.0; mem[i*3+1]=i%2; mem[i*3+2]=2; i+=1;);" },
 };
 
 const int kNumBenchCases = static_cast<int> (sizeof (kBenchCases) / sizeof (kBenchCases[0]));
@@ -733,6 +749,40 @@ int runBench (int oversampling)
         {
             std::printf ("%-36s %6.1f ns  %+8.1f\n", rows[i].name, ns[i], ns[i] - ns[(size_t) rows[i].plain]);
         }
+    }
+
+    // What a stereo voice adds: the same patch written as out, then as outl and
+    // outr, through the real PatchPlayer path (a second voice sum and decimator).
+    {
+        using namespace vibesynth;
+        struct Pair { const char* name; const char* mono; const char* stereo; };
+        const Pair pairs[] = {
+            { "saw + filter", "out = flt_lp(0, osc_saw(1, freq), 0.5, 0.3) * env_adsr(0, gate, 0.1, 0.3, 0.6, 0.3);",
+              "y = flt_lp(0, osc_saw(1, freq), 0.5, 0.3) * env_adsr(0, gate, 0.1, 0.3, 0.6, 0.3); outl = y; outr = y;" },
+            { "2 saws, 2 filters", "out = flt_lp(0, osc_saw(0, freq), 0.5, 0.3) + flt_lp(1, osc_saw(1, freq * 1.01), 0.5, 0.3);",
+              "outl = flt_lp(0, osc_saw(0, freq), 0.5, 0.3); outr = flt_lp(1, osc_saw(1, freq * 1.01), 0.5, 0.3);" },
+        };
+        const std::vector<int> chord = { 45, 52, 57, 60, 64, 67, 69, 72 };
+        const std::vector<int> single = { 33 };
+        std::printf ("\n-- stereo vs mono through PatchPlayer (ns per sounding voice-sample @ %.0f kHz,\n"
+                     "   median of 9 interleaved 1 s runs; includes the shared decimators) --\n", voiceRate / 1000.0);
+        std::printf ("%-36s %9s  %9s  %9s\n", "case", "mono", "stereo", "added");
+        for (const Pair& pr : pairs)
+            for (const std::vector<int>* notes : { &single, &chord })
+            {
+                Patch mono;
+                mono.name = pr.name;
+                mono.voiceMode = notes == &single ? "mono" : "poly";
+                mono.voice = pr.mono;
+                Patch stereo = mono;
+                stereo.voice = pr.stereo;
+                std::vector<std::unique_ptr<PlayerBench>> benches;
+                benches.push_back (std::make_unique<PlayerBench> (mono, false, false, *notes));
+                benches.push_back (std::make_unique<PlayerBench> (stereo, false, false, *notes));
+                const std::vector<double> ns = timePlayers (benches);
+                const std::string label = std::string (pr.name) + (notes == &single ? ", 1 note" : ", 8 notes");
+                std::printf ("%-36s %6.1f ns  %6.1f ns  %+8.1f\n", label.c_str(), ns[0], ns[1], ns[1] - ns[0]);
+            }
     }
 
     std::printf ("BENCH DONE (report-only; exit 0)\n");

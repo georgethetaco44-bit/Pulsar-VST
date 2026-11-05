@@ -4,7 +4,7 @@ Patches are EEL2 code (JSFX syntax): `x = expr;`, `a ? b : c`, `(cond) ? (stmt1;
 
 ## Sections
 - `init`: runs at each note-on, before the first voice sample (reset per-note state here).
-- `voice`: runs once per sample per sounding voice at 2x the host rate. Write `out`, or `outl` and `outr` for stereo.
+- `voice`: runs once per sample per sounding voice at 2x the host rate. Write `out`, or both `outl` and `outr` for stereo, never a mix (a stereo voice ignores `out`).
 - `master`: runs once per host sample on the stereo sum. Read `inl`, `inr`; write `outl`, `outr` (default passthrough).
 After master, Pulsar always applies trim, DC block, a limiter and a clip at ±1.
 
@@ -22,7 +22,7 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 - `osc_square(slot, hz, pw)` · 4 slots · both — pulse; pw 0-1 (0.5 = square).
 - `osc_supersaw(slot, hz, detune, mix)` · 2 slots · both — 7 saws; detune 0-1 (up to ±30 cents), mix 0-1 (centre saw to the 6 detuned ones) [90].
 - `osc_wt(slot, hz, table, pos)` · 2 slots · both — wavetable oscillator (`table` 0–7 built-in, 8+ loaded; `pos` 0–1 morphs) [25].
-- `osc_unison(slot, hz, table, pos, voices, detune, spread)` · 2 slots · both — unison wavetable oscillator (`table` 0–7 built-in, 8+ loaded; `pos` 0–1 morphs; `voices` 1–16; `detune` 0–1; `spread` 0–1; returns L) [120 at 4v, 220 at 8v, 420 at 16v].
+- `osc_unison(slot, hz, table, pos, voices, detune, spread)` · 2 slots · both — unison wavetable oscillator (`table` 0–7 built-in, 8+ loaded; `pos` 0–1 morphs; `voices` 1–16; `detune` 0–1; `spread` 0–1; returns L) [50 at 4v, 75 at 8v, 120 at 16v, about 40 more while detune or spread moves]. A poly voice has room for 4–8 unison voices with a filter, a shaper and another oscillator, or 16 with a filter and a shaper.
 - `osc_unison_r(slot)` · 2 slots · both — R channel from the last osc_unison call for this slot.
 - `osc_fm(slot, hz, ratio, index, feedback)` · 2 slots · both — 2-op FM oscillator (`ratio` 0–1 → 0.5–16, snaps to integers) [25].
 - `osc_sync(slot, hz, ratio, shape)` · 2 slots · both — hard-sync oscillator (`ratio` 0–1 → 1–16× slave, `shape` saw→square) [25].
@@ -42,7 +42,8 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 - `env_adsr(slot, gate, a, d, s, r)` · 3 slots · both — output 0-1; gate on when ≥ 0.5; a, d, r 0-1 map to 1 ms-10 s (0.25 = 10 ms, 0.5 = 100 ms, 0.75 = 1 s); s is a level 0-1.
 - `env_follow(slot, in)` · 2 slots · both — envelope of |in| (1 ms attack, 100 ms release).
 - `mod_lfo(slot, beats, shape)` · 3 slots · both — tempo-synced LFO (`beats` = period, `shape` 0–1: sine/tri/saw/square/S&H; output 0–1).
-- `mod_curve(slot, beats, base, points)` · 3 slots · both — tempo-synced drawn curve from mem[base + 3*i] (`points` 2–32: x 0–1 ascending, y 0–1, bend −8..8; output 0–1) [30].
+- `mod_curve(slot, beats, base, points)` · 3 slots · both — tempo-synced drawn curve from mem[base + 3*i] (`points` 2–32: x 0–1 ascending, y 0–1, bend −8..8; a point's bend shapes the segment after it, exponentially: 0 = straight, + starts slow, − starts fast; output 0–1) [40, 60 with bends, at any point count].
+- `mod_curve_note(slot, beats, base, points)` · 3 slots · both — as mod_curve, but its phase is 0 on each note-on (`trig`), so every note plays the curve from its start; legato notes don't restart it; in master there are no notes, so it follows the transport like mod_curve [40, 60 with bends, at any point count].
 
 ### Shapers and effects (first-order ADAA on fx_fold, fx_sat, fx_shape)
 - `fx_fold(in, amount)` · no slot · both — sine wavefolder: sin(in · (1 + 8·amount)).

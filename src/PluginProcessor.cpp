@@ -74,7 +74,7 @@ VibeSynthAudioProcessor::VibeSynthAudioProcessor()
 
     player.setNodeHooks (overrideTable.get(), traceBank.get());  // M10
 
-    vibesynth::loadWavetablesFromFolder();
+    vibesynth::beginWavetableLoad();  // never blocks: a host may just be scanning
 
     worker.startThread();
     generationWorker.startThread(); // idles until generate(); no network here
@@ -82,6 +82,8 @@ VibeSynthAudioProcessor::VibeSynthAudioProcessor()
 
 VibeSynthAudioProcessor::~VibeSynthAudioProcessor()
 {
+    vibesynth::endWavetableLoad();
+
     // Stop the generation worker first (a request in flight is cancelled
     // within about a second, a validation after its current sample), then
     // the load worker it posts to, then free everything they or the audio

@@ -192,4 +192,23 @@ EEL_F NSEEL_CGEN_CALL fnModCurve (void* ctx, INT_PTR np, EEL_F** p)
     return static_cast<EEL_F> (out);
 }
 
+EEL_F NSEEL_CGEN_CALL fnModCurveNote (void* ctx, INT_PTR np, EEL_F** p)
+{
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr || np < 4) return 0.0;
+    auto* vctx = static_cast<VmRackContext*> (ctx);
+    void* vm = vctx != nullptr ? vctx->vm : nullptr;
+    const int slot = clampSlot (argD (p, np, 0, 0.0), kNumModCurveSlots);
+    auto& state = rack->modCurveNote[slot];
+    // The master has no notes, so its curve follows the transport (rackKind 1).
+    const double raw = rack->rackKind == 0
+        ? state.process (vm, rack->currentBeat, argD (p, np, 1, 1.0), argD (p, np, 2, 0.0),
+                         argD (p, np, 3, 2.0), rack->sampleRate)
+        : state.curve.process (vm, rack->currentBeat, argD (p, np, 1, 1.0), argD (p, np, 2, 0.0),
+                               argD (p, np, 3, 2.0), rack->sampleRate);
+    const float out = sanitizeFloat (static_cast<float> (raw));
+    rack->recordMeter (ModuleId::ModCurveNote, slot, out);
+    return static_cast<EEL_F> (out);
+}
+
 } // namespace vibesynth

@@ -34,6 +34,7 @@ const char* stageOf (PatchStatus s) noexcept
         case PatchStatus::TooLoud:
         case PatchStatus::DcOffset:
         case PatchStatus::Silent:
+        case PatchStatus::OneChannel:
         case PatchStatus::TooSlow:
         case PatchStatus::MacroNoise:   break;
     }

@@ -21,9 +21,9 @@ constexpr const char* kModuleNames[kNumModules] = {
     "chaos_lorenz", "chaos_duffing",
     "util_safe_fb", "util_xover", "util_bytebeat",
     "bus_sat", "bus_mono_low", "bus_chorus", "bus_reverb", "bus_delay", "bus_width",
-    "osc_unison", "mod_curve",
+    "osc_unison", "mod_curve", "mod_curve_note",
 };
-static_assert (static_cast<int> (ModuleId::ModCurve) == kNumModules - 1,
+static_assert (static_cast<int> (ModuleId::ModCurveNote) == kNumModules - 1,
                "kModuleNames must list every ModuleId");
 // Spot checks that the table follows the enum order.
 static_assert (static_cast<int> (ModuleId::FxFold) == 19 && static_cast<int> (ModuleId::FxCrush) == 22

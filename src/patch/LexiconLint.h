@@ -12,6 +12,7 @@
 //   - argument counts must match exactly (EEL2 only checks the minimum);
 //   - a literal slot must be an integer inside the function's pool;
 //   - bus_* functions are master-only;
+//   - a voice must write out, or both outl and outr, never a mix;
 //   - built-ins that free memory or use the VM stack are refused.
 //
 // Like the loop-nesting check this is a scanner, not a parser: comments

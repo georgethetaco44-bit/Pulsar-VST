@@ -214,6 +214,7 @@ const char* patchStatusName (PatchStatus s) noexcept
         case PatchStatus::TooLoud:      return "loud";
         case PatchStatus::DcOffset:     return "dc";
         case PatchStatus::Silent:       return "silent";
+        case PatchStatus::OneChannel:   return "one_channel";
         case PatchStatus::TooSlow:      return "slow";
         case PatchStatus::MacroNoise:   return "macro_noise";
     }

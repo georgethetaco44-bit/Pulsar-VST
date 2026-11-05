@@ -3,7 +3,8 @@
 // Loadable high-resolution wavetables (Task 3).
 //
 // Tables 0-7 are built-in procedural wavetables; tables 8-39 are loaded
-// from <app-data>/Wavetables/ at startup off the audio thread.
+// from <app-data>/Wavetables/ on a background thread (patch/WavetableLoader.h).
+// Until a table is published, oscillators asking for it play table 0.
 //
 // Real-time rules (SPEC §11): zero allocation, locks, logging, I/O on the
 // audio thread. Tables are published via std::atomic<const LoadedWavetable*>.
@@ -97,7 +98,8 @@ inline double sampleLoadedWavetable (const LoadedWavetable* wt, double f, double
 // Audio thread entry: lookup loaded table pointer for index >= 8 (returns nullptr if not loaded).
 const LoadedWavetable* getLoadedWavetable (int index) noexcept;
 
-// Non-audio thread: publish a loaded wavetable at slot (0..31, corresponding to table indices 8..39).
+// Loader thread only, one at a time: publish a wavetable at slot (0..31, table indices 8..39).
+// A slot is set once and stays until exit, because voices keep the pointer.
 void setLoadedWavetable (int slot, std::unique_ptr<LoadedWavetable> wt) noexcept;
 
 // Total count of loaded wavetables.

@@ -168,6 +168,8 @@ void VoiceRack::reset() noexcept
         modLfo[i].reset (seedValue ^ static_cast<uint32_t> ((i + 1) * 0x85EBCA6Bu));
     for (int i = 0; i < kNumModCurveSlots; ++i)
         modCurve[i].reset();
+    for (int i = 0; i < kNumModCurveSlots; ++i)
+        modCurveNote[i].reset();
     currentBeat = 0.0;
 
     for (int g = 0; g < kNumAdaaGroups; ++g)
@@ -237,6 +239,8 @@ void VoiceRack::noteOn (double beat) noexcept
         oscUnison[i].noteOn (seedValue ^ static_cast<uint32_t> ((i + 1) * 0x45D9F3Bu));
     for (int i = 0; i < kNumModLfoSlots; ++i)
         modLfo[i].noteOn (currentBeat);
+    for (int i = 0; i < kNumModCurveSlots; ++i)
+        modCurveNote[i].noteOn();
     for (int g = 0; g < kNumAdaaGroups; ++g)
         for (int c = 0; c < kMaxAdaaCalls; ++c)
             adaa[g][c].reset();
