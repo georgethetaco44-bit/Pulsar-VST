@@ -26,6 +26,7 @@ void PatchPlayer::prepare (double sampleRate, int maxChunk, const float macroTar
     sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
     chunkCapacity_ = maxChunk > 0 ? maxChunk : 512;
     voiceSum_.assign ((size_t) chunkCapacity_ * (size_t) PatchProgram::kMaxOversampling, 0.0f);
+    voiceSumR_.assign ((size_t) chunkCapacity_ * (size_t) PatchProgram::kMaxOversampling, 0.0f);
     macroBlock_.assign ((size_t) chunkCapacity_ * (size_t) kNumMacros, 0.0);
     mwBlock_.assign ((size_t) chunkCapacity_, 0.0);
     bendBlock_.assign ((size_t) chunkCapacity_, 1.0);
@@ -39,6 +40,7 @@ void PatchPlayer::prepare (double sampleRate, int maxChunk, const float macroTar
     masterMuteSamples_ = 0;
     outputStage_.init (sampleRate_);
     decimator_.init();
+    decimatorR_.init();
     smoother_.init (sampleRate_);
     smoother_.snapAll (macroTargets);
     noteCounter_ = 0;
@@ -86,6 +88,7 @@ PatchProgram* PatchPlayer::swapProgram (PatchProgram* next) noexcept
     program_ = next;
     masterMuteSamples_ = 0;
     decimator_.reset();
+    decimatorR_.reset();
     if (program_ == nullptr)
     {
         for (auto& v : voices_)
@@ -536,6 +539,8 @@ void PatchPlayer::beginChunk (int n, const float targets[kNumMacros]) noexcept
     eventMw_ = mwCurrent_;
     eventBend_ = bendRatio_;
     std::fill (voiceSum_.begin(), voiceSum_.begin() + (size_t) n * (size_t) oversampling(), 0.0f);
+    if (program_ != nullptr && program_->isStereo())
+        std::fill (voiceSumR_.begin(), voiceSumR_.begin() + (size_t) n * (size_t) oversampling(), 0.0f);
     configureHooks (true);
 }
 
@@ -616,6 +621,7 @@ void PatchPlayer::renderVoices (int start, int end) noexcept
     const double voiceBeatStep = beatStep_ / os;
     const int vstart = start * os;
     const int vend = end * os;
+    const bool stereo = program_ != nullptr && program_->isStereo();
 
     // M13 (SPEC §9.8): voices step only the sources some assignment uses,
     // at control rate (VoiceModPack::tick). With none, the loop below is
@@ -673,46 +679,96 @@ void PatchPlayer::renderVoices (int start, int end) noexcept
             const double gateVal = lt.gateHeld ? 1.0 : 0.0;
 
             float s = 0.0f;
-            if (tickMask == 0u)
+            float sR = 0.0f;
+            if (! stereo)
             {
-                s = eel.renderSample (v.freq * bendBlock_[(size_t) h], gateVal,
-                                      static_cast<double> (v.note), v.vel, macros, t,
-                                      mwBlock_[(size_t) h]);
+                if (tickMask == 0u)
+                {
+                    s = eel.renderSample (v.freq * bendBlock_[(size_t) h], gateVal,
+                                          static_cast<double> (v.note), v.vel, macros, t,
+                                          mwBlock_[(size_t) h]);
+                }
+                else
+                {
+                    v.mods.tick (tickMask, modSpecs, t.bpm, t.beat, voiceBeatStep, gateVal);
+                    auto& vr = eel.rack();
+                    for (int src = 0; src < kNumModSources; ++src)
+                        vr.modValues[src] = v.mods.values[(size_t) src];
+
+                    const double* voiceMacros = macros;
+                    double modMacros[kNumMacros];
+                    if (macroPlan.count > 0)
+                    {
+                        macroPlan.apply (macros, v.mods.values.data(), modMacros);
+                        voiceMacros = modMacros;
+                    }
+                    s = eel.renderSample (v.freq * bendBlock_[(size_t) h], gateVal,
+                                          static_cast<double> (v.note), v.vel, voiceMacros, t,
+                                          mwBlock_[(size_t) h]);
+                }
+
+                if (! isFiniteBits (s))
+                {
+                    tripVoice (v);
+                    break;
+                }
+                voiceSum_[(size_t) i] += s * lt.fadeGain();
+                v.renderedSinceNoteOn = true;
+                if (v.releasePending)
+                {
+                    v.releasePending = false;
+                    lt.noteOff();
+                }
+
+                if (! lt.track (s, vrate))
+                    continue;
             }
             else
             {
-                v.mods.tick (tickMask, modSpecs, t.bpm, t.beat, voiceBeatStep, gateVal);
-                auto& vr = eel.rack();
-                for (int src = 0; src < kNumModSources; ++src)
-                    vr.modValues[src] = v.mods.values[(size_t) src];
-
-                const double* voiceMacros = macros;
-                double modMacros[kNumMacros];
-                if (macroPlan.count > 0)
+                if (tickMask == 0u)
                 {
-                    macroPlan.apply (macros, v.mods.values.data(), modMacros);
-                    voiceMacros = modMacros;
+                    eel.renderSample (v.freq * bendBlock_[(size_t) h], gateVal,
+                                      static_cast<double> (v.note), v.vel, macros, t,
+                                      mwBlock_[(size_t) h], s, sR);
                 }
-                s = eel.renderSample (v.freq * bendBlock_[(size_t) h], gateVal,
+                else
+                {
+                    v.mods.tick (tickMask, modSpecs, t.bpm, t.beat, voiceBeatStep, gateVal);
+                    auto& vr = eel.rack();
+                    for (int src = 0; src < kNumModSources; ++src)
+                        vr.modValues[src] = v.mods.values[(size_t) src];
+
+                    const double* voiceMacros = macros;
+                    double modMacros[kNumMacros];
+                    if (macroPlan.count > 0)
+                    {
+                        macroPlan.apply (macros, v.mods.values.data(), modMacros);
+                        voiceMacros = modMacros;
+                    }
+                    eel.renderSample (v.freq * bendBlock_[(size_t) h], gateVal,
                                       static_cast<double> (v.note), v.vel, voiceMacros, t,
-                                      mwBlock_[(size_t) h]);
-            }
+                                      mwBlock_[(size_t) h], s, sR);
+                }
 
-            if (! isFiniteBits (s))
-            {
-                tripVoice (v);
-                break;
-            }
-            voiceSum_[(size_t) i] += s * lt.fadeGain();
-            v.renderedSinceNoteOn = true;
-            if (v.releasePending)
-            {
-                v.releasePending = false;
-                lt.noteOff();
-            }
+                if (! isFiniteBits (s) || ! isFiniteBits (sR))
+                {
+                    tripVoice (v);
+                    break;
+                }
+                const float gain = lt.fadeGain();
+                voiceSum_[(size_t) i] += s * gain;
+                voiceSumR_[(size_t) i] += sR * gain;
+                v.renderedSinceNoteOn = true;
+                if (v.releasePending)
+                {
+                    v.releasePending = false;
+                    lt.noteOff();
+                }
 
-            if (! lt.track (s, vrate))
-                continue;
+                const float maxMag = std::max (std::fabs (s), std::fabs (sR));
+                if (! lt.track (maxMag, vrate))
+                    continue;
+            }
 
             if (v.state == VoiceSlot::State::Fading && v.hasPending)
             {
@@ -763,12 +819,20 @@ void PatchPlayer::renderVoices (int start, int end) noexcept
 
 void PatchPlayer::finishChunk (int n) noexcept
 {
-    // Back to the host rate: one half-band decimator on the mono sum
+    const bool stereo = program_ != nullptr && program_->isStereo();
+    // Back to the host rate: half-band decimator on the sum
     // (in place; output sample i only reads voice samples >= 2i).
     if (oversampling() == 2)
+    {
         for (int i = 0; i < n; ++i)
+        {
             voiceSum_[(size_t) i] = decimator_.process (voiceSum_[(size_t) (2 * i)],
                                                         voiceSum_[(size_t) (2 * i + 1)]);
+            if (stereo)
+                voiceSumR_[(size_t) i] = decimatorR_.process (voiceSumR_[(size_t) (2 * i)],
+                                                              voiceSumR_[(size_t) (2 * i + 1)]);
+        }
+    }
 
     // M13: publish live modulator telemetry (and master-rack modValues) from
     // the newest active voice, or from free-running idle LFOs when silent.
@@ -862,8 +926,9 @@ void PatchPlayer::finishChunk (int n) noexcept
             }
             else
             {
-                const float in = voiceSum_[(size_t) i];
-                program_->master().renderSample (in, in, l, r,
+                const float inL = voiceSum_[(size_t) i];
+                const float inR = stereo ? voiceSumR_[(size_t) i] : inL;
+                program_->master().renderSample (inL, inR, l, r,
                                                  macroBlock_.data() + (size_t) i * (size_t) kNumMacros, t,
                                                  mwBlock_[(size_t) i]);
                 if (! isFiniteBits (l) || ! isFiniteBits (r))

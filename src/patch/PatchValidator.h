@@ -45,6 +45,7 @@ public:
     int oversampling() const noexcept { return oversampling_; }
     double voiceRate() const noexcept { return sampleRate_ * oversampling_; }
     float trim() const noexcept { return trim_; }
+    bool isStereo() const noexcept { return isStereo_; }
 
     // Per-voice rack seed (chaos initial state etc.), same for every build.
     static uint32_t voiceSeed (int index) noexcept
@@ -61,6 +62,7 @@ private:
     double sampleRate_ = 48000.0;
     int oversampling_ = kDefaultOversampling;
     float trim_ = 1.0f;
+    bool isStereo_ = false;
 };
 
 struct ValidationResult

@@ -129,6 +129,11 @@ void VoiceRack::reset() noexcept
         supersaw[i].reset();
     for (int i = 0; i < kNumWtOscSlots; ++i)
         oscWt[i].reset();
+    for (int i = 0; i < kNumUnisonOscSlots; ++i)
+    {
+        oscUnison[i].reset();
+        unisonR[i] = 0.0f;
+    }
     for (int i = 0; i < kNumFmOscSlots; ++i)
         oscFm[i].reset();
     for (int i = 0; i < kNumSyncOscSlots; ++i)
@@ -161,6 +166,8 @@ void VoiceRack::reset() noexcept
         envFollow[i].reset();
     for (int i = 0; i < kNumModLfoSlots; ++i)
         modLfo[i].reset (seedValue ^ static_cast<uint32_t> ((i + 1) * 0x85EBCA6Bu));
+    for (int i = 0; i < kNumModCurveSlots; ++i)
+        modCurve[i].reset();
     currentBeat = 0.0;
 
     for (int g = 0; g < kNumAdaaGroups; ++g)
@@ -226,6 +233,8 @@ void VoiceRack::reset() noexcept
 void VoiceRack::noteOn (double beat) noexcept
 {
     currentBeat = sanitizeFloat (beat);
+    for (int i = 0; i < kNumUnisonOscSlots; ++i)
+        oscUnison[i].noteOn (seedValue ^ static_cast<uint32_t> ((i + 1) * 0x45D9F3Bu));
     for (int i = 0; i < kNumModLfoSlots; ++i)
         modLfo[i].noteOn (currentBeat);
     for (int g = 0; g < kNumAdaaGroups; ++g)

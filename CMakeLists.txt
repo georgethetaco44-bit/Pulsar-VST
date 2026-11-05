@@ -160,7 +160,8 @@ juce_add_plugin(VibeSynthVST
 # every JUCE symbol. The plugin and vibesynth_cli each compile this list.
 set(VIBESYNTH_PATCH_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/patch/Patch.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/patch/PatchLibrary.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/patch/PatchLibrary.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/patch/WavetableLoader.cpp")
 
 # M8: AI generation (SPEC §6): settings, the chat-completions client, prompt
 # builder, response parser and the generate/self-heal pipeline. JUCE-based
@@ -299,6 +300,7 @@ add_library(vibesynth_engine STATIC
     src/patch/PatchPlayer.cpp
     src/engine/NodeMeters.cpp
     src/engine/Wavetables.cpp
+    src/engine/LoadedWavetables.cpp
     src/engine/LexiconRacks.cpp
     src/engine/Racks.cpp
     src/engine/Racks2.cpp
@@ -382,7 +384,8 @@ target_sources(vibesynth_cli PRIVATE
     src/ui/KnobValueParser.cpp
     tools/vibesynth_cli/SmokeM14b.cpp
     tools/vibesynth_cli/SmokeM14e.cpp
-    tools/vibesynth_cli/SmokeM14c.cpp)
+    tools/vibesynth_cli/SmokeM14c.cpp
+    tools/vibesynth_cli/SmokePrototype.cpp)
 # --render writes WAV only: keep JUCE's bundled FLAC/Ogg Vorbis codecs (and
 # the Windows Media reader) out of the CLI.
 target_compile_definitions(vibesynth_cli PRIVATE

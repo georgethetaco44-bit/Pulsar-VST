@@ -52,7 +52,7 @@ enum class BypassKind : uint8_t { None, PassArg, Zero, ForceArg };
 // when the rate argument (traceArg) is below ~20 Hz, else audio.
 enum class TraceKind : uint8_t { None, Audio, Control, ByRate };
 
-constexpr int kMaxLexiconArgs = 6;
+constexpr int kMaxLexiconArgs = 8;
 
 struct LexiconArg
 {

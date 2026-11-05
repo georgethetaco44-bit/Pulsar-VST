@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 
+#include "engine/LoadedWavetables.h"
 #include "engine/Utilities.h"
 
 namespace vibesynth {
@@ -22,6 +23,9 @@ constexpr int kNumWtOscSlots = 2;
 constexpr int kNumFmOscSlots = 2;
 constexpr int kNumSyncOscSlots = 2;
 constexpr int kNumModLfoSlots = 3;
+constexpr int kNumUnisonOscSlots = 2;
+constexpr int kMaxUnisonVoices = 16;
+constexpr int kNumModCurveSlots = 3;
 
 // Initializes the 8 procedural wavetables and their band-limited mipmaps.
 // Safe to call multiple times; runs once off the audio thread.
@@ -52,6 +56,52 @@ struct WtOscState
     }
 
     double process (double hz, double table, double pos, double sampleRate) noexcept;
+};
+
+// ---------------------------------------------------------------------------
+// osc_unison(slot, hz, table, pos, voices, detune, spread): 1-16 voices,
+// musical detune curve, equal-power pan, per-voice mip, normalization ~1/sqrt(n),
+// randomized note-on phase. Returns L, caches R.
+struct UnisonOscState
+{
+    double phases[kMaxUnisonVoices] = {};
+    double voiceGains[kMaxUnisonVoices] = {};
+    double smoothT[kMaxUnisonVoices] = {};
+    double smoothPos = 0.0;
+    double smoothDetune = 0.0;
+    double smoothSpread = 0.0;
+    bool initialised = false;
+    float lastR = 0.0f;
+
+    void reset() noexcept
+    {
+        for (int v = 0; v < kMaxUnisonVoices; ++v)
+        {
+            phases[v] = 0.0;
+            voiceGains[v] = (v == 0) ? 1.0 : 0.0;
+            smoothT[v] = 0.0;
+        }
+        smoothPos = 0.0;
+        smoothDetune = 0.0;
+        smoothSpread = 0.0;
+        initialised = false;
+        lastR = 0.0f;
+    }
+
+    void noteOn (uint32_t seed) noexcept
+    {
+        uint32_t s = seed != 0u ? seed : 0x12345678u;
+        for (int v = 0; v < kMaxUnisonVoices; ++v)
+        {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            phases[v] = static_cast<double> (s & 0xFFFFFFu) / 16777216.0;
+        }
+    }
+
+    double process (double hz, double table, double pos, double voices,
+                    double detune, double spread, double sampleRate) noexcept;
 };
 
 // ---------------------------------------------------------------------------
@@ -128,6 +178,28 @@ struct ModLfoState
     }
 
     double process (double currentBeat, double beats, double shape) noexcept;
+};
+
+// ---------------------------------------------------------------------------
+// mod_curve(slot, beats, base, points): tempo-synced drawn curve read from mem[].
+// points 2-32, power curve bend, 1 ms jump smoothing on vertical jumps and wraps.
+struct ModCurveState
+{
+    double prevPhase = 0.0;
+    double prevRawY = 0.0;
+    double jumpOffset = 0.0;
+    bool initialised = false;
+
+    void reset() noexcept
+    {
+        prevPhase = 0.0;
+        prevRawY = 0.0;
+        jumpOffset = 0.0;
+        initialised = false;
+    }
+
+    double process (void* vm, double beat, double beatsIn, double baseIn, double pointsIn,
+                    double sampleRate) noexcept;
 };
 
 } // namespace vibesynth

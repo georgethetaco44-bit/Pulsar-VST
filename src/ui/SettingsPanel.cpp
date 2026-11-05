@@ -3,6 +3,7 @@
 #include "ui/SettingsPanel.h"
 
 #include "PluginProcessor.h"
+#include "patch/WavetableLoader.h"
 #include "ui/PulsarLookAndFeel.h"
 
 namespace vibesynth::ui {
@@ -39,6 +40,28 @@ SettingsPanel::SettingsPanel (VibeSynthAudioProcessor& p) : processor (p)
     learnToggle.setColour (juce::ToggleButton::textColourId, Theme::text);
     learnToggle.setColour (juce::ToggleButton::tickColourId, Theme::accent);
     addAndMakeVisible (learnToggle);
+
+    setButtonStyle (openWavetablesButton, ButtonStyle::Ghost);
+    openWavetablesButton.setTooltip ("Open the Wavetables folder in file manager");
+    openWavetablesButton.onClick = [this]
+    {
+        auto status = vibesynth::getWavetableFolderStatus();
+        juce::File dir (juce::String (status.folderPath));
+        dir.createDirectory();
+        dir.startAsProcess();
+    };
+    addAndMakeVisible (openWavetablesButton);
+
+    wavetableListEditor.setMultiLine (true);
+    wavetableListEditor.setReadOnly (true);
+    wavetableListEditor.setScrollbarsShown (true);
+    wavetableListEditor.setCaretVisible (false);
+    wavetableListEditor.setFont (Theme::font (Theme::captionSize));
+    wavetableListEditor.setColour (juce::TextEditor::backgroundColourId, Theme::background);
+    wavetableListEditor.setColour (juce::TextEditor::textColourId, Theme::dimText);
+    wavetableListEditor.setColour (juce::TextEditor::outlineColourId, Theme::border);
+    addAndMakeVisible (wavetableListEditor);
+
     keyEditor.onTextChange = [this]
     {
         // The result belonged to the old text.
@@ -68,6 +91,26 @@ void SettingsPanel::open()
     learnToggle.setToggleState (s.learnFromPresets(), juce::dontSendNotification);
     envNote = s.keyFromEnvironment() ? "Using VIBESYNTH_API_KEY from the environment (it overrides the saved key)."
                                      : "Saved in " + juce::String (s.filePath());
+
+    const auto wtStatus = vibesynth::getWavetableFolderStatus();
+    juce::String listText;
+    if (wtStatus.loaded.empty())
+    {
+        listText = "No custom tables loaded (tables 0-7 are built-in).\nPlace 2048-sample/frame WAV files in this folder.";
+    }
+    else
+    {
+        for (const auto& info : wtStatus.loaded)
+            listText += "Table " + juce::String (info.tableNumber) + ": " + info.name + " (" + juce::String (info.numFrames) + " frames)\n";
+    }
+    if (!wtStatus.skipped.empty())
+    {
+        listText += "\nSkipped files:\n";
+        for (const auto& sk : wtStatus.skipped)
+            listText += "  * " + juce::String (sk) + "\n";
+    }
+    wavetableListEditor.setText (listText.trimEnd(), false);
+
     setVisible (true);
     toFront (true);
     keyEditor.grabKeyboardFocus();
@@ -142,7 +185,7 @@ void SettingsPanel::save()
 
 juce::Rectangle<int> SettingsPanel::cardBounds() const
 {
-    return getLocalBounds().withSizeKeepingCentre (Theme::grid * 68, Theme::grid * 52);
+    return getLocalBounds().withSizeKeepingCentre (Theme::grid * 70, Theme::grid * 68);
 }
 
 void SettingsPanel::paint (juce::Graphics& g)
@@ -167,6 +210,14 @@ void SettingsPanel::paint (juce::Graphics& g)
     g.setFont (font (smallSize, Weight::Medium));
     for (int i = 0; i < 5; ++i)
         g.drawText (kLabels[i], fieldLabels[i], juce::Justification::centredLeft);
+
+    const auto wtStatus = vibesynth::getWavetableFolderStatus();
+    g.setColour (text);
+    g.setFont (font (smallSize, Weight::SemiBold));
+    g.drawText ("Wavetables", wavetableHeaderArea.withWidth (grid * 14), juce::Justification::centredLeft);
+    g.setColour (dimText);
+    g.setFont (font (captionSize));
+    g.drawFittedText (juce::String (wtStatus.folderPath), wavetableHeaderArea.withTrimmedLeft (grid * 14), juce::Justification::centredLeft, 1);
 
     using State = VibeSynthAudioProcessor::KeyTest::State;
     if (keyTest.state != State::Idle)
@@ -212,6 +263,15 @@ void SettingsPanel::resized()
     r.removeFromTop (grid / 2);
     auto toggleRow = r.removeFromTop (grid * 3).withTrimmedLeft (grid * 16);
     learnToggle.setBounds (toggleRow);
+
+    r.removeFromTop (grid);
+    auto wtRow = r.removeFromTop (grid * 4);
+    openWavetablesButton.setBounds (wtRow.removeFromRight (grid * 12));
+    wtRow.removeFromRight (grid);
+    wavetableHeaderArea = wtRow;
+    r.removeFromTop (grid / 2);
+    wavetableListEditor.setBounds (r.removeFromTop (grid * 11));
+
     auto buttons = r.removeFromBottom (grid * 4);
     saveButton.setBounds (buttons.removeFromRight (grid * 12));
     buttons.removeFromRight (grid);

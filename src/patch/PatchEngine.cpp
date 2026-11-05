@@ -3,6 +3,7 @@
 // file owns EelVoice + EelMaster.
 
 #include "patch/PatchEngine.h"
+#include "patch/LoopNesting.h"
 
 #include <cctype>
 #include <cmath>
@@ -124,6 +125,34 @@ bool isJitUsable()
 {
     return ensureEelInitialised() && g_jitUsable;
 }
+
+bool isStereoVoiceCode (const std::string& voiceCode) noexcept
+{
+    const std::string code = blankCommentsAndStrings (voiceCode);
+    auto isIdentChar = [] (char c) noexcept {
+        return std::isalnum (static_cast<unsigned char> (c)) || c == '_' || c == '.';
+    };
+    const size_t n = code.size();
+    for (size_t i = 0; i < n; ++i)
+    {
+        if (i == 0 || ! isIdentChar (code[i - 1]))
+        {
+            if (i + 4 <= n)
+            {
+                const char c0 = static_cast<char> (std::tolower (static_cast<unsigned char> (code[i])));
+                const char c1 = static_cast<char> (std::tolower (static_cast<unsigned char> (code[i + 1])));
+                const char c2 = static_cast<char> (std::tolower (static_cast<unsigned char> (code[i + 2])));
+                const char c3 = static_cast<char> (std::tolower (static_cast<unsigned char> (code[i + 3])));
+                if (c0 == 'o' && c1 == 'u' && c2 == 't' && (c3 == 'l' || c3 == 'r'))
+                {
+                    if (i + 4 == n || ! isIdentChar (code[i + 4]))
+                        return true;
+                }
+            }
+        }
+    }
+    return false;
+}
 } // namespace vibesynth
 
 // NSEEL_init/register live in the block above.
@@ -137,6 +166,8 @@ bool setupVm (NSEEL_VMCTX vm, void** gramSlot, VmRackContext* rackCtx,
     NSEEL_VM_setramsize (vm, ramSlots);
     // Pre-allocate ALL RAM blocks now, off the audio thread (SPEC §4.2).
     NSEEL_VM_preallocram (vm, -1);
+    if (rackCtx != nullptr)
+        rackCtx->vm = vm;
     NSEEL_VM_SetCustomFuncThis (vm, rackCtx);
     return true;
 }
@@ -260,6 +291,7 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
     rackStorage_.init (sampleRate > 0.0 ? sampleRate : 48000.0, voiceSeed);
     rackCtx_.voice = &rackStorage_;
     rackCtx_.master = nullptr;
+    isStereo_ = isStereoVoiceCode (patch.voice != nullptr ? patch.voice : "");
 
     if (! ensureEelInitialised() || ! isJitUsable())
     {
@@ -289,6 +321,8 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
         macro_[i] = mustRegVar (vm_, kMacroNames[i], ok);
     mw_ = mustRegVar (vm_, "mw", ok);
     out_ = mustRegVar (vm_, "out", ok);
+    outl_ = mustRegVar (vm_, "outl", ok);
+    outr_ = mustRegVar (vm_, "outr", ok);
     (void) mustRegVar (vm_, "fb1", ok);
     (void) mustRegVar (vm_, "fb2", ok);
     (void) mustRegVar (vm_, "prev", ok);
@@ -341,7 +375,7 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
         if (voiceCode_ != nullptr) { NSEEL_code_free (voiceCode_); voiceCode_ = nullptr; }
         NSEEL_VM_free (vm_);
         vm_ = nullptr;
-        freq_ = note_ = vel_ = gate_ = trig_ = srate_ = bpm_ = beat_ = mw_ = out_ = nullptr;
+        freq_ = note_ = vel_ = gate_ = trig_ = srate_ = bpm_ = beat_ = mw_ = out_ = outl_ = outr_ = nullptr;
         for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
             macro_[i] = nullptr;
         return;
@@ -428,6 +462,36 @@ float EelVoice::renderSample (double freq, double gate, double note, double vel,
     NSEEL_code_execute (voiceCode_);
     if (trig_ != nullptr) *trig_ = 0.0;
     return rawOutput (*out_);
+}
+
+void EelVoice::renderSample (double freq, double gate, double note, double vel,
+                             const double macros[MacroSmoother::kNumMacros],
+                             const Transport& transport, double mw,
+                             float& outL, float& outR) noexcept
+{
+    if (voiceCode_ == nullptr || freq_ == nullptr)
+    {
+        outL = 0.0f;
+        outR = 0.0f;
+        return;
+    }
+    *freq_ = freq;
+    if (mw_ != nullptr) *mw_ = mw;
+    if (gate_ != nullptr) *gate_ = gate;
+    if (note_ != nullptr) *note_ = note;
+    if (vel_ != nullptr) *vel_ = vel;
+    if (srate_ != nullptr) *srate_ = rackStorage_.sampleRate;
+    if (bpm_ != nullptr) *bpm_ = transport.bpm;
+    if (beat_ != nullptr) *beat_ = transport.beat;
+    rackStorage_.currentBeat = transport.beat;
+    for (int i = 0; i < MacroSmoother::kNumMacros; ++i)
+        if (macro_[i] != nullptr)
+            *macro_[i] = macros[i];
+    rackStorage_.beginSample();
+    NSEEL_code_execute (voiceCode_);
+    if (trig_ != nullptr) *trig_ = 0.0;
+    outL = rawOutput (outl_ != nullptr ? *outl_ : 0.0);
+    outR = rawOutput (outr_ != nullptr ? *outr_ : 0.0);
 }
 
 // ---------------------------------------------------------------------------

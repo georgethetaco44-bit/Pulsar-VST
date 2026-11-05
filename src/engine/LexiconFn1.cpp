@@ -139,6 +139,30 @@ EEL_F NSEEL_CGEN_CALL fnOscSync (void* ctx, INT_PTR np, EEL_F** p)
     return static_cast<EEL_F> (out);
 }
 
+EEL_F NSEEL_CGEN_CALL fnOscUnison (void* ctx, INT_PTR np, EEL_F** p)
+{
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr || np < 7)
+        return 0.0;
+    const int slot = clampSlot (argD (p, np, 0, 0.0), kNumUnisonOscSlots);
+    const float outL = sanitizeFloat (static_cast<float> (rack->oscUnison[slot].process (
+        argD (p, np, 1, 0.0), argD (p, np, 2, 0.0), argD (p, np, 3, 0.0),
+        argD (p, np, 4, 1.0), argD (p, np, 5, 0.0), argD (p, np, 6, 0.0),
+        rack->sampleRate)));
+    rack->unisonR[slot] = sanitizeFloat (rack->oscUnison[slot].lastR);
+    rack->recordMeter (ModuleId::OscUnison, slot, std::fmax (std::fabs (outL), std::fabs (rack->unisonR[slot])));
+    return static_cast<EEL_F> (outL);
+}
+
+EEL_F NSEEL_CGEN_CALL fnOscUnisonR (void* ctx, INT_PTR np, EEL_F** p)
+{
+    auto* rack = voiceRackOf (ctx);
+    if (rack == nullptr)
+        return 0.0;
+    const int slot = clampSlot (argD (p, np, 0, 0.0), kNumUnisonOscSlots);
+    return static_cast<EEL_F> (rack->unisonR[slot]);
+}
+
 EEL_F NSEEL_CGEN_CALL fnNoise (void* ctx, INT_PTR, EEL_F**)
 {
     auto* rack = voiceRackOf (ctx);

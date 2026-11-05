@@ -2,6 +2,9 @@
 
 #include "engine/Wavetables.h"
 
+#include "eel2/ns-eel.h"
+
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -279,7 +282,7 @@ double WtOscState::process (double hz, double table, double pos, double sampleRa
 {
     const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
     const double f = clampPitch (hz, sr);
-    const int tbl = clampSlot (std::floor (sanitizeFloat (table) + 0.5), kNumWavetables);
+    const int tbl = static_cast<int> (std::floor (sanitizeFloat (table) + 0.5));
     const double targetPos = clamp01 (pos);
     if (! posInit)
     {
@@ -291,6 +294,19 @@ double WtOscState::process (double hz, double table, double pos, double sampleRa
         smoothPos += (targetPos - smoothPos) * 0.015;
     }
 
+    if (tbl >= 8 && tbl < 8 + kMaxLoadedWavetables)
+    {
+        const LoadedWavetable* wt = getLoadedWavetable (tbl);
+        if (wt != nullptr)
+        {
+            const double out = sampleLoadedWavetable (wt, f, phase, smoothPos, sr);
+            phase += f / sr;
+            phase -= std::floor (phase);
+            return clampSafe (out);
+        }
+    }
+
+    const int safeTbl = (tbl >= 0 && tbl < kNumWavetables) ? tbl : 0;
     const int mip = selectWtMip (f, sr);
     const double fScaled = smoothPos * static_cast<double> (kNumWtFrames - 1);
     int f0 = static_cast<int> (fScaled);
@@ -304,8 +320,8 @@ double WtOscState::process (double hz, double table, double pos, double sampleRa
     const int s0 = static_cast<int> (sScaled) & kMask;
     const double sFrac = sScaled - std::floor (sScaled);
 
-    const float* row0 = gTables[tbl][f0][mip];
-    const float* row1 = gTables[tbl][f0 + 1][mip];
+    const float* row0 = gTables[safeTbl][f0][mip];
+    const float* row1 = gTables[safeTbl][f0 + 1][mip];
     const double v0 = row0[s0] + sFrac * (row0[s0 + 1] - row0[s0]);
     const double v1 = row1[s0] + sFrac * (row1[s0 + 1] - row1[s0]);
     const double out = v0 + fFrac * (v1 - v0);
@@ -313,6 +329,125 @@ double WtOscState::process (double hz, double table, double pos, double sampleRa
     phase += f / sr;
     phase -= std::floor (phase);
     return clampSafe (out);
+}
+
+double UnisonOscState::process (double hz, double table, double pos, double voices,
+                                double detune, double spread, double sampleRate) noexcept
+{
+    const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
+    const double f0 = clampPitch (hz, sr);
+    const int tbl = static_cast<int> (std::floor (sanitizeFloat (table) + 0.5));
+    const double targetPos = clamp01 (pos);
+    const int targetVoices = std::clamp (static_cast<int> (std::round (voices)), 1, kMaxUnisonVoices);
+    const double targetDetune = clamp01 (detune);
+    const double targetSpread = clamp01 (spread);
+
+    // One-pole smoother coefficient for voice parameters (~8 ms)
+    const double coeff = 1.0 - std::exp (-1.0 / (0.008 * sr));
+
+    if (! initialised)
+    {
+        smoothPos = targetPos;
+        smoothDetune = targetDetune;
+        smoothSpread = targetSpread;
+        for (int v = 0; v < kMaxUnisonVoices; ++v)
+        {
+            voiceGains[v] = (v < targetVoices) ? 1.0 : 0.0;
+            smoothT[v] = (targetVoices > 1)
+                ? std::clamp (2.0 * static_cast<double> (v) / static_cast<double> (targetVoices - 1) - 1.0, -1.0, 1.0)
+                : 0.0;
+        }
+        initialised = true;
+    }
+    else
+    {
+        smoothPos += (targetPos - smoothPos) * 0.015;
+        smoothDetune += (targetDetune - smoothDetune) * coeff;
+        smoothSpread += (targetSpread - smoothSpread) * coeff;
+        for (int v = 0; v < kMaxUnisonVoices; ++v)
+        {
+            const double targetG = (v < targetVoices) ? 1.0 : 0.0;
+            const double targetT = (targetVoices > 1)
+                ? std::clamp (2.0 * static_cast<double> (v) / static_cast<double> (targetVoices - 1) - 1.0, -1.0, 1.0)
+                : 0.0;
+            voiceGains[v] += (targetG - voiceGains[v]) * coeff;
+            smoothT[v] += (targetT - smoothT[v]) * coeff;
+            if (targetG == 0.0 && voiceGains[v] < 1.0e-4)
+                voiceGains[v] = 0.0;
+        }
+    }
+
+    // Normalization: ~1/sqrt(n) based on sum of squared gains
+    double sumGainSq = 0.0;
+    for (int v = 0; v < kMaxUnisonVoices; ++v)
+        sumGainSq += voiceGains[v] * voiceGains[v];
+    const double norm = sumGainSq > 1.0e-6 ? (1.0 / std::sqrt (sumGainSq)) : 1.0;
+
+    const LoadedWavetable* loadedWt = (tbl >= 8 && tbl < 8 + kMaxLoadedWavetables) ? getLoadedWavetable (tbl) : nullptr;
+    const int safeBuiltinTbl = (loadedWt == nullptr) ? ((tbl >= 0 && tbl < kNumWavetables) ? tbl : 0) : 0;
+
+    // Outer detune in cents: musical curve (pow 1.75 keeps low values tight)
+    const double detuneCents = 50.0 * std::pow (smoothDetune, 1.75);
+
+    double sumL = 0.0, sumR = 0.0;
+
+    for (int v = 0; v < kMaxUnisonVoices; ++v)
+    {
+        const double g = voiceGains[v];
+        const double t = smoothT[v];
+        const double deltaCents = t * detuneCents;
+        const double fRatio = std::exp (deltaCents * (0.6931471805599453 / 1200.0));
+        const double fv = clampPitch (f0 * fRatio, sr);
+
+        if (g > 0.0)
+        {
+            // Equal-power pan from center to wide: theta in [0, pi/2]
+            // At spread == 0, panL == panR == 1.0 (identical L and R)
+            const double p = t * smoothSpread;
+            constexpr double kQuarterPi = 0.7853981633974483;
+            constexpr double kSqrt2 = 1.4142135623730951;
+            const double theta = kQuarterPi * (1.0 + p);
+            const double panL = kSqrt2 * std::cos (theta);
+            const double panR = kSqrt2 * std::sin (theta);
+
+            double samp = 0.0;
+            if (loadedWt != nullptr)
+            {
+                samp = sampleLoadedWavetable (loadedWt, fv, phases[v], smoothPos, sr);
+            }
+            else
+            {
+                const int mip = selectWtMip (fv, sr);
+                const double fScaled = smoothPos * static_cast<double> (kNumWtFrames - 1);
+                int f0 = static_cast<int> (fScaled);
+                if (f0 >= kNumWtFrames - 1)
+                    f0 = kNumWtFrames - 2;
+                if (f0 < 0)
+                    f0 = 0;
+                const double fFrac = fScaled - static_cast<double> (f0);
+
+                const double sScaled = phases[v] * static_cast<double> (kWtFrameSize);
+                const int s0 = static_cast<int> (sScaled) & kMask;
+                const double sFrac = sScaled - std::floor (sScaled);
+
+                const float* row0 = gTables[safeBuiltinTbl][f0][mip];
+                const float* row1 = gTables[safeBuiltinTbl][f0 + 1][mip];
+                const double v0 = row0[s0] + sFrac * (row0[s0 + 1] - row0[s0]);
+                const double v1 = row1[s0] + sFrac * (row1[s0 + 1] - row1[s0]);
+                samp = v0 + fFrac * (v1 - v0);
+            }
+
+            const double effGain = g * norm;
+            sumL += samp * effGain * panL;
+            sumR += samp * effGain * panR;
+        }
+
+        phases[v] += fv / sr;
+        phases[v] -= std::floor (phases[v]);
+    }
+
+    lastR = static_cast<float> (clampSafe (sumR));
+    return clampSafe (sumL);
 }
 
 double FmOscState::process (double hz, double ratio, double index, double feedback,
@@ -438,6 +573,127 @@ double ModLfoState::process (double currentBeat, double beatsArg, double shapeAr
     const double sFrac = sScaled - static_cast<double> (s0);
     const double out = vals[s0] + sFrac * (vals[s0 + 1] - vals[s0]);
     return clamp01 (out);
+}
+
+double ModCurveState::process (void* vm, double beat, double beatsIn, double baseIn,
+                               double pointsIn, double sampleRate) noexcept
+{
+    const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
+    const double bRaw = isFiniteBitsD (beatsIn) ? beatsIn : 1.0;
+    const double beats = bRaw > 1.0e-4 ? bRaw : 1.0;
+    const int base = static_cast<int> (std::floor (isFiniteBitsD (baseIn) ? baseIn : 0.0 + 0.5));
+    const int numPoints = std::clamp (static_cast<int> (std::round (isFiniteBitsD (pointsIn) ? pointsIn : 2.0)), 2, 32);
+
+    // 1 ms smoothing time constant for discontinuous jumps and wraps
+    const double decay = std::exp (-1.0 / (0.001 * sr));
+
+    if (vm == nullptr || base < 0 || base + 3 * numPoints > 65536)
+    {
+        jumpOffset *= decay;
+        return clamp01 (jumpOffset);
+    }
+
+    int valid = 0;
+    EEL_F* ram = NSEEL_VM_getramptr_noalloc (static_cast<NSEEL_VMCTX> (vm),
+                                             static_cast<unsigned int> (base), &valid);
+    if (ram == nullptr || valid < 3 * numPoints)
+    {
+        jumpOffset *= decay;
+        return clamp01 (jumpOffset);
+    }
+
+    struct Point { double x = 0.0, y = 0.0, bend = 0.0; };
+    Point pts[32];
+    for (int i = 0; i < numPoints; ++i)
+    {
+        const double rx = ram[3 * i];
+        const double ry = ram[3 * i + 1];
+        const double rb = ram[3 * i + 2];
+        if (! isFiniteBitsD (rx) || ! isFiniteBitsD (ry) || ! isFiniteBitsD (rb))
+        {
+            jumpOffset *= decay;
+            return clamp01 (jumpOffset);
+        }
+        pts[i].x = clamp01 (rx);
+        pts[i].y = clamp01 (ry);
+        pts[i].bend = std::clamp (rb, -8.0, 8.0);
+        if (i > 0 && pts[i].x < pts[i - 1].x)
+            pts[i].x = pts[i - 1].x; // enforce ascending x
+    }
+
+    const double rawBeat = isFiniteBitsD (beat) ? beat : 0.0;
+    double posBeats = std::fmod (rawBeat, beats);
+    if (posBeats < 0.0)
+        posBeats += beats;
+    double u = clamp01 (posBeats / beats);
+
+    const bool wrapped = initialised && (u < prevPhase - 0.5);
+    prevPhase = u;
+
+    double rawY = pts[0].y;
+    bool isVerticalJump = false;
+
+    if (u <= pts[0].x)
+    {
+        rawY = pts[0].y;
+    }
+    else if (u >= pts[numPoints - 1].x)
+    {
+        rawY = pts[numPoints - 1].y;
+    }
+    else
+    {
+        for (int i = 0; i < numPoints - 1; ++i)
+        {
+            if (u >= pts[i].x && u <= pts[i + 1].x)
+            {
+                const double span = pts[i + 1].x - pts[i].x;
+                if (span <= 1.0e-7)
+                {
+                    // Vertical jump at this x
+                    rawY = pts[i + 1].y;
+                    isVerticalJump = true;
+                }
+                else
+                {
+                    const double t = clamp01 ((u - pts[i].x) / span);
+                    const double b = pts[i].bend;
+                    double w = t;
+                    if (b > 0.0)
+                    {
+                        const double p = 1.0 + b * 0.5;
+                        w = std::pow (t, p);
+                    }
+                    else if (b < 0.0)
+                    {
+                        const double p = 1.0 - b * 0.5;
+                        w = 1.0 - std::pow (1.0 - t, p);
+                    }
+                    rawY = pts[i].y + w * (pts[i + 1].y - pts[i].y);
+                }
+                break;
+            }
+        }
+    }
+
+    if (! initialised)
+    {
+        initialised = true;
+        prevRawY = rawY;
+        jumpOffset = 0.0;
+        return clamp01 (rawY);
+    }
+
+    if (isVerticalJump || wrapped)
+    {
+        const double step = rawY - prevRawY;
+        if (std::fabs (step) > 1.0e-5)
+            jumpOffset -= step;
+    }
+
+    jumpOffset *= decay;
+    prevRawY = rawY;
+    return clamp01 (rawY + jumpOffset);
 }
 
 } // namespace vibesynth

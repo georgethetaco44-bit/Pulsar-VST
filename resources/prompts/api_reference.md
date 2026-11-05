@@ -4,13 +4,13 @@ Patches are EEL2 code (JSFX syntax): `x = expr;`, `a ? b : c`, `(cond) ? (stmt1;
 
 ## Sections
 - `init`: runs at each note-on, before the first voice sample (reset per-note state here).
-- `voice`: runs once per sample per sounding voice at 2x the host rate. Write `out`.
+- `voice`: runs once per sample per sounding voice at 2x the host rate. Write `out`, or `outl` and `outr` for stereo.
 - `master`: runs once per host sample on the stereo sum. Read `inl`, `inr`; write `outl`, `outr` (default passthrough).
 After master, Pulsar always applies trim, DC block, a limiter and a clip at ±1.
 
 ## Variables
-Voice: `freq` (Hz, incl. glide and pitch bend), `note` (MIDI number), `vel` (0-1), `gate` (1 held, 0 released), `trig` (1 on the note-on sample only), `srate` (voice sample rate), `m1`..`m8` (macros 0-1, smoothed), `mw` (mod wheel 0-1), `bpm` (host tempo, 120 if none), `beat` (position in quarter notes; `sin(beat * 2 * $pi * 2)` = 1/8-note LFO), `out` (write).
-Master: `inl`, `inr` (the voice sum; mono, so inl == inr), `outl`, `outr`, `m1`..`m8`, `mw`, `srate`, `bpm`, `beat`. `freq`, `note`, `gate` are not set in master.
+Voice: `freq` (Hz, incl. glide and pitch bend), `note` (MIDI number), `vel` (0-1), `gate` (1 held, 0 released), `trig` (1 on the note-on sample only), `srate` (voice sample rate), `m1`..`m8` (macros 0-1, smoothed), `mw` (mod wheel 0-1), `bpm` (host tempo, 120 if none), `beat` (position in quarter notes; `sin(beat * 2 * $pi * 2)` = 1/8-note LFO), `out` (mono write), `outl`, `outr` (stereo write).
+Master: `inl`, `inr` (the voice sum; separate L/R channels when voice writes outl/outr, else inl == inr), `outl`, `outr`, `m1`..`m8`, `mw`, `srate`, `bpm`, `beat`. `freq`, `note`, `gate` are not set in master.
 
 ## Functions
 Format: signature · slot pool · where it works (both = voice and master). Amounts are 0-1 and clamped; hz is in Hz, clamped to 0..0.45·srate. Rough cost in ns per voice-sample in brackets where it matters.
@@ -21,7 +21,9 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 - `osc_tri(slot, hz)` · 4 slots · both — triangle.
 - `osc_square(slot, hz, pw)` · 4 slots · both — pulse; pw 0-1 (0.5 = square).
 - `osc_supersaw(slot, hz, detune, mix)` · 2 slots · both — 7 saws; detune 0-1 (up to ±30 cents), mix 0-1 (centre saw to the 6 detuned ones) [90].
-- `osc_wt(slot, hz, table, pos)` · 2 slots · both — wavetable oscillator (`table` 0–7: basic, PWM, vocal, bell, sync, comb, fold, growl; `pos` 0–1 morphs) [25].
+- `osc_wt(slot, hz, table, pos)` · 2 slots · both — wavetable oscillator (`table` 0–7 built-in, 8+ loaded; `pos` 0–1 morphs) [25].
+- `osc_unison(slot, hz, table, pos, voices, detune, spread)` · 2 slots · both — unison wavetable oscillator (`table` 0–7 built-in, 8+ loaded; `pos` 0–1 morphs; `voices` 1–16; `detune` 0–1; `spread` 0–1; returns L) [120 at 4v, 220 at 8v, 420 at 16v].
+- `osc_unison_r(slot)` · 2 slots · both — R channel from the last osc_unison call for this slot.
 - `osc_fm(slot, hz, ratio, index, feedback)` · 2 slots · both — 2-op FM oscillator (`ratio` 0–1 → 0.5–16, snaps to integers) [25].
 - `osc_sync(slot, hz, ratio, shape)` · 2 slots · both — hard-sync oscillator (`ratio` 0–1 → 1–16× slave, `shape` saw→square) [25].
 - `noise()` · no slot · both — white noise ±1.
@@ -40,6 +42,7 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 - `env_adsr(slot, gate, a, d, s, r)` · 3 slots · both — output 0-1; gate on when ≥ 0.5; a, d, r 0-1 map to 1 ms-10 s (0.25 = 10 ms, 0.5 = 100 ms, 0.75 = 1 s); s is a level 0-1.
 - `env_follow(slot, in)` · 2 slots · both — envelope of |in| (1 ms attack, 100 ms release).
 - `mod_lfo(slot, beats, shape)` · 3 slots · both — tempo-synced LFO (`beats` = period, `shape` 0–1: sine/tri/saw/square/S&H; output 0–1).
+- `mod_curve(slot, beats, base, points)` · 3 slots · both — tempo-synced drawn curve from mem[base + 3*i] (`points` 2–32: x 0–1 ascending, y 0–1, bend −8..8; output 0–1) [30].
 
 ### Shapers and effects (first-order ADAA on fx_fold, fx_sat, fx_shape)
 - `fx_fold(in, amount)` · no slot · both — sine wavefolder: sin(in · (1 + 8·amount)).
@@ -77,7 +80,7 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 - `bus_reverb_r()` · no slot · master — R from the last bus_reverb.
 - `bus_delay(l, r, beats, feedback, mix, lowcut)` · no slot · master — tempo-synced ping-pong delay; beats 0.0625-4 (0.75 = dotted 1/8), feedback 0-1, mix 0-1, lowcut 0-1 (60 Hz-1.5 kHz, default 0.35 ≈ 250 Hz, 6 kHz high-cut); returns L.
 - `bus_delay_r()` · no slot · master — R from the last bus_delay.
-- `bus_width(l, r, amount)` · no slot · master — stereo width above 150 Hz (0 = mono, 0.5 = unchanged, 1 = wide); the low end is untouched. inl == inr, so it widens only what a stereo effect before it made (bus_chorus, bus_delay, bus_reverb); returns L.
+- `bus_width(l, r, amount)` · no slot · master — stereo width above 150 Hz (0 = mono, 0.5 = unchanged, 1 = wide); the low end is untouched; returns L.
 - `bus_width_r()` · no slot · master — R from the last bus_width.
 
 The master has its own slots: voice functions called there are separate instances from the voices' ones.

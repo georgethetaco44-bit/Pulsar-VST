@@ -416,6 +416,25 @@ int runRender (int argc, char** argv, int oversampling)
     const double rms = std::sqrt (0.5 * (std::pow (out.getRMSLevel (0, 0, total), 2.0)
                                          + std::pow (out.getRMSLevel (1, 0, total), 2.0)));
 
+    const bool stereo = out.getNumChannels() >= 2;
+    std::string monoDropStr;
+    if (stereo)
+    {
+        double sumMonoSq = 0.0;
+        const float* lData = out.getReadPointer (0);
+        const float* rData = out.getReadPointer (1);
+        for (int i = 0; i < total; ++i)
+        {
+            const double m = 0.5 * (static_cast<double> (lData[i]) + static_cast<double> (rData[i]));
+            sumMonoSq += m * m;
+        }
+        const double monoRms = std::sqrt (sumMonoSq / static_cast<double> (total));
+        const double dropDb = (rms > 1.0e-12 && monoRms > 1.0e-12) ? 20.0 * std::log10 (monoRms / rms) : 0.0;
+        char buf[64];
+        std::snprintf (buf, sizeof (buf), ", mono-sum drop %+.1f dB", dropDb);
+        monoDropStr = buf;
+    }
+
     outFile.getParentDirectory().createDirectory();
     outFile.deleteFile();
     std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream> (outFile);
@@ -440,12 +459,13 @@ int runRender (int argc, char** argv, int oversampling)
     const int tweaks = vibesynth::applyPatchTweaks (patch, *overrides);
 
     std::printf ("rendered %s (%s, trim %+.1f dB) -> %s: %.2f s at %.0f Hz, %.0f bpm, "
-                 "%s phrase, %s (glide %.2f), voices %dx, 24-bit stereo, peak %+.1f dBFS, RMS %+.1f dBFS%s\n",
+                 "%s phrase, %s (glide %.2f), voices %dx, 24-bit stereo, peak %+.1f dBFS, RMS %+.1f dBFS%s%s\n",
                  patch.name.c_str(), builtin ? "built-in, stored trim" : "file, computed trim",
                  dbfs (patch.trim), outFile.getFullPathName().toRawUTF8(), total / sr, sr, bpm,
                  phraseName.c_str(),
                  (patch.voiceMode == "mono" || mode == PatchPlayer::VoiceMode::Mono) ? "mono" : "poly",
                  glide, oversampling, dbfs (peak), dbfs (rms),
+                 monoDropStr.c_str(),
                  tweaks > 0 ? (", " + std::to_string (tweaks) + " tweaks applied").c_str() : "");
     return 0;
 }

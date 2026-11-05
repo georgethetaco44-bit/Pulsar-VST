@@ -30,6 +30,8 @@ EEL_F NSEEL_CGEN_CALL fnOscSupersaw (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnOscWt (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnOscFm (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnOscSync (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnOscUnison (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnOscUnisonR (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnNoise (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFltLp (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFltHp (void*, INT_PTR, EEL_F**);
@@ -42,6 +44,7 @@ EEL_F NSEEL_CGEN_CALL fnFltTilt (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnEnvAdsr (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnEnvFollow (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnModLfo (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnModCurve (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxFold (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxSat (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxShape (void*, INT_PTR, EEL_F**);
@@ -143,13 +146,20 @@ constexpr Registration kRegistrations[] = {
         kZero, 0, 0.0, kAudio, 0,
         { aSlot, kPitch, norm ("detune", "Detune"), norm ("mix", "Mix") } }, &fnOscSupersaw },
     { { "osc_wt", "slot, hz, table, pos", 4, kNumWtOscSlots, kBoth, mod (ModuleId::OscWt), true, kZero, 0, 0.0,
-        kAudio, 0, { aSlot, kPitch, choice ("table", "Table", 0.0, 7.0), norm ("pos", "Position") } }, &fnOscWt },
+        kAudio, 0, { aSlot, kPitch, choice ("table", "Table", 0.0, 39.0), norm ("pos", "Position") } }, &fnOscWt },
     { { "osc_fm", "slot, hz, ratio, index, feedback", 5, kNumFmOscSlots, kBoth, mod (ModuleId::OscFm), true,
         kZero, 0, 0.0, kAudio, 0,
         { aSlot, kPitch, norm ("ratio", "Ratio"), norm ("index", "Index"), norm ("feedback", "Feedback") } },
       &fnOscFm },
     { { "osc_sync", "slot, hz, ratio, shape", 4, kNumSyncOscSlots, kBoth, mod (ModuleId::OscSync), true, kZero, 0,
         0.0, kAudio, 0, { aSlot, kPitch, norm ("ratio", "Ratio"), norm ("shape", "Shape") } }, &fnOscSync },
+    { { "osc_unison", "slot, hz, table, pos, voices, detune, spread", 7, kNumUnisonOscSlots, kBoth,
+        mod (ModuleId::OscUnison), true, kZero, 0, 0.0, kAudio, 0,
+        { aSlot, kPitch, choice ("table", "Table", 0.0, 39.0), norm ("pos", "Position"),
+          choice ("voices", "Voices", 1.0, 16.0), norm ("detune", "Detune"), norm ("spread", "Spread") } },
+      &fnOscUnison },
+    { { "osc_unison_r", "slot", 1, kNumUnisonOscSlots, kBoth, mod (ModuleId::OscUnison), false, kZero, 0, 0.0,
+        kNoTrace, 0, { aSlot } }, &fnOscUnisonR },
     { { "noise", "", 0, 0, kBoth, -1, false, kNoBypass, 0, 0.0, kNoTrace, 0, {} }, &fnNoise },
     { { "flt_lp", "slot, in, cutoff, res", 4, kNumSvfSlots, kBoth, mod (ModuleId::FltLp), true, kPass, 1, 0.0, kAudio, 0,
         { aSlot, audio ("in"), norm ("cutoff", "Cutoff"), norm ("res", "Resonance") } }, &fnFltLp },
@@ -178,6 +188,10 @@ constexpr Registration kRegistrations[] = {
         kControl, 0, { aSlot, audio ("in") } }, &fnEnvFollow },
     { { "mod_lfo", "slot, beats, shape", 3, kNumModLfoSlots, kBoth, mod (ModuleId::ModLfo), true, kNoBypass, 0, 0.0,
         kControl, 0, { aSlot, beats ("beats", "Beats", 0.0625, 16.0), norm ("shape", "Shape") } }, &fnModLfo },
+    { { "mod_curve", "slot, beats, base, points", 4, kNumModCurveSlots, kBoth, mod (ModuleId::ModCurve), true,
+        kNoBypass, 0, 0.0, kControl, 0,
+        { aSlot, beats ("beats", "Beats", 0.0625, 32.0), choice ("base", "Base", 0.0, 65535.0),
+          choice ("points", "Points", 2.0, 32.0) } }, &fnModCurve },
     { { "fx_fold", "in, amount", 2, 0, kBoth, mod (ModuleId::FxFold), true, kPass, 0, 0.0, kAudio, 0,
         { audio ("in"), norm ("amount", "Amount") } }, &fnFxFold },
     { { "fx_sat", "in, drive", 2, 0, kBoth, mod (ModuleId::FxSat), true, kPass, 0, 0.0, kAudio, 0,

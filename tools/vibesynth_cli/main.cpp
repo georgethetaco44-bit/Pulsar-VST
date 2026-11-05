@@ -64,6 +64,7 @@
 #include "PulsarTestPatches.h"
 #include "Render.h"
 #include "Judge.h"
+#include "patch/WavetableLoader.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "SmokeM7.h"
 #include "SmokeM8.h"
@@ -77,6 +78,7 @@
 #include "SmokeM14b.h"
 #include "SmokeM14e.h"
 #include "SmokeM14c.h"
+#include "SmokePrototype.h"
 #include "SmokeMerge.h"
 #include "ai/PromptBuilder.h"
 #include "engine/OutputStage.h"
@@ -470,7 +472,7 @@ bool smokeAllFunctions()
     for (int ci = 0; ci < vibesynth_cli::kNumBenchCases; ++ci)
     {
         const vibesynth_cli::BenchCase& bc = vibesynth_cli::kBenchCases[ci];
-        const PatchStrings ps = { "fb1 = 0; prev = 0;", bc.voice, bc.master };
+        const PatchStrings ps = { bc.init != nullptr ? bc.init : "fb1 = 0; prev = 0;", bc.voice, bc.master };
         // Heap, not stack: EelVoice is ~175 KB since M7 (Windows' default stack is 1 MB).
         const auto vp = std::make_unique<EelVoice> (ps, kSampleRate, 8u);
         const auto mp = std::make_unique<EelMaster> (ps, kSampleRate);
@@ -1185,6 +1187,7 @@ int runSmoketest()
     ok = vibesynth_cli::smokeM14b() && ok;
     ok = vibesynth_cli::smokeM14e() && ok;
     ok = vibesynth_cli::smokeM14c() && ok;
+    ok = vibesynth_cli::smokePrototype() && ok;
     std::printf (ok ? "SMOKETEST PASS\n" : "SMOKETEST FAIL\n");
     return ok ? 0 : 1;
 }
@@ -1343,6 +1346,7 @@ int main (int argc, char** argvIn)
     std::printf ("mode: %s\n", mode);
     const bool jit = std::strcmp (mode, "portable") != 0;
     const bool initOk = vibesynth::ensureEelInitialised();
+    vibesynth::loadWavetablesFromFolder();
     const bool jitOk = initOk && vibesynth::isJitUsable();
 
     if (bench)

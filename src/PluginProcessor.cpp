@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "patch/PatchLibrary.h"
+#include "patch/WavetableLoader.h"
 
 // M5: the sound is a PatchProgram built off the audio thread from a
 // .pulsar patch (SPEC 3, 7, 9.3). Threads:
@@ -72,6 +73,8 @@ VibeSynthAudioProcessor::VibeSynthAudioProcessor()
     probeRequested = true; // the default patch's nodes, once the worker runs
 
     player.setNodeHooks (overrideTable.get(), traceBank.get());  // M10
+
+    vibesynth::loadWavetablesFromFolder();
 
     worker.startThread();
     generationWorker.startThread(); // idles until generate(); no network here

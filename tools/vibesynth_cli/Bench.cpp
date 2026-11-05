@@ -83,6 +83,13 @@ const BenchCase kBenchCases[] = {
     { "bus_width", "out = osc_saw(0, freq);", "outl = bus_width(inl, inr, 0.8); outr = bus_width_r();", true },
     { "fx_comp", "out = fx_comp(0, osc_saw(0, freq), 0.7);", "", false },
     { "fx_gate", "out = fx_gate(0, osc_saw(0, freq), 0.1);", "", false },
+    { "osc_unison (4v)", "outl = osc_unison(0, freq, 0, 0, 4, 0.5, 0.5); outr = osc_unison_r(0);", "outl = inl; outr = inr;", false },
+    { "osc_unison (8v)", "outl = osc_unison(0, freq, 0, 0, 8, 0.5, 0.5); outr = osc_unison_r(0);", "outl = inl; outr = inr;", false },
+    { "osc_unison (16v)", "outl = osc_unison(0, freq, 0, 0, 16, 0.5, 0.5); outr = osc_unison_r(0);", "outl = inl; outr = inr;", false },
+    { "mod_curve (4pt)", "out = mod_curve(0, 1.0, 0, 4);", "outl = inl; outr = inr;", false,
+      "mem[0]=0; mem[1]=0; mem[2]=0; mem[3]=0.33; mem[4]=1; mem[5]=0; mem[6]=0.66; mem[7]=0.2; mem[8]=0; mem[9]=1; mem[10]=0.8; mem[11]=0;" },
+    { "mod_curve (32pt)", "out = mod_curve(0, 1.0, 0, 32);", "outl = inl; outr = inr;", false,
+      "i=0; loop(32, mem[i*3]=i/31.0; mem[i*3+1]=0.5; mem[i*3+2]=0; i+=1;);" },
 };
 
 const int kNumBenchCases = static_cast<int> (sizeof (kBenchCases) / sizeof (kBenchCases[0]));
@@ -495,7 +502,7 @@ int runBench (int oversampling)
     for (int ci = 0; ci < kNumBenchCases; ++ci)
     {
         const BenchCase& bc = kBenchCases[ci];
-        const PatchStrings ps = { "fb1 = 0; prev = 0;", bc.voice, bc.master };
+        const PatchStrings ps = { bc.init != nullptr ? bc.init : "fb1 = 0; prev = 0;", bc.voice, bc.master };
         // Heap, not stack: EelVoice is ~175 KB since M7 (Windows' default stack is 1 MB).
         const auto vp = std::make_unique<EelVoice> (ps, voiceRate, 7u);
         const auto mp = std::make_unique<EelMaster> (ps, kSampleRate);

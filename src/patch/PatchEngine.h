@@ -104,6 +104,10 @@ bool isJitUsable();
 bool ensureEelInitialised();
 const char* eelExecutionMode();
 
+// Returns true if voice code references outl or outr (case-insensitive whole-word,
+// ignoring comments and strings), making the patch stereo.
+bool isStereoVoiceCode (const std::string& voiceCode) noexcept;
+
 // Macro smoother (SPEC §4.3): one ~10 ms one-pole per macro, stepped once
 // per sample and shared by all voices + master.
 struct MacroSmoother
@@ -242,6 +246,7 @@ public:
     EelVoice& operator= (const EelVoice&) = delete;
 
     bool isValid() const noexcept { return voiceCode_ != nullptr; }
+    bool isStereo() const noexcept { return isStereo_; }
     // On failure: the section that failed ("init", "voice", or empty for a
     // VM setup error) and EEL2's own error text.
     const std::string& compileSection() const noexcept { return compileSection_; }
@@ -256,6 +261,10 @@ public:
     float renderSample (double freq, double gate, double note, double vel,
                         const double macros[MacroSmoother::kNumMacros],
                         const Transport& transport = {}, double mw = 0.0) noexcept;
+    void renderSample (double freq, double gate, double note, double vel,
+                       const double macros[MacroSmoother::kNumMacros],
+                       const Transport& transport, double mw,
+                       float& outL, float& outR) noexcept;
 
     // Tests only (off the audio thread): a VM variable by name, registered
     // if the code never used it. Null if the voice didn't compile.
@@ -283,6 +292,9 @@ private:
     EEL_F* macro_[MacroSmoother::kNumMacros] = {};
     EEL_F* mw_ = nullptr;
     EEL_F* out_ = nullptr;
+    EEL_F* outl_ = nullptr;
+    EEL_F* outr_ = nullptr;
+    bool isStereo_ = false;
     std::vector<EEL_F_PTR> vars_;
     std::string compileSection_;
     std::string compileError_;

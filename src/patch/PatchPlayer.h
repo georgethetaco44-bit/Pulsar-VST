@@ -257,7 +257,9 @@ private:
     MacroSmoother smoother_;
     OutputStage outputStage_;
     HalfbandDecimator decimator_;
-    std::vector<float> voiceSum_;     // mono voice mix for one chunk (voice rate)
+    HalfbandDecimator decimatorR_;
+    std::vector<float> voiceSum_;     // voice mix for one chunk (voice rate, left or mono)
+    std::vector<float> voiceSumR_;    // voice mix for one chunk (voice rate, right)
     std::vector<double> macroBlock_;  // smoothed macros, kNumMacros per host sample
     std::vector<double> mwBlock_;     // smoothed mod wheel per host sample
     std::vector<double> bendBlock_;   // pitch-bend frequency ratio per host sample

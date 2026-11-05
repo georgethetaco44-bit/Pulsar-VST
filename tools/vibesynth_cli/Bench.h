@@ -15,6 +15,7 @@ struct BenchCase
     const char* voice;
     const char* master;
     bool isMaster;
+    const char* init = nullptr;
 };
 
 extern const BenchCase kBenchCases[];

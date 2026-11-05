@@ -21,8 +21,9 @@ constexpr const char* kModuleNames[kNumModules] = {
     "chaos_lorenz", "chaos_duffing",
     "util_safe_fb", "util_xover", "util_bytebeat",
     "bus_sat", "bus_mono_low", "bus_chorus", "bus_reverb", "bus_delay", "bus_width",
+    "osc_unison", "mod_curve",
 };
-static_assert (static_cast<int> (ModuleId::BusWidth) == kNumModules - 1,
+static_assert (static_cast<int> (ModuleId::ModCurve) == kNumModules - 1,
                "kModuleNames must list every ModuleId");
 // Spot checks that the table follows the enum order.
 static_assert (static_cast<int> (ModuleId::FxFold) == 19 && static_cast<int> (ModuleId::FxCrush) == 22
@@ -43,6 +44,7 @@ constexpr Alias kAliases[] = {
     { "bus_reverb_r", ModuleId::BusReverb },
     { "bus_delay_r", ModuleId::BusDelay },
     { "bus_width_r", ModuleId::BusWidth },
+    { "osc_unison_r", ModuleId::OscUnison },
 };
 
 bool sameIgnoringCase (const std::string& a, const char* b) noexcept

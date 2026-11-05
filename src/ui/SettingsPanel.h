@@ -41,6 +41,9 @@ private:
     VibeSynthAudioProcessor& processor;
     juce::TextEditor keyEditor, endpointEditor, generateEditor, mutateEditor, retryEditor;
     juce::ToggleButton learnToggle { "Learn from my presets" };
+    juce::TextButton openWavetablesButton { "Open folder" };
+    juce::TextEditor wavetableListEditor;
+    juce::Rectangle<int> wavetableHeaderArea;
     juce::TextButton saveButton { "Save" }, closeButton { "Close" }, testButton { "Test key" };
     VibeSynthAudioProcessor::KeyTest keyTest;
     juce::Rectangle<int> keyResultArea;

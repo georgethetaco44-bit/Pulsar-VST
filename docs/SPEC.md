@@ -1,1202 +1,449 @@
-# Pulsar — Specification (v2)
+# Pulsar: Specification v3
 
-> v2 replaces the original architecture draft. Key changes: EEL2 replaces
-> libtcc, the DSP library list is cut to an MVP core, the safety system gains a
-> runtime guard, the node visualizer becomes read-only and code-derived, and the
-> scope is cut to what one developer can ship. Sections marked **[MVP]** are in
-> scope for the hackathon; **[LATER]** items must not be built until all MVP
-> milestones pass.
-
----
-
-## 1. Background & constraints
-
-- **Developer:** electronic bass music producer (140 BPM minimal dubstep, UKG,
-  neurofunk, sub-bass design), self-taught engineer. Previously built Pulse DAW
-  (Android: Kotlin, Compose, C++17/NDK, Oboe, lock-free SPSC ring buffers).
-- **Dev machine:** Valve Steam Deck, SteamOS Desktop Mode. No Windows or Mac
-  hardware. All Windows/macOS verification happens in GitHub Actions.
-- **Toolchain:** VS Code-based IDE + Cline (plan: `muse-wonder-1.0`, act:
-  `muse-spark-1.3`). Builds run inside an Ubuntu 22.04 Distrobox named `juce`
-  (matches the Linux CI runner). CMake + Ninja. REAPER (Flatpak) for testing.
-- **Target formats:** VST3 + Standalone on Windows x64, macOS (x86_64 + arm64),
-  Linux x86_64.
-- **Naming:** everything a user sees is **Pulsar**: the plugin name in the DAW,
-  the `.vst3` bundle, the Standalone app, window titles, release zips, the
-  app-data folder and the README. "VibeSynth" is the internal codename and may
-  appear only in code: the CMake target, class names, `vibesynth_cli` and the
-  `VIBESYNTH_API_KEY` env var.
-- **Repo:** https://github.com/georgethetaco44-bit/Pulsar-VST (public, AGPLv3).
+> **Status: in force since Nov 4 2026.** Replaces v2, now at
+> `docs/archive/SPEC-v2.md`. v2 was written for a one-week build. This version is
+> written for a free public release with no fixed date: quality decides when it
+> ships. v2 still holds the detail on features already built, such as the inspector,
+> Mutate and the MOD strip, and "SPEC §" references in existing code comments point
+> to its section numbers. v3 wins wherever they differ.
+> "Pulsar" is a placeholder name until the rename decision in §13 is made.
+> Numbers marked *(proposed)* are starting points to adjust.
 
 ---
 
-## 2. Core idea & pitch
+## 1. The product
 
-The user types a description of a sound ("weeping neuro reese with a throat that
-closes on the mod wheel"). An LLM writes a small per-sample DSP program plus 8
-macro knob labels. The plugin JIT-compiles it to native code, safety-tests it
-offline, and hot-swaps it into the running synth with no clicks or dropouts.
+**What it is.** A free, open-source synth plugin. You describe a sound in plain
+words, AI writes it as a small program, and Pulsar tests it and swaps it in
+while you play. Then you shape it by hand with knobs, drawn curves and
+modulation. You never have to read or write code.
 
-**What is actually novel (pitch this):** natural-language prompt → AI-written
-sample-rate code → validated and hot-swapped live while playing, plus
-audition-and-keep mutation.
+**Who version 1 is for.** Bass music producers: dubstep, drum and bass, halftime,
+riddim, UK garage and neighbouring styles. Other sounds (pads, leads, keys, FX)
+are included and must be good, but bass must be excellent. When priorities
+conflict, bass wins.
 
-**Claims we must NOT make:**
-- That commercial or modular tools can't do audio-rate modulation. VCV Rack,
-  Bitwig Grid, Reaktor Core and Max gen~ already do single-sample modular.
-- "Zero-delay feedback". Our feedback is **one-sample feedback** (value written
-  on sample n is read on sample n+1). ZDF means something else in DSP.
-- "Genetic algorithm". Mutation is LLM-guided variation with the user as the
-  selector.
+**Why someone would choose it.**
+- It can make sounds a fixed synth layout can't, because every sound is its own
+  program running sample by sample.
+- A sound can be reached by describing it, then refined by ear.
+- It is free, with nothing locked.
 
----
-
-## 3. Architecture overview
-
-```
- Message thread (UI)           Generation worker (juce::Thread)          Audio thread
- ───────────────────           ───────────────────────────────          ────────────
- Prompt / Mutate ──request──▶  1. Build prompt (full API + recipes)
-                               2. HTTPS → Meta API (juce::URL)
-                               3. Parse response (JSON header + code)
-                               4. Compile EEL2 into 11 fresh VMs
-                                  (10 voice objects + 1 master)
-                               5. Offline test matrix (§7.1)
-                                  fail → feed error back, retry ≤2
-                               6. Push PatchProgram* ──SPSC queue──▶   fade out old (5 ms)
-                                                                       swap, reset racks
-                                                                       fade in new (5 ms)
-                               7. Free old program  ◀──SPSC queue───  "done with old"
- Labels/graph update ◀───────  (message thread notified)
-```
-
-Rules:
-- The audio thread never allocates, locks, logs, throws or does I/O.
-- Ownership of a `PatchProgram` moves between threads only through SPSC queues.
-  The audio thread never frees a program. It returns retired programs on a queue
-  and the worker frees them.
-- One generation request runs at a time (Mutate's 4 variants run in sequence or
-  in parallel on the worker, never on the audio thread).
+**What we must not claim.**
+- That other tools can't do audio-rate modulation. VCV Rack, Bitwig Grid,
+  Reaktor Core and Max gen~ all can.
+- "Zero-delay feedback". Ours is one-sample feedback.
+- "Genetic algorithm". Mutate is AI-guided variation with the user choosing.
+- That AI output is always good. It isn't, and the product is built around
+  auditioning and keeping what works.
 
 ---
 
-## 4. Patch language: EEL2 (replaces libtcc)
+## 2. Decisions this spec is built on
 
-### 4.1 Why EEL2 and not libtcc
-libtcc runs AI-written C natively in the DAW process with full user privileges:
-access to libc (`system`, `fopen`), raw pointers, integer divide-by-zero and
-infinite loops can crash the DAW or damage the user's machine, and segfaults
-can't be caught in-process. libtcc is also LGPL, and macOS (arm64, MAP_JIT,
-Universal Binaries, libtcc1 runtime helpers) is fragile.
-
-**EEL2** (from Cockos WDL, zlib-style licence; the language behind REAPER JSFX):
-- JIT-compiles to native code in ~1 ms on x86-64 and arm64.
-- Sandboxed: no pointers, no syscalls, bounds-checked virtual memory, float-only
-  maths (divide by zero gives inf, not a crash), loop iteration caps.
-- Native C++ functions can be registered, and an opaque context pointer
-  (`NSEEL_VM_SetCustomFuncThis`) lets each function find its VoiceRack.
-- LLMs have seen large amounts of JSFX/EEL2 code.
-- Reference integration: **ysfx** (open-source JSFX host that builds EEL2 with
-  CMake on all three OSes).
-- Fallback: if JIT fails on a platform, EEL2's portable (non-JIT) build mode.
-  Verify JIT on all three CI targets in Milestone 3.
-
-### 4.2 Execution model
-- Each patch has three code sections: `init` (optional, runs on every note-on for
-  that voice), `voice` (runs once per sample per active voice), `master` (runs
-  once per sample on the stereo bus).
-- Each of the 8 voices gets its own EEL2 VM, compiled from the same source, so
-  user variables are per-voice state. The master has one VM.
-- The C++ voice loop runs per sample: write input variables → execute `voice`
-  code → read `out`. MIDI events are therefore sample-accurate with no block
-  splitting, and `trig` is exactly 1 on the note-on sample.
-- **[MVP, Milestone 7]** Voice section runs at 2× the host sample rate with
-  half-band decimation (anti-aliasing for folding, feedback FM and chaos).
-  Master runs at 1×. Voices generate at 2× directly (no upsampler), and the
-  voice sum is mono, so **one** decimator runs on the summed 2× signal, not
-  one per voice: an own polyphase-IIR half-band (allpass pair; ≥ 90 dB
-  rejection above 0.55 × host rate, passband flat to 20 kHz at 48 kHz). The
-  validator, `--render` and `--bench` use the same 2× path; `vibesynth_cli`
-  keeps a `--os 1` switch for A/B aliasing measurements.
-- Any user-created variable persists between samples (that's how state works).
-  A newly loaded patch starts with all variables at 0.
-- VM memory (`mem[]`, for user delay lines or tables) is capped per VM
-  (e.g. 65,536 slots).
-- **EEL2 allocates `mem[]` lazily** (`calloc` on first access, inside
-  `__NSEEL_RAMAlloc`), which would mean an allocation on the audio thread.
-  Every VM must call `NSEEL_VM_preallocram(vm, -1)` after
-  `NSEEL_VM_setramsize`, off the audio thread, before it is ever executed.
-  Named `gmem` is not exposed to patches.
-
-### 4.2.1 CPU budget (from Milestone 3 measurements)
-- Measured cost of one `NSEEL_code_execute` running `out = osc_sine(0, freq);`:
-  Steam Deck 66 ns/sample, CI Linux 54, Windows 49, macOS arm64 69. Almost all
-  of that is fixed per-execute overhead, not the sine.
-- **Budget: the whole voice section (8 voices, 2× oversampling, 48 kHz) uses at
-  most 25 % of one Steam Deck core.** That is **≤ 300 ns per voice per
-  oversampled sample**, including the ~66 ns execute overhead, leaving about
-  230 ns for lexicon calls. The master VM gets at most 10 % (≈ 2 µs per
-  sample), which is where reverb and chorus live.
-- Lexicon functions should be designed so that a typical patch (one or two
-  oscillators, a filter, an envelope, a shaper, feedback) fits the budget. Each
-  function's cost is benchmarked in `vibesynth_cli`.
-- Milestone 4 measured on the Deck: the execute baseline is ~32 ns. Every single
-  lexicon function fits; the heaviest are `flt_ladder` (+178 ns, because DaisySP
-  oversamples it 4× internally), `phys_resonator` (+145) and `phys_string`
-  (+112). The first test preset (supersaw + saw + sine + ladder + adsr + sat +
-  fold + safe_fb) cost 518 ns, so a full patch, not any one function, is what
-  breaks the budget.
-- Performance rules for wrappers:
-  - Cache parameter mappings on their **raw 0–1 inputs**, before any `pow`, so
-    a mapping is only recomputed when its input changes.
-  - Coefficient-heavy setters (filter cutoff/res, envelope times, resonator) run
-    at **control rate**: update every 16 samples, with linear interpolation of
-    the mapped value where zipper noise would be audible.
-  - Use cheap approximations (rational tanh, polynomial sin) where they are
-    inaudible, and precompute any per-sample `exp`.
-- After these rules the test preset costs 283 ns with `flt_lp` but still 413 ns
-  with `flt_ladder` (the ladder alone is ≈144 ns per call). The default preset
-  therefore uses `flt_lp`. In Milestone 7, when voices run at 2×, DaisySP's
-  internal 4× ladder would become 8×. So M7 replaces it with our own 1× ladder,
-  and probably our own TPT SVF too, whose coefficients can be interpolated
-  per sample. DaisySP's Svf can only step its cutoff every 16 samples.
-- Headroom is thin for **poly** patches: about one filter plus one shaper
-  plus an oscillator stack. The M8 prompt examples must stay that lean.
-- **Budget by voice mode (M6 amendment).** The 25 % budget assumes 8 sounding
-  voices. A `"voiceMode": "mono"` patch only ever sounds one voice (plus a
-  2 ms steal fade), so its voice section may cost **≤ 1,200 ns per oversampled
-  sample** (4× the poly figure, and still only ~12 % of a Deck core at 2×).
-  Poly patches stay at ≤ 300 ns. Until M7 enforces mono, a mono patch played
-  as a chord can overrun; that's accepted for the M6–M7 gap.
-- **The master is the cheap place for heavy processing.** It runs once, not
-  per voice, and its 2 µs budget was ~5 % used after M6. Character processing
-  that suits the bus (distortion chains, multiband, combs, chaos-modulated
-  filters) belongs in `master`, which can call the whole lexicon (§5.2).
-- The Deck bench is noisy (cheap rows vary up to 2× between runs), so judge by
-  the median of several runs and by absolute ns. The CPU clock ramps from idle
-  (the first run is ~45 % slower), so every timed measurement starts with one
-  untimed warm-up pass.
-- **Where the budget is enforced:** `vibesynth_cli --selftest --strict-cpu` on
-  the Deck fails any preset over its §4.2.1 budget. In CI (shared, variably
-  clocked runners, Rosetta) the per-preset ns are reported but never gate;
-  CI gates only on the §7.1 runaway rule. The `out = 0` baseline shifts
-  with the build layout (32 vs 68 ns), so "vs base" is unreliable.
-- macOS x86_64 under Rosetta measured 2,435 ns/sample (Rosetta translates
-  JIT-generated code slowly). It is correct but not usable for real-time work.
-  The README tells Apple Silicon users to run their DAW natively, not under
-  Rosetta. Real Intel Macs run the same x86_64 JIT as Linux/Windows.
-
-### 4.3 Variables bound into each VM
-
-| Voice VM | Meaning |
+| Decision | Choice |
 |---|---|
-| `freq` | note frequency in Hz (includes glide and pitch bend) |
-| `note` | MIDI note number |
-| `vel` | velocity 0–1 |
-| `gate` | 1 while the key is held, 0 after release |
-| `trig` | 1 on the note-on sample only |
-| `srate` | the voice's running sample rate (2× host when oversampling) |
-| `m1`…`m8` | macro values 0–1, smoothed per sample in C++ (~10 ms one-pole) |
-| `out` | **write**: the voice's output sample |
-| `mw` | mod wheel 0–1, smoothed like the macros (M7) |
-| `fb1`, `fb2`, `prev` | conventions for one-sample feedback and zero-crossing detection (plain variables) |
-| `bpm` | host tempo (M6 amendment; 120 when the host gives none) |
-| `beat` | position in quarter notes, advanced per sample (host PPQ while playing; free-running from the last position when stopped), for tempo-synced LFOs, wobbles and stutters, e.g. `lfo = sin(beat * 2 * $pi * 2)` for 1/8 notes |
-
-| Master VM | Meaning |
-|---|---|
-| `inl`, `inr` | summed voice output |
-| `outl`, `outr` | **write**: bus output (default passthrough) |
-| `m1`…`m8`, `srate`, `bpm`, `beat` | as above |
+| Core idea | Describe, then shape. AI builds structure; people refine it without code |
+| Audience | Bass music producers first |
+| Price | Free. Optional donation link; no nag screens, nothing locked |
+| Licence | AGPLv3 (required by the JUCE licence we use) |
+| AI access | Users bring their own key or local model. Pulsar runs no servers |
+| AI services | Any compatible service, with a short tested list (§7) |
+| Sound before launch | The launch waits until the sound bar (§4) is met |
+| Dates | None. Phases end when their exit tests pass |
 
 ---
 
-## 5. DSP lexicon (native functions exposed to EEL2)
+## 3. Version 1 scope
 
-### 5.1 Design rules (non-negotiable)
-1. **Normalized inputs.** Every "amount" parameter is 0–1 and is mapped to a
-   musical range inside the wrapper. Frequency parameters are in Hz.
-2. **Clamp everything.** Inputs outside range are clamped. Frequencies are
-   clamped to [0, 0.45 × srate]. Resonance can't reach self-destruction. Slot
-   numbers out of range clamp to 0.
-3. **Slots.** Stateful functions take `slot` as their first argument (a literal
-   integer). Each slot is a pre-allocated module instance in the voice's
-   `VoiceRack`. Using slot 0 for two different calls of the same function shares
-   state; the system prompt tells the model to use distinct slots.
-4. **Auto-metering.** Every stateful call records |output| peak into
-   `rack->meters[module][slot]` and sets a "touched" bit. The UI reads these
-   (§9) and the validator uses the touched set to build the real node list.
-5. **Physical models take an exciter.** `phys_*` functions take `exciter` as a
-   per-sample input so any signal can drive them.
-6. All module state is allocated in `prepareToPlay`. Wrappers never allocate.
-7. Unused modules cost no CPU. On patch swap, all racks are reset.
+**In**
+- VST3 and Standalone on Windows x64, macOS (arm64 and Intel) and Linux x86_64.
+- Generate, Takes, Mutate, Change this node, Undo and History (all built).
+- Node inspector, macros and macro ranges, MOD strip (all built).
+- Stereo voices, unison, drawn curves, loadable wavetables (in prototype).
+- No-code controls for those new engine features (§5.3).
+- A preset library the developer has personally approved (§4.2).
+- Full use without a key, except for the AI features (§5.1).
 
-### 5.2 Function list
+**Not in version 1** (revisit after release)
+- Hand-building a patch from an empty page, or rewiring modules. This is the
+  most likely next major feature.
+- A code editor. The Code tab stays read-only.
+- Reference-sound matching (drop in a WAV and match it).
+- Breed, the "How I understood it" plan card and web lookup.
+- AU, AAX and CLAP formats. Without AU, Logic Pro users can't load it; the README
+  says so plainly. AU is the first format to consider afterwards.
+- Installers and paid code signing, unless the beta shows they are needed (§9).
+- Extra DSP libraries unless a listening test shows a specific need.
 
-**Master VM (M6 amendment):** the master VM owns its own `VoiceRack` as well
-as the `MasterRack`, so every voice function below (`osc_*`, `flt_*`, `fx_*`,
-`env_follow`, `util_*`, `chaos_*`, `phys_*`) also works in `master`, with
-its own slots. `gate`, `freq` and `note` aren't bound in `master`, so `env_adsr`
-there needs a gate the patch makes itself. `bus_*` functions stay master-only.
+---
 
-**[MVP] core (DaisySP + our own code):**
+## 4. The sound bar
 
-| Function | Source | Notes |
+This is the main release gate. Earlier work passed every automated check while
+the developer still heard patches that "fall flat", so **passing validation says
+nothing about whether a sound is good, and neither does a text-only AI judge**:
+one gave 5/5 to a patch it never heard.
+
+### 4.1 What the measurements show
+Compared with a private reference set of the developer's favourite presets from
+other synths (bass group, Nov 4 2026):
+
+| Measure | References | Pulsar |
 |---|---|---|
-| `osc_sine(slot, hz)` `osc_saw(slot, hz)` `osc_tri(slot, hz)` | DaisySP Oscillator (PolyBLEP) | 4 slots |
-| `osc_square(slot, hz, pw)` | DaisySP | pw 0–1 |
-| `osc_supersaw(slot, hz, detune, mix)` | own (7 PolyBLEP saws) or DaisySP | 2 slots |
-| `noise()` | own | stateless white noise |
-| `flt_lp(slot, in, cutoff, res)` `flt_hp(...)` `flt_bp(...)` | own TPT SVF (M7; `Filters.h`) | cutoff 0–1 mapped exponentially 20 Hz–20 kHz, smoothed per sample; linear; res 1 = Q 20; 3 slots |
-| `flt_ladder(slot, in, cutoff, res)` | own 4-pole ZDF ladder (M7; `Filters.h`), Padé tanh in the feedback | self-oscillates from res ≈ 0.95, bounded; 2 slots |
-| `env_adsr(slot, gate, a, d, s, r)` | DaisySP Adsr | times mapped 1 ms–10 s; 3 slots |
-| `env_follow(slot, in)` | own | 2 slots |
-| `fx_fold(in, amount)` | own (sin-fold) | stateless |
-| `fx_sat(in, drive)` | own (tanh with gain compensation) | stateless |
-| `fx_crush(slot, in, bits, rate)` | DaisySP Decimator | 2 slots |
-| `fx_comb(slot, in, hz, feedback)` | own fractional delay | 2 slots |
-| `fx_ott(slot, in, depth)` | own (M6): 3-band (≈120 Hz / 2.5 kHz) upward + downward compressor, the "OTT" staple of modern bass music; depth 0 = passthrough, 1 = full; fixed fast attack/release; output gain-compensated | 2 slots; works in master (one slot per channel) |
-| `phys_resonator(slot, exciter, hz, structure, brightness, damping)` | DaisySP Resonator | 1 slot |
-| `phys_string(slot, exciter, hz, brightness, damping)` | DaisySP KarplusString | 1 slot |
-| `chaos_lorenz(slot, rate, axis)` | own ChaosMath.h (RK2, ≤4 substeps) | rate 0–1 maps exponentially to an orbit rate of 0.05 Hz–1 kHz; axis 0/1/2; initial state seeded per voice; 2 slots |
-| `chaos_duffing(slot, hz, chaos)` | own ChaosMath.h (forced Duffing, ±cos forcing, DC-blocked) | hz sets the forcing period (capped at ~0.076·sr); chaos 0–1 sets forcing strength 0.20–0.50; 2 slots |
-| `util_safe_fb(slot, x)` | own | 20 Hz DC block + slew limit + tanh. All feedback must pass through this |
-| `util_xover_lo(slot, in)` / `util_xover_hi(slot)` | own Linkwitz-Riley 4th order @ 100 Hz | `_hi` returns the high band of the last `_lo` call |
-| `util_bytebeat(t, mode)` | own | bitwise helpers; integer ops done in C++ |
+| Side level above 200 Hz | about −8 dB | about −45 dB; most AI patches fully mono |
+| Level swing (movement) | about 21 dB | 4–6 dB |
+| Brightness, frame-to-frame timbre change | about equal | about equal |
 
-**[MVP] master bus functions:**
+The references also rely heavily on drawn, tempo-synced curves, compression and
+distortion, and often use chorus and reverb even on basses.
 
-| Function | Notes |
-|---|---|
-| `bus_sat(in, drive)` | stereo-safe saturation (call per channel) |
-| `bus_mono_low(l, r)` / `bus_mono_low_r()` | sums sub-100 Hz to mono, returns new L (and R via second call) |
-| `bus_chorus(l, r, depth, mix)` / `bus_chorus_r()` | own or DaisySP Chorus; returns new L, R via the second call (same pattern as `bus_mono_low`) |
-| `bus_reverb(l, r, size, mix)` / `bus_reverb_r()` | own small FDN (DaisySP ReverbSc is in the LGPL repo, so don't use it); returns new L, R via the second call |
+**Update, Nov 4 2026: those numbers aren't enough.** The stereo, unison and curve
+prototypes close most of that gap on paper, and the developer still judged them
+not very good:
 
-Always on after the master code (not callable): DC block → peak limiter →
-hard clip at ±1.0.
-
-**[LATER]** (add one at a time, only after Milestone 10):
-- Signalsmith DSP: Kaiser-sinc fractional delay, oversampling helpers (may be
-  pulled in earlier for §4.2 oversampling), Hilbert IIR frequency shifter.
-- Mutable Instruments Plaits engines via a per-voice block-buffer adapter
-  (they render in 12–24 sample blocks; document the latency this adds).
-- STK BandedWG / BlowHole / Shakers (need forking to accept an exciter input).
-- Pink Trombone / voclib vocal tract (needs an external glottal input).
-- Airwindows (ToTape, Spiral, DeRez) as master bus colour.
-
-Removed entirely: Cycfi Q (we already know each voice's pitch; smoothers and
-followers are a few lines of our own code), Mutable Elements (32 kHz internal,
-block-based, overlaps DaisySP Resonator), Airwindows SubTight as a crossover
-(replaced by `util_xover_*`).
-
-### 5.3 DSP expansion **[MVP, M12]**
-More variety for the model and for hand-built presets, plus the top-end fix.
-All own code (or MIT DaisySP modules, checked per file); every function gets
-a table row with argument metadata (§9.6), bounds/NaN smoketests at extreme
-arguments, a `--bench` line and an api_reference line. Tier 1 ships first;
-tier 2 if time allows.
-
-**Tier 1**
-| Function | Notes |
-|---|---|
-| `osc_wt(slot, hz, table, pos)` | wavetable; 8 built-in tables generated procedurally at startup (no assets): basic (sine→tri→saw→square), PWM, vocal/formant, bell (sparse high partials), sync sweep, harmonic comb, fold sweep, growl. `pos` morphs across the table's frames; band-limited by per-octave mipmaps; 2 slots |
-| `osc_fm(slot, hz, ratio, index, feedback)` | 2-operator phase modulation with modulator self-feedback; ratio 0–1 maps to 0.5–16 (snaps near integers below 0.02 away); 2 slots |
-| `osc_sync(slot, hz, ratio, shape)` | hard-sync oscillator, slave at 1–16× the master, saw→square by `shape`, PolyBLEP-corrected resets; 2 slots |
-| `fx_shape(in, drive, type)` | stateless multi-curve distortion: hard clip, asymmetric tube, half-wave rectify, full-wave rectify, Chebyshev-3, diode foldback (`type` 0–1 picks a curve) |
-| ADAA on `fx_sat`, `fx_fold`, `fx_shape` | first-order antiderivative anti-aliasing; the previous input is kept per call index (the stateless call counter, §9.6). Targets the "messy top end" from Sound pass batch 1 |
-| `flt_formant(slot, in, vowel, res)` | 3 parallel band-passes morphing a→e→i→o→u; 2 slots |
-| `flt_notch(slot, in, cutoff, res)` `flt_peak(slot, in, cutoff, gain, res)` | from the existing TPT SVF; gain 0–1 maps to −18…+18 dB; 3 slots each |
-| `flt_tilt(slot, in, tilt)` | ±6 dB tilt around ~1 kHz, for taming or opening the top; 2 slots |
-| `mod_lfo(slot, beats, shape)` | tempo-synced LFO, period in beats (0.25 = 1/16 note), shape 0–1 across sine/tri/saw/square/S&H; unipolar 0–1; retriggers at note-on; 3 slots |
-
-**Tier 2**
-| Function | Notes |
-|---|---|
-| `fx_phaser(slot, in, pos, depth, feedback)` | 8 allpass stages; `pos` is the sweep position (the code modulates it); 2 slots |
-| `fx_fshift(slot, in, shift)` | IIR Hilbert frequency shifter; `shift` 0.5 = none, 0/1 = ±2 kHz (exponential); 1 slot |
-| `bus_delay(l, r, beats, feedback, mix)` / `bus_delay_r()` | ping-pong delay, time in beats, low-cut and high-cut in the feedback path; master only |
-| `bus_width(l, r, amount)` / `bus_width_r()` | mid/side width applied above ~150 Hz only; master only |
-
-The prompt grows by about one line per function (~0.5k tokens for all of
-them). Recipes and examples are updated to use what's new, then one batch run
-checks that pass rates hold.
-
----
-
-## 6. LLM integration
-
-### 6.1 Prompt construction
-- The system prompt contains the **entire** function reference (§5.2) every
-  time. No keyword RAG for the API (it causes the model to invent functions it
-  wasn't shown).
-- `recipes/*.md` hold technique examples (§8). Pick 2–4 recipes by keyword
-  match against the user prompt and append them. Always include at least one.
-- Include 2 complete example patches as few-shot examples. These are
-  **separate, lean teaching files** in `resources/prompts/examples/` (M8),
-  not the built-in presets. The presets are a showcase and may be as rich as
-  the budget allows; the examples must stay within the poly budget and be easy
-  to imitate.
-- Files live in `resources/prompts/` and are embedded with JUCE BinaryData.
-- **Change and Mutate requests (M11)** send the active patch instead of the 2
-  few-shot examples, at most 2 recipes, and a short instruction block from
-  `resources/prompts/edit/`. The patch already shows the format; this saves
-  ~2.5k tokens per request.
-
-### 6.2 Response format
-Ask the model for exactly this layout. Don't put code inside JSON strings; the
-escaping breaks.
-
-````
-```json
-{
-  "name": "Weeping Reese",
-  "macros": [ {"label": "Detune", "default": 0.4}, ... 8 entries ... ],
-  "voiceMode": "mono",
-  "graph": { "edges": [["osc_supersaw:0", "flt_lp:0"], ["flt_lp:0", "out"]] }
-}
-```
-```eel init
-```
-```eel voice
-...
-```
-```eel master
-...
-```
-````
-
-Parser rules: missing `init` and `master` sections are allowed (defaults are
-empty and passthrough). Missing `voice` or invalid JSON is a parse error and
-goes through the retry path.
-
-### 6.3 Models & parameters
-
-| Use | Model | Temperature |
+| Measure (riff renders, medians) | 24 reference basses | 4 prototype renders |
 |---|---|---|
-| Generate (and Takes) | `muse-wonder-1.0` | 0.8 |
-| Change this node | `muse-wonder-1.0` | 0.8 |
-| Mutate | `muse-spark-1.3` | 0.9 |
-| Retry after compile/test failure | `muse-wonder-1.0` | 0.15 |
+| Side level above 200 Hz | −7.5 dB | −11.6 dB |
+| Timbre change frame to frame | 1.8 | 1.1 |
+| Level (RMS) | −13 dB | −19.5 dB |
+| Crest factor while playing | 5.8 dB | 7.8 dB |
 
-Changed Nov 3 (14c): Generate, Change and retries moved to `muse-wonder-1.0`.
-In batch30 it took 16 s per patch on average, against 27–42 s for
-muse-spark-1.3, with no timeouts. It is fewer reese-like and costs about 3.5x
-as much per request (third-party price lists: $4 / $20 per M tokens in/out,
-against $1.25 / $4.25). Mutate stays on the cheaper model because it sends up
-to 5 requests at once. A settings file saved earlier is upgraded once
-(`modelDefaultsVersion`) unless the user typed another model.
+Swing is not a useful comparison here: rests in the riff inflate it.
 
-Model IDs and endpoint (`https://api.meta.ai/v1/chat/completions`,
-OpenAI-compatible) are configurable in settings, not hardcoded. The model is a
-reasoning model: requests send `reasoning_effort: "low"` (settings file only)
-and `max_tokens: 8192`; a reply that spends the whole cap reasoning is its own
-failure reason ("hit the token limit while reasoning") and is retried, as are
-empty, garbled or timed-out replies. Measured in M8: ~13 s per generation
-(max 25.8 s), ~5.1k prompt + ~2.4k completion tokens (5.4k prompt after Sound pass batch 1).
-M11: Change ~4.95k prompt + ~1.7k completion, 6.8 s; Mutate ~7.3k per request,
-4 variations in 15.7 s wall time. Timeout is **60 s**.
-The UI shows progress, never blocks.
+**Result, Nov 5 2026: the engine can do it.** One reference bass was rebuilt in
+patch code, with no engine changes and within the CPU budget. It met nearly all the
+measurement targets, and the developer judged it good by ear. So the bottleneck is
+sound-design depth and the tools that reach it, not the core engine. What mattered:
 
-### 6.4 Self-heal
-On parse, compile or test failure, send the model its own output plus the exact
-reason (e.g. `EEL2 compile error line 7: ...`, or
-`NaN produced at note=40, m3=1.0 after 0.31 s`). Maximum 2 retries, then report
-failure in the UI and keep the current patch playing.
+- **Movement shape.** Drawn curves with exponential bends, restarted on each note,
+  and an oscillator level that follows the square of its control. Swapping in simple
+  LFOs did the most damage of the three ingredients tested.
+- **The source.** A wavetable made from audio. A built-in table changed the tone
+  drastically, by up to 28 dB in individual harmonics.
+- **Effect order.** Distortion first; chorus and a filter next; multiband compression
+  late; then reverb; a high-pass at the very end.
+- **Multiband compression with its own gain and thresholds per band.** This creates
+  much of the forward top end and removes the low band.
 
-**M8 additions:**
-- **Lexicon lint before compile.** Every `name(` call in the code is checked
-  against the registered lexicon plus EEL2 built-ins and the patch's own
-  `function` definitions. An unknown name fails with the closest valid names
-  ("unknown function `osc_wavetable`; did you mean `osc_saw`, `osc_square`?
-  available osc_*: …"), because invented functions are the most common LLM
-  failure. Arity and literal slot ranges are checked the same way.
-- **Weight hint.** If a patch passes but its measured voice cost is over 1.5×
-  its §4.2.1 budget (poly/mono) and a retry is left, retry once with "too
-  heavy: N ns per voice-sample, budget B; simplify". If no retry is left,
-  accept it. CPU is never a hard reject beyond the §7.1 rule.
-- **Single source for the API reference.** `resources/prompts/api_reference.md`
-  is checked by the smoketest against the registered lexicon: every
-  registered function documented with the right arity, nothing documented
-  that isn't registered.
-- **Token use** (prompt + completion, from the API's `usage`) is logged per
-  request in `--batch`, never the key or full headers.
+This is one sound, with some settings fitted to it, so phase 2's other test patches
+still have to confirm it. Rebuild files stay private (§4.3).
 
-### 6.5 API key handling
-- User enters a key in a settings panel; stored with `juce::PropertiesFile` in
-  the user's app-data folder. Env var `VIBESYNTH_API_KEY` overrides it for
-  development.
-- The key is never compiled into the binary or committed to the repo.
-- With no key, Generate/Mutate are disabled with a clear message; built-in
-  presets still work.
+### 4.2 Gates
+All *(proposed)*. The developer's ear overrides any measurement.
 
-### 6.6 Networking
-`juce::URL` on the worker thread (WinHTTP on Windows, NSURLSession on macOS,
-libcurl on Linux via `JUCE_USE_CURL=1`). 60 s timeout (30 s until Nov 3,
-when the larger 14c prompts made 16 of batch30's 30 first attempts time out). In-flight requests are
-cancelled and the worker joined in the processor destructor, so closing the DAW
-mid-request can't crash.
+1. **Presets.** About 40 built-ins, at least 25 of them bass. Each one is
+   individually approved by the developer.
+2. **Generated sounds.** On a fixed set of 20 bass prompts, the developer would
+   keep working on at least half of the results.
+3. **Side by side.** At matched loudness next to the references, the bass presets
+   don't sound flat or narrow to the developer.
+4. **Guard rails, not goals.** The median bass preset has side level above 200 Hz
+   within 10 dB of the references and swing within 6 dB. The sub stays mono.
+5. **Other sounds.** At least 10 non-bass presets that the developer would use.
+
+### 4.3 Rules for reference material
+Learn techniques from the references. Never copy them. Their presets, tables,
+renders and names stay out of the repo, and no artist or label names go in repo
+files, preset names or prompts. Pack licences are unchecked, so treat them as not
+redistributable. Factory tables must be original: generated by code or made from
+the developer's own audio.
 
 ---
 
-## 7. Safety system
+## 5. The experience
 
-### 7.1 Offline test (worker thread, before any swap)
-Render each patch through fresh test racks for **1 second** at each of:
-- notes {28, 40, 55} × macros {all 0, defaults, all 1} = 9 configurations,
-  with a note-on at t=0 and note-off at t=0.7 s.
+### 5.1 First run, no key
+Opens on a good preset, ready to play. All presets, the inspector, macros, MOD
+strip, curves and wavetables work. AI buttons explain what they need and offer
+[Set up AI]. Nothing nags. This has to feel like a complete instrument for
+someone who never adds a key.
 
-Reject (and retry via §6.4) if any configuration shows:
-- NaN or Inf (check with bit-pattern tests; see §11 on fast-math)
-- peak above +12 dBFS before the limiter
-- DC offset above 0.1 averaged over the last 0.5 s
-- all 9 configurations silent (peak below −80 dBFS): "patch makes no sound"
-- CPU over budget: one configuration (voice + master) takes more than 50 % of
-  real time to render (a runaway guard, deliberately much looser than the
-  §4.2.1 design budget, so patches still load on slower machines than the
-  Deck). M6 raised this from 10 %: a mono patch spending its full 1,200 ns
-  voice and 2 µs master budget on a cold Deck CPU needs ~220 ms per
-  configuration, more at 2× oversampling (M7), so a 10 % limit would reject
-  legal patches.
+### 5.2 Setting up AI
+A short guided panel: pick a service or local model, paste a key if needed, press
+Test. It says what a typical generation costs, measured on the tested list and
+dated, because prices change.
 
-Target (report-only, warm Deck): the whole matrix finishes in under 300 ms
-for poly patches and under 600 ms for mono patches.
+### 5.3 Shaping without code (new work)
+Everything the new engine adds must be reachable without code:
+- **Draw curves:** add, move and bend points, with sync rates from 1/32 to 4 bars.
+- **Pick wavetables:** browse factory and user tables, and hear the choice at once.
+- **Stereo and unison:** voices, detune and width on the inspector's knobs.
+- **Assign:** curves work with the MOD strip's drag-to-assign and depth rings.
 
-**Runaway code (M5).** JIT code can't be interrupted mid-sample, so:
-- EEL2 is built with `NSEEL_LOOPFUNC_SUPPORT_MAXLEN=1024` (the default is
-  1,048,576), so one `loop`/`while` runs at most 1024 iterations. Verify this
-  on every JIT backend, because Windows x64 links prebuilt asm objects.
-- The validator checks a wall-clock deadline (and its cancel flag) after every
-  sample and rejects the patch ("too slow") as soon as one configuration has
-  used more than 500 ms (50 % of its 1 s of audio, matching the CPU rule), so
-  it never waits out a slow patch. The per-sample clock read costs ~10 ms over
-  the whole matrix; it runs only in the validator, never on the audio thread.
-- Before compiling, a text check rejects `loop`/`while` nested more than 2
-  deep (a loop inside a user function counts as one level wherever that
-  function is called). With the 1024 cap, one sample is then at most ~1M
-  iterations (a few ms), so the deadline always fires promptly and the worker
-  can always be stopped.
-- EEL2 already zeroes NaN/Inf/denormals on most variable stores, so many bad
-  patches never produce NaN; the guard still catches the store paths that
-  don't. `OPTFLAG_FULL_DENORMAL_CHECKS` stays off.
-- Size limits: each code section ≤ 32 KB, the whole file ≤ 256 KB.
-
-Compile errors (any section) are rejected before the matrix runs, with the
-EEL2 error text and section name kept for self-heal (§6.4) and the UI.
-
-**Trim:** compute one gain so the worst-case peak lands at −3 dBFS. The trim may
-only attenuate (gain ≤ 1.0), never boost.
-
-### 7.2 Runtime guard (audio thread, always on)
-- `juce::ScopedNoDenormals` in `processBlock` (feedback and resonators produce
-  denormals).
-- After each voice's block: if any sample is non-finite, zero that voice's
-  output, reset its rack and VM variables, and mute it for 20 ms.
-- Master chain always ends with trim → DC block → peak limiter → hard clip ±1.0.
-  The limiter has no lookahead (so no latency): instant attack, ~80 ms release,
-  ceiling −0.3 dBFS. It replaces M4's fixed −12 dB output gain.
-- Final output is checked for non-finite values and zeroed if found.
-- "Reset its VM variables" means: zero every variable found via
-  `NSEEL_VM_enumallvars` (a pointer list collected off the audio thread at
-  compile time; the bound inputs get rewritten anyway) and zero `mem[]`
-  through `NSEEL_VM_getramptr_noalloc`. No allocation.
-
-### 7.3 Hot-swap protocol
-A `PatchProgram` owns everything compiled from one patch: 10 `EelVoice`s
-(VM + rack each), one `EelMaster`, the trim, and the parsed patch (macros,
-voice mode, graph, source). Voice *slot* state (note, age, gate, fade) stays
-in the processor, so it survives a swap. The program is built for one sample
-rate; a sample-rate change in `prepareToPlay` rebuilds it synchronously.
-
-1. Worker pushes the new `PatchProgram*` on the swap queue.
-2. Audio thread fades the output out over 5 ms.
-3. At silence it swaps programs, resets all racks (no allocation; reset only),
-   and pushes the old program on the retire queue.
-4. Fades in over 5 ms. Held notes keep sounding with the new patch: each
-   held slot gets a note-on on its new voice (so `trig` = 1 and `init` runs);
-   released voices are dropped.
-5. Worker frees retired programs.
+### 5.4 Working rules
+- A failed AI request never stops the current sound.
+- Generating never blocks the interface.
+- Every user-facing word says the product name, never the codename.
 
 ---
 
-## 8. Sound design techniques (taught via recipes)
+## 6. Engine
 
-All examples use EEL2 syntax. These go in `resources/prompts/recipes/`.
+The architecture from v2 stays; it works and is proven on all targets.
 
-**One-sample feedback loops.** Output from a folder or resonator feeds back into
-pitch, FM index or cutoff on the next sample, through `util_safe_fb`.
-```
-x = osc_sine(0, freq * (1 + fb1 * m1 * 4));
-y = fx_fold(flt_lp(0, x, m2, m3), m4);
-fb1 = util_safe_fb(0, y);
-out = y * env_adsr(0, gate, 0.01, 0.3, 0.8, 0.2);
-```
+### 6.1 How a sound runs
+- A patch is EEL2 code (the sandboxed language behind REAPER's JSFX), compiled to
+  native code by a built-in JIT. Sections: `init`, `voice`, `master`.
+- 8 sounding voices (10 voice objects, for clean stealing) plus one master. Each
+  has its own VM. Voices run at 2× with one half-band decimator on the sum.
+- Mono/legato with glide, pitch bend ±2 semitones, mod wheel as `mw`, and `bpm`
+  and `beat` from the host.
+- 8 macro parameters plus Voice Mode and Glide. Host parameters are never added or
+  removed, so automation doesn't break.
+- The function list lives in `LexiconTable.h` and `api_reference.md`, which the
+  smoketest keeps in sync. This spec doesn't repeat it.
 
-**Cross-adaptive exciter injection.** Drive a physical model with a synth
-signal instead of a click.
-```
-ex = osc_supersaw(0, freq * 1.01, m1, 0.5) * 0.3;
-out = phys_resonator(0, ex, freq, m2, m3, m4);
-```
+### 6.2 Lexicon rules
+Amount arguments are 0–1 and frequencies are in Hz. Everything is clamped. Stateful
+functions take a literal slot. All state is allocated before playback. Unused
+modules cost no CPU. Every function has argument metadata, bounds and NaN tests,
+a bench line and an API reference line.
 
-**Glitch micro-edits.** Hashed per-1/16 decisions (repeat, reverse-ish
-re-trigger, pitch jump, mute), each switch smoothed with a ~0.3 ms slew so
-edits never click. Applied to the mid band only. (Replaces the M6
-wave-surgery recipe.)
+### 6.3 New in v3
 
-**Piece-wise transfer functions & chaos modulation.** Custom shapers inline;
-chaos at LFO rate (`rate` near 0) or audio rate (near 1).
-```
-c = chaos_lorenz(0, m5 * 0.2, 0);
-x = osc_saw(0, freq * (1 + c * m6 * 0.05));
-out = x > 0 ? sin(x * (1 + m1 * 8)) : floor(x * 4) / 4;
-```
+| Item | State | Still needed |
+|---|---|---|
+| Stereo voices (`outl`, `outr`) | Prototype; all 23 built-ins matched main | Lint for half-written stereo; validate that neither channel is silent alone; measure CPU cost |
+| `osc_unison` (up to 16 voices) | Prototype; about 490–690 ns at 4 voices | Must fit the poly budget, or state the real limit in the prompt |
+| `mod_curve` drawn curves | Prototype; validates every point every sample | Make it cheaper; fix base rounding |
+| Loaded wavetables (tables 8–39) | Prototype; loads inside the plugin constructor | Load in background; normalise (remove DC, one gain per table); make portable (§6.5) |
+| Note-restarted curves | Not started | Curves restart on each note, with exponential bends. The rebuild had to code these by hand |
+| Usable reverb | Not started | `bus_reverb`'s wet signal sits about 17 dB below dry, and its mix is a crossfade, so it's nearly inaudible and just lowers the level. Used by 10 built-ins, so they need re-checking |
+| Flexible comb | Not started | Negative feedback and flanger forms; today's `fx_comb` is positive only |
+| Multiband compressor | Not started | Per-band gain and thresholds; `fx_ott` has one depth control |
+| Other effects | Not started | Choose by listening against §4; add one at a time |
 
-**Mix-clean rules (Sound pass batch 1).** These hold for every recipe and are
-in the system prompt:
-- The sub is a clean sine added **last**, summed to mono. Nothing distorts it,
-  and no gain is ever computed from the low band (the old
-  `max(0.15, 1 - abs(lo))` ducking caused sub-driven mid-band clipping; the
-  coupling check measured it at −11 to −15 dB).
-- The mid band is built on its own, staged (drive → filter → fold → OTT →
-  fixed ceiling), and high-passed at ~130 Hz.
-- OTT goes after distortion, at most 0.3 deep on decaying sounds.
-- One strong idea over many layers; releases 15–40 ms; every macro audible and
-  m1 transforms.
-- `bus_sat` never runs on a signal that contains the sub.
-```
-mid = fx_fold(flt_lp(0, fx_sat(osc_saw(0, freq), 2 + m1 * 6), m2, m3), m4);
-mid = flt_hp(1, mid, 0.27, 0);   // 0.27 ≈ 130 Hz
-out = (fx_ott(0, mid, m5 * 0.5) * 0.7 + osc_sine(0, freq) * 0.5) * env_adsr(0, gate, 0.002, 0.2, 0.9, 0.02);
-```
-(Illustrative only; the recipes in `resources/prompts/recipes/` are the
-rendered, checked versions.)
+### 6.4 CPU budgets
+Measured on the Steam Deck at 48 kHz, 2× oversampling:
+- Poly: ≤ 300 ns per voice per oversampled sample.
+- Mono: ≤ 1,200 ns.
+- Master: ≤ 2 µs per sample. Heavy character processing belongs here.
 
----
+`--selftest --strict-cpu` enforces these on the Deck. CI only reports them, since
+its timings are unreliable. Budgets don't change without a measured reason.
+Rosetta is not usable for real-time work (about 2,435 ns measured); the README
+tells Apple Silicon users to run their DAW natively.
 
-## 9. Plugin behaviour & UI
+### 6.5 Patch format and the compatibility promise (new)
+After the first public release, **a saved sound must keep sounding the same.**
+- `.pulsar` files carry a format version and old versions always load. Unknown keys
+  are ignored.
+- Each patch records the engine version it was made with. If a function's sound
+  must change, the old behaviour stays available for patches that used it.
+- Golden renders of every built-in run in CI. Any unintended change fails.
+- Host parameter IDs and plugin identifiers freeze at the first public release.
+- Tweaks, macro maps, mods, curves and wavetable references all round-trip through
+  files and DAW sessions.
 
-### 9.1 Voices **[MVP]**
-- 8-voice polyphony, plus **mono/legato mode** with glide time (bass patches are
-  mostly mono). Patch JSON may set a default mode; the user can override.
-- Voice stealing (M4 amendment): 10 voice objects, at most 8 sounding. On a
-  9th note the victim (the oldest released voice, else the oldest held one)
-  fades out linearly over 2 ms while the new note starts at once on a spare.
-  Only when no spare is free (10 note-ons within 2 ms) does a voice
-  hard-steal in place: a 2 ms fade, then retrigger. No note-on is dropped.
-- Pitch bend ±2 semitones; mod wheel is readable as variable `mw` (0–1).
-- **M7 details.** Two non-macro host parameters, added at startup and never
-  removed: "Voice Mode" (Patch / Poly / Mono; Patch follows the patch's
-  `voiceMode`) and "Glide" (0–1 → glide² seconds, so 0.3 → 90 ms and
-  1 → 1 s; constant-time, linear in pitch; used in mono only). Mono is last-note priority with a held-note stack: releasing the top
-  note returns to the previous held one. Legato: a note-on while another is
-  held glides `freq` without retriggering (`gate` stays 1, `trig` stays 0,
-  `init` doesn't run). A note after all keys are up retriggers the same voice
-  in place (`trig` = 1, `init` runs, no steal fade). Pitch bend is smoothed
-  (~5 ms) and applied to `freq` after glide.
-
-### 9.2 Macros **[MVP]**
-- 8 host parameters registered at startup as "Macro 1"…"Macro 8". Never added
-  or removed, so automation never breaks.
-- The plugin UI shows the patch's labels. Host automation lanes will still show
-  "Macro N" in most DAWs. Call `updateHostDisplay` anyway, but don't rely on it.
-- Loading a new patch sets macro values to its defaults via
-  `setValueNotifyingHost` on the message thread.
-
-### 9.3 State persistence **[MVP]**
-`getStateInformation` saves the full patch (all code sections, JSON header,
-original prompt, trim) plus macro values and voice mode. Reopening a project
-recompiles the saved code locally. **It never calls the LLM.** A restored patch
-skips the offline matrix (it passed when it was first loaded) but must still
-compile; if it doesn't, Pulsar loads the default preset and shows the error.
-The state is the APVTS tree with the patch JSON as a child property, so older
-or newer state versions fail soft.
-
-### 9.4 Built-in presets **[MVP]**
-15+ hand-tuned patches in `resources/presets/*.pulsar`, covering reese,
-neuro, UKG organ/stab, sub, physical-model plucks, chaos textures. They are:
-the out-of-the-box demo (a showcase of what only per-sample code can do,
-plus solid bread-and-butter sounds) and regression tests. They are not the
-LLM few-shot examples (§6.1).
-
-`.pulsar` format:
-```json
-{
-  "version": 1,
-  "name": "Weeping Reese",
-  "prompt": "the original user prompt",
-  "macros": [{"label": "Detune", "default": 0.4}],
-  "voiceMode": "mono",
-  "graph": {"edges": [["osc_supersaw:0", "flt_lp:0"]]},
-  "code": {"init": "", "voice": "...", "master": "..."},
-  "trim": 0.62
-}
-```
-`trim` (M5) is the gain the offline test computed, saved so that restoring a
-project or picking a built-in needs no matrix. On load it is clamped to
-(0, 1]; any patch loaded from a file or generated is re-tested, and the
-computed trim replaces the stored one. Built-ins are compile-only on
-selection, because CI's selftest checks that each stored trim matches the
-computed one within 1 dB (FMA on arm64 and chaotic or bit-crushed signals
-make the exact peak differ between platforms; a 1 dB trim difference is
-inaudible as a mismatch, and every platform still runs the full matrix).
-Patches must not be shaped to hit a trim of exactly 1.0 for CI's sake.
-Macro defaults and trim are rounded to 1e-6 so
-the file round-trips exactly.
-Loading a patch file runs the same compile + offline test as a generated patch.
-
-### 9.5 Editor **[MVP]**
-- Prompt box, **Generate** button, status/progress line, error display.
-- 8 macro knobs with dynamic labels.
-- Preset browser (built-ins + user-saved patches).
-- Settings panel: API key, model IDs, and a **Test key** button (one tiny
-  request; an HTTP 200 that parses as chat JSON counts as "Key works", even
-  with an empty message).
-- **First run:** with no key, the prompt row becomes a card ("Add your Meta
-  API key to generate sounds" + [Add key], which opens Settings on the key
-  field). Saving a key restores Generate immediately.
-- Unused macros (never read by the code, per `macrosRead`) are dimmed with no
-  label or value; tooltip "Unused by this patch".
-- Code viewer (read-only text) showing the active patch.
-
-### 9.6 Node view **[MVP; interactive from M10]**
-- **Nodes** come from the *real* code: the set of (module, slot) pairs touched
-  during the offline test.
-- **Edges** come from the LLM's `graph.edges`, filtered to nodes that really
-  exist. They are labelled as descriptive.
-- Each node pulses with its own `rack->meters` peak (read atomically at 30 fps).
-- **Stateless shapers** (`fx_fold`, `fx_sat`, `util_bytebeat`, `bus_sat`) have
-  no slot, so each call is numbered by its order within the sample
-  ("fx_sat #0", "#1", …; the 4th and later calls share #3). Under branches
-  this numbering is descriptive only.
-
-**M10: no-code editing.** Users never have to touch code. The Code tab stays
-read-only.
-- **Live trace in every node pill.** The newest sounding voice writes a
-  decimated copy of each node's output into a lock-free buffer; the UI draws it
-  at 30 fps. Envelopes and other control-rate nodes draw a rolling ~2 s trace;
-  audio-rate nodes draw a steady cycle (triggered on rising zero crossings).
-- **Inspector.** Clicking a node opens a panel with:
-  - a large version of the trace; for filters, the magnitude-response curve
-    drawn in the UI from the live cutoff/res (no audio-thread cost);
-  - one knob per editable argument (the audio input and slot aren't
-    editable), showing the argument's live value;
-  - per knob, **Offset** (default: adds to the code's value in the argument's
-    normalized range, so modulation is kept) or **Replace** (fixed value).
-    Pitch (`hz`) arguments offset in semitones;
-  - **Bypass**: effects/filters/utilities pass their input through,
-    oscillators output 0, `util_safe_fb` outputs 0 (feedback off). Envelopes
-    have no bypass;
-  - **Map to macro**: right-click a knob → "Map to macro N" with a min/max
-    range. Mapping onto an unused macro gives it a label (the argument's name)
-    and un-dims it, so user-shaped presets stay playable from the 8 macros and
-    host automation;
-  - **Change this node**: a text box; see §9.7.
-- **Mechanism.** The lexicon table (`LexiconTable.h`) gains per-argument
-  metadata (name, kind, range, bypass behaviour). Overrides live in a fixed
-  per-(module, slot, arg) table of atomics written by the UI and applied in
-  the shared wrapper layer before the native function runs, so new lexicon
-  functions get inspector support by adding table rows. No recompile, no
-  allocation; one branch per argument when no override is set. Arguments are
-  still clamped (§5.1), and the guard and limiter stay on, so an override
-  can't make a patch unsafe, only louder than its trim (the limiter catches
-  that).
-- **Persistence.** Tweaks and macro maps are saved in `.pulsar` and in the
-  plugin state as optional `"tweaks"` and `"macroMaps"` keys (older files load
-  without them; `version` stays 1). A new patch clears them. "Change this
-  node" keeps the tweaks whose (module, slot) still exists. Mutate bakes the
-  tweaks into the patch it sends (the model only sees code), so variations
-  keep the user's shaping and start with no tweaks; if bake refuses, it sends
-  the unbaked patch and says so. Merge check (Oct 31): a macro map survived
-  in 4/4 variations; a cutoff offset was rewritten by the direction in all 4,
-  which is intended (a variation is meant to move things).
-- **Bake (developer tool).** `vibesynth_cli --bake in.pulsar out.pulsar`
-  rewrites the code so that tweaks become part of it (overrides folded into
-  the call arguments, bypassed calls replaced). Used to turn hand-shaped
-  presets into LLM examples. Not exposed in the UI. It writes the offline
-  test's new trim into its output. It refuses a tweaked stateless shaper
-  whose call order is ambiguous (inside a branch, loop or function) and a
-  call whose slot isn't a literal.
-- **As built (M10):**
-  - Node ids: `flt_lp:0` (voice), `fx_sat#1` (shaper, by call order),
-    `master/bus_sat#1`, `master/bus_reverb` (bus effects have no slot).
-  - Every lexicon function runs through a small thunk: with nothing set it
-    costs one load and one branch.
-  - Bypass details: `phys_*` output 0 (they're sound sources);
-    `bus_chorus`/`bus_reverb` run with mix 0 (dry); `bus_mono_low` has no
-    bypass (two outputs, no single input).
-  - Gate arguments and `util_bytebeat`'s `t` aren't editable.
-  - Offset on a non-pitch argument is a fraction of its range. A macro map on
-    a pitch argument is linear in Hz.
-  - Traces run only while an editor is open: one voice plus the master, about
-    +53 % CPU for that voice.
-- **[LATER]** editable wiring. That requires making the graph the source of
-  truth. Structural changes go through "Change this node" instead.
-
-### 9.7 Mutate and "Change this node" **[MVP from M11]**
-- **Mutate:** sends the active patch back as 4 parallel requests, each with a
-  different direction (e.g. darker/heavier, more movement, brighter/sharper,
-  weirder). Each result goes through the full compile + offline test (with
-  self-heal) and lands in a 4-slot audition strip as it finishes. One click
-  swaps it in; **Keep** makes it the active patch. Failed slots say so.
-- **Change this node:** the inspector's text box sends the active patch, the
-  selected node's id and the user's instruction ("make this wobble at 1/4",
-  "add grit before this"). The model returns a full patch, told to change only
-  what the instruction needs and keep everything else, including slot numbers.
-  Same validation path. A change keeps the user's macro positions and reports
-  any node it removed; auditioning a variation sets that variation's macro
-  defaults. A node the patch doesn't use is refused before any request.
-- **Mutate details (M11):** HTTP runs in parallel, the offline test one at a
-  time. On HTTP 429 it backs off and retries; from the second 429 on requests
-  run one at a time; after 3 back-offs the slot fails. Discard (or Undo) with
-  the strip open restores the original exactly. Mutate while a variation is
-  playing keeps that variation first, then mutates it. Saving the project
-  mid-audition saves the playing variation.
-- **Undo:** every swap (generate, mutate, change, preset load) pushes the
-  previous patch, tweaks and macro values onto a small undo stack (message
-  thread, 20 deep). An Undo button restores it. Auditioning doesn't push;
-  Keep pushes the original. History keeps working as before.
-- **Breed** is cut for the hackathon.
-
-### 9.8 MOD strip **[MVP stretch, M13]**
-- **2 LFOs:** sine, triangle, saw up, saw down, square, sample-and-hold,
-  smooth random. Rate synced to the host (1/32 to 4 bars, dotted and triplet)
-  or free in Hz. Retrigger per note, or free-running (free LFOs follow the
-  host's beat position).
-- **2 envelopes:** ADSR, triggered per note.
-- Each modulator shows its shape with a moving playhead.
-- **Assign** by dragging a modulator onto a macro or an inspector knob, or
-  right-click → "Modulate with…". A coloured ring shows the depth (bipolar;
-  drag the ring). Envelopes and retriggered LFOs are per voice; modulated
-  macros are therefore per-voice values in each voice VM.
-- Smoothed per sample; no stepping. Saved as an optional `"mods"` key. The LLM
-  doesn't know about it (prompts unchanged). Mutate and "Change this node"
-  keep macro modulation and drop modulation on node knobs that no longer
-  exist.
+**Wavetables must travel with the sound.** Today a patch stores only a table
+number, so it breaks on another machine. Factory tables get permanent IDs. A user
+table is stored by name and content hash, and exported patches embed it. The
+256 KB patch size limit is raised for embedded tables only. A patch whose table is
+missing still loads, falls back to table 0 and says so.
 
 ---
 
-## 10. Build, CI & distribution
+## 7. AI
 
-### 10.1 CMake **[MVP]**
-- CMake ≥ 3.25, Ninja, CPM.cmake. JUCE 8 via CPM. `juce_add_plugin` with
-  `FORMATS VST3 Standalone`.
-- DaisySP via CPM (has its own CMake). WDL/EEL2 vendored in
-  `third_party/WDL` (only the `eel2` subset and what it needs). Follow ysfx's
-  CMake for the per-platform JIT pieces (Windows x64 needs a prebuilt object or
-  an assembler step; verify in Milestone 3).
-- `JUCE_WEB_BROWSER=0`, `JUCE_USE_CURL=1` on Linux only.
-- Windows: `CMAKE_MSVC_RUNTIME_LIBRARY = MultiThreaded$<$<CONFIG:Debug>:Debug>`
-  (static runtime, no VCRedist needed).
-- macOS: `CMAKE_OSX_ARCHITECTURES="x86_64;arm64"`. Verify EEL2's JIT for both
-  architectures in the Universal build (Milestone 3). If Universal fails, ship
-  separate arm64 and x86_64 zips.
-- `ccache` enabled when available (Steam Deck compile times).
-- Extra target `vibesynth_cli` (§10.3).
+### 7.1 Services
+The current client speaks the common chat-completions format, with a configurable
+address and models. Version 1 turns that into service profiles:
 
-### 10.2 GitHub Actions (`.github/workflows/build.yml`) **[MVP]**
-- Triggers: push, pull_request, workflow_dispatch. Releases only on `v*` tags.
-- Matrix: `ubuntu-22.04`, `windows-latest` (MSVC 2022 x64), `macos-15` (arm64; moved from macos-14, which GitHub retires on 2026-11-02).
-- Steps: configure + build (Release) → run `vibesynth_cli --selftest` → pluginval
-  (strictness 5) on the VST3 → zip VST3 + Standalone → `actions/upload-artifact`.
-  On tags, `softprops/action-gh-release` publishes the three zips.
-- Linux apt packages: ALSA, FreeType, X11 (Xrandr, Xinerama, Xcursor), libcurl.
-  No WebKit.
-- macOS: ad-hoc sign (`codesign --force --deep -s -`). This lets the code run
-  on Apple Silicon but **does not bypass Gatekeeper**. The README must tell
-  judges to run `xattr -cr <path to plugin/app>` or use System Settings →
-  Privacy & Security → "Open Anyway".
-- pluginval loads the plugin with no network and various sample rates and block
-  sizes: no network calls in constructors, and racks must handle any
-  `prepareToPlay` arguments.
+- **Profile:** name, address, model for each use, key or no key, timeout, token
+  limit, and optional settings. `reasoning_effort` is sent only when the profile
+  says the service accepts it.
+- **Tested list:** Meta plus at least one other cloud service and one local model
+  server *(proposed)*. A profile earns "tested" by passing §7.4.
+- **Custom:** any compatible address, labelled "untested; results will vary".
+- **Local models:** timeouts must be much longer than the current 60 s, and the
+  roughly 7k-token prompt must fit their context.
+- **To verify:** plain-HTTP localhost on macOS inside a DAW. The host app's network
+  rules may block it, so test this before promising local use on Mac.
+- Rename `MetaClient` to a neutral name, and remove "Meta" from the key prompts in
+  the UI. Services outside this format are out of scope for version 1.
 
-### 10.3 Headless test tool `vibesynth_cli` **[MVP]**
-A console target sharing the engine code, with no DAW or UI:
-- `--selftest`: compile and offline-test every built-in preset (used in CI).
-- `--render patch.pulsar out.wav`: render a test phrase to WAV. `--phrase
-  default|riff` (M6): `riff` is a 2-bar syncopated 16th-note bass riff with
-  octave jumps, rests and a hero-macro (m1) automation, so bass presets are
-  auditioned the way they'd be used; `--bpm` sets its tempo.
-- `--batch prompts.txt`: run each prompt through generate → compile → test,
-  saving patches + WAVs, and print pass rates (parse / compile / test / retries).
-  This is how prompt and recipe changes are evaluated and how API credits are
-  spent deliberately.
+### 7.2 Keys
+- Stored in the user's app-data settings file, in **plain text**. The setup panel
+  and README say this directly. OS keychains can come after 1.0.
+- Never in the repo, in patches, in DAW sessions or in logs; tests check this.
+- `VIBESYNTH_API_KEY` overrides for development.
 
-### 10.4 Licensing
-- JUCE 8 is AGPLv3 (or commercial). **The repo is AGPLv3.**
-- Dependencies stay permissive: DaisySP (MIT, avoid the DaisySP-LGPL repo),
-  WDL/EEL2 (zlib-style), Signalsmith DSP (MIT) when added.
-- Keep `THIRD_PARTY_LICENSES.md` up to date as dependencies are added.
+### 7.3 Prompt work
+- Remove rules the references contradict: "no reverb on basses" and the near-mono
+  guidance. Teach width above a mono sub, and drawn tempo-synced movement.
+- Teach the §4.1 techniques: movement shape, effect order, multiband compression and
+  a level that follows the square of its control.
+- Replace agent-written examples with presets the developer approved. The 12
+  agent-written 14f candidates don't ship.
+- Keep what works: full API reference in every prompt, lexicon lint, self-heal with
+  at most 2 retries, and category-based example selection.
+
+### 7.4 Measuring AI quality
+- **Automated (new):** render each result and measure width, swing, flatness and
+  level against §4. A clear miss on a generated patch feeds back through self-heal
+  once. Text-only judge scores are a rough diagnostic and never a gate.
+- **Tested label:** at least 90 % of the 30-prompt batch passes within 2 retries
+  *(proposed)*, and the developer listens to the bass prompt set.
+- **Release gate:** §4.2 item 2, on the default service.
 
 ---
 
-## 11. Engineering rules
+## 8. Safety and trust
 
-- C++17. `-O3` for engine code. **No `-ffast-math`** on validation, safety or
-  guard code (it lets the compiler delete NaN/Inf checks). Prefer no fast-math
-  anywhere; it's not needed for performance here.
-- NaN/Inf checks use bit-pattern tests, not `std::isnan`, so they survive any
-  compiler flags.
-- Audio thread: no allocation, locks, logging, exceptions, I/O or
-  `std::function` with captures. Threads communicate through SPSC queues and
-  atomics only.
-- Every milestone must build on Linux and pass CI on all three OSes before the
-  next one starts.
+### 8.1 Offline test (before any new or loaded patch plays)
+- 9 configurations: notes 28, 40, 55 × macros at 0, default and 1. One second each.
+- Reject on: NaN or Inf (bit-pattern tests); peak above +12 dBFS before the limiter;
+  DC above 0.1 over the last 0.5 s; all configurations silent; or over 50 % of real
+  time. New: one channel silent while the other sounds.
+- Loops capped at 1,024 iterations and nesting at 2. Sections ≤ 32 KB. Per-sample
+  deadline in the validator. Trim only attenuates, to −3 dBFS worst-case peak.
 
----
+### 8.2 Runtime guard (always on)
+No denormals. A voice with non-finite output is zeroed, reset and muted for 20 ms.
+The master always ends with trim, DC block, peak limiter (−0.3 dBFS, no latency)
+and hard clip. Final output is checked for non-finite values.
 
-## 12. Repository layout
+### 8.3 Swapping
+5 ms fade out, swap, 5 ms fade in, with held notes kept. Programs move between
+threads only through lock-free queues. The audio thread never frees a program.
 
-```
-Pulsar/                         (repo root; product name Pulsar, codename VibeSynth)
-├── CMakeLists.txt
-├── cmake/                      CPM.cmake, EEL2.cmake, platform helpers
-├── .github/workflows/build.yml
-├── docs/  SPEC.md  ROADMAP.md
-├── third_party/WDL/            vendored EEL2 subset
-├── resources/
-│   ├── presets/*.pulsar
-│   └── prompts/  system_prompt.md  api_reference.md  recipes/*.md
-├── src/
-│   ├── PluginProcessor.h/.cpp  voices, MIDI, macros, state, swap protocol
-│   ├── PluginEditor.h/.cpp
-│   ├── engine/
-│   │   ├── VoiceRack.h  MasterRack.h      pre-allocated module slots + meters
-│   │   ├── Lexicon.h/.cpp                 native function registration (§5)
-│   │   ├── ChaosMath.h                    Lorenz, Duffing, bytebeat
-│   │   ├── Utilities.h                    safe_fb, crossover, smoother
-│   │   ├── OutputStage.h                  trim → DC block → limiter → clip (§7.2)
-│   │   └── Oversampler.h
-│   ├── patch/
-│   │   ├── Patch.h/.cpp                   .pulsar model + parse/serialize
-│   │   ├── PatchEngine.h/.cpp             EEL2 VM creation + compile
-│   │   └── PatchValidator.h/.cpp          offline test matrix (§7.1)
-│   ├── ai/
-│   │   ├── MetaClient.h/.cpp              HTTPS, timeouts, cancel
-│   │   ├── PromptBuilder.h/.cpp
-│   │   └── ResponseParser.h/.cpp
-│   └── ui/  PromptPanel  MacroPanel  NodeView  PresetBrowser  SettingsPanel  CodeView
-├── tools/vibesynth_cli/main.cpp
-└── tests/
-```
+### 8.4 Real-time rules
+On the audio thread: no allocation, locks, logging, I/O, exceptions or capturing
+`std::function`. No `-ffast-math` on validation, safety or guard code.
+
+### 8.5 Shared files are untrusted (new)
+Once people trade presets, every `.pulsar` and `.wav` is input from a stranger.
+Before release, audit and fuzz the patch parser and wavetable loader against
+malformed, oversized and hostile files. Confirm that the lint and sandbox block
+file and system access. Any patch from a file goes through the full offline test.
+
+### 8.6 Privacy (new)
+- No telemetry, accounts or update pings. Pulsar touches the network only when the
+  user runs an AI feature or presses Test.
+- Only the prompt, the active patch and instructions are sent to the service the
+  user chose. Audio is never sent. If "Learn from my presets" is on, those presets
+  are sent too, and the UI says so.
+- The README states all of this.
 
 ---
 
-## 13. Milestones
+## 9. Distribution and licensing
 
-Each milestone has an exit test. Don't start the next until it passes.
+- **Releases:** GitHub Releases, one zip per OS, from `v*` tags through CI. Each
+  build must pass selftest and pluginval.
+- **Signing:** none at 1.0 *(proposed)*. macOS builds are ad-hoc signed, and the
+  README explains the Gatekeeper steps; Windows users will see a SmartScreen warning.
+  Revisit if the beta shows this loses too many people, or if donations can cover
+  the yearly cost.
+- **Testing without Mac or Windows hardware:** CI proves builds run, not that they
+  work in a DAW, so human testers are required (phase 7).
+- **Licence duties:** AGPLv3 text and a source link in each zip and in the About
+  panel. `THIRD_PARTY_LICENSES.md` is kept current. Dependencies stay permissive,
+  apart from JUCE. Check VST3 naming and logo rules before release.
+- **Stated plainly in the README:** the AGPL covers Pulsar's code, and sounds and
+  music you make with it are yours.
+- **Donations:** a link in the README, README-INSTALL.txt, GitHub Sponsors and
+  Settings. Nothing more.
 
-1. **Skeleton.** JUCE 8 VST3 + Standalone builds in the Distrobox; 8 "Macro N"
-   parameters; plays a sine on MIDI. *Exit: loads and plays in REAPER.*
-2. **CI.** 3-OS matrix builds and pluginval passes. *Exit: green on all three.*
-3. **EEL2 spike (highest risk).** Vendor EEL2, compile a hardcoded voice program
-   with one registered native function, run it per sample. *Exit: runs with JIT
-   on Linux, Windows x64, macOS arm64 + x86_64 in CI (`vibesynth_cli` smoke
-   test). If not, switch that platform to EEL2 portable mode and record it.*
-   **Result: passed. JIT on all four targets, no portable fallback needed.**
-4. **Lexicon core.** VoiceRack/MasterRack, DaisySP wrappers, ChaosMath,
-   Utilities, auto-metering, normalized clamped API. *Exit: a hand-written
-   preset using 6+ functions sounds right in REAPER, and its benchmark on the
-   Steam Deck is within the §4.2.1 budget.*
-   **Result: passed. Test preset (with `flt_lp`) 283 ns per voice-sample on
-   the Deck, against a 300 ns budget; it passed REAPER listening; CI green on all three OSes
-   (smoketest + pluginval). The ladder is too heavy for the default preset
-   (≈144 ns per call), and it gets replaced in M7.**
-5. **Patch system & safety.** `.pulsar` load/save, offline test matrix, trim,
-   runtime guard, master limiter, fade-swap protocol with retire queue, state
-   persistence. *Exit: a deliberately broken patch is rejected; switching
-   presets mid-note doesn't click; reopening the REAPER project restores the
-   sound.*
-   **Result: passed (commit 41a48da). CI green on all three OSes, including the
-   1024-iteration loop cap on every JIT backend; REAPER switch, reject and
-   restore checks passed. Validator wall time 57–245 ms per preset on the
-   Deck. Carried into M6: per-sample deadline, loop-nesting check,
-   compile-only built-in selection (§7.1, §9.4).**
-6. **Presets & CLI.** 15 built-in presets; `vibesynth_cli` `--selftest` and
-   `--render`; selftest runs in CI. *Exit: all presets pass in CI.*
-   **Result: passed (infrastructure). 15 presets pass selftest on all four
-   targets; `fx_ott`, master VoiceRack, `bpm`/`beat`, mono budget, `--render
-   --phrase riff` added. The user judged the sound unfinished (riffs messy), so
-   the presets are provisional and are redone in the Sound pass (9b). Keepers
-   so far: Reese, Coupled Scream. Suspected causes to check then: 1× aliasing
-   (M7 fixes), 16-sample filter stepping (M7 fixes), mid-band clipping driven
-   by sub headroom (intermod smear), OTT lifting tails and noise, no
-   legato/glide.**
-7. **Voice features.** Mono/legato + glide, pitch bend, mod wheel, voice
-   stealing, 2× oversampling. *Exit: reese/sub presets play legato cleanly;
-   folding presets audibly alias less.*
-   **Result: passed. Own polyphase-IIR half-band (−106 dB from 0.55 × host
-   rate, 1.37 host samples latency, unreported; 12 ns per host sample for all
-   voices). A fold at 2× has 25.4 dB less inharmonic energy than at 1×. Own TPT
-   SVF (≤ 29 ns swept, linear, Q floor 20) and ZDF ladder (≤ 51 ns, k = 4.2·res,
-   self-oscillates from res ≈ 0.95); the DaisySP Svf and LadderFilter are no
-   longer built. Legato, glide, bend and mw verified by smoketest and in REAPER.
-   For the Sound pass: phys_string bottoms out at ~94 Hz at a 96 kHz voice rate
-   (DaisySP's fixed 1,024-sample delay), so it needs an own string for basses;
-   Wonk Dive's ladder no longer self-oscillates at res 0.72. The validator and
-   bench drive EelVoice directly (not PatchPlayer) on the same 2× path, so keep
-   them in sync whenever the voice path changes.**
-8. **AI generation.** MetaClient, PromptBuilder, ResponseParser, self-heal,
-   settings panel, `--batch`. *Exit: ≥70 % of a 30-prompt batch produce a
-   passing patch within 2 retries.*
-   **Result: passed. 30/30 batch prompts produced a passing patch on the first
-   try (224k tokens for the run). The lexicon lint, the API-reference
-   self-check, and the switch to a reasoning-model request (`reasoning_effort`
-   low, 8,192 max tokens) were the decisive pieces. `bus_sat` is also allowed
-   in voice. The lint refuses `freembuf`, `stack_*` and `gmem`. Settings live
-   in the "Pulsar" app-data folder (`~/.config/Pulsar/` on Linux). Cancel
-   takes up to ~1 s on Linux (JUCE's curl loop). A valid patch isn't
-   necessarily a good-sounding one: the Sound pass also reviews generated
-   output.**
-9. **Editor UI.** Prompt panel, labelled macros, preset browser, code viewer,
-   read-only node visualizer with live meters. Look: dark with one neon
-   accent (user's choice). *Exit: every §9.5/§9.6 feature works in REAPER on
-   the Deck; pluginval passes with editor open/close; the user approves the
-   look from snapshots and REAPER.* Mutate/Breed (§9.7) is a separate step
-   after M9.
-   **Result: passed (pending pluginval in CI). Tested in Bitwig; snapshots
-   reviewed. Nodes come from the validator's touched set (or a silent probe
-   for built-ins/restores); meters reach the UI through a processor-owned
-   lock-free bank, never a program pointer. Edges are contracted through
-   non-node names. Open UI items for the next round: (1) stateless shapers
-   (`fx_fold`, `fx_sat`, …) are invisible in the node view, though they're
-   where much of a patch's character lives; (2) unused macros show as
-   "Macro N 0.50" and should read as unused; (3) the output meter reads as a
-   menu icon; (4) 16 compiler warnings in Generator.cpp, Filters.h and
-   PluginEditor.cpp (`userArea` deprecated).**
-   **UI round (branch `ui-fixes`): all four items fixed, plus first-run key
-   onboarding and Test key (§9.5). Shapers are nodes (§9.6); probe ==
-   validator node list for 15/15; filter output bit-identical; zero warnings
-   in src/ and tools/. Still open: long node names (`util_safe_fb`,
-   `osc_supersaw`) are truncated in their pills.**
-9b. **Sound pass.** With M7's DSP (2×, own ladder/SVF, glide) and the M9 UI in
-   place, redo the 15 presets against the user's references (modern DnB,
-   dubstep, halftime, glitch), adding any core DSP they need first. Work
-   in small batches with the user listening to `--phrase riff` renders.
-   *Exit: the user keeps ≥ 10 of 15.*
-   **Batch 1 result: run B passed 12/12 on the first try (A: 9/12);
-   sub-to-mid coupling went from −11…−15 dB to numerical noise. User verdict:
-   still "messy and dry sounding, especially in the top end". The sound pass
-   continues as M14, by hand, with the new editing tools and DSP.**
-10. **Node inspector & visualization** (§9.6). *Exit: every built-in can be
-    shaped with tweaks/bypass/macro maps, tweaks round-trip through `.pulsar`
-    and plugin state, `--bake` output renders identically to the tweaked patch,
-    bench within 5 % of M9.*
-    **Done (Oct 31):** 292 smoketests and 125 strict selftests pass. Bake is
-    equivalent on 15/15 built-ins (138 tweaks, worst diff 0), and every
-    no-tweak render is byte-identical to M9. Bench: most rows are within
-    ±3 %, but 5 voice rows are +8–14 % (Tape Stop, Pluck, Mono Lead, Garage
-    Organ, Clean Sub) and Reese master is +11 %. A build with the thunks
-    removed was just as slow, so this was **accepted as code-layout noise**.
-    Every row is under its budget. Bug fix: DaisySP's triangle oscillator
-    state is now zeroed on reset.
-11. **Mutate & "Change this node"** (§9.7), plus Undo. Highest priority of
-    M10–M13: this is the Meta-AI showcase. *Exit: both work end to end in the
-    plugin; a batch of node-change instructions passes validation.*
-    **Done (Oct 31):** change8 8/8 first try; Mutate on Reese 4/4 in 15.7 s;
-    262 smoketests and 125 strict selftests pass. Until the M10 merge, the
-    way in is right-click on a node → "Change this node…".
-12. **DSP expansion** (§5.3). Starts after M10 is merged (both touch the
-    lexicon table). *Exit: tier 1 in, all tests and budgets pass, the batch
-    pass rate holds.*
-    **Done (Oct 31, Tier 1 only):** all 9 functions shipped with table rows,
-    bounds tests and bench lines. ADAA cuts inharmonic content by 4.8 dB
-    (fx_fold), 7.2 dB (fx_sat) and 7.6 dB (fx_shape); trims moved ≤ 0.17 dB.
-    osc_fm snaps the ratio to an integer within ±0.12 (ratio ≥ 1). batch30:
-    26/30 first try, 30/30 with retries; 24/30 used a new function. ~4.4k
-    system+API tokens, ~6.0k prompt per request. Listening pack in
-    build/adaa_ab/. **Tier 2 done (Nov 1):** fx_phaser, fx_fshift,
-    bus_delay (echoes filtered 150 Hz–6 kHz, 1/16–4 beats, buffer allocated
-    at patch build only when used) and bus_width (above 150 Hz; it only acts
-    on a stereo master, i.e. after chorus/reverb/delay). The system prompt
-    asks for light space and width; ~4.8k tokens per example request. The
-    examples are left for M14. batch30 still to run.
-13. **[Stretch] MOD strip** (§9.8). Cut first if behind (envelopes before
-    LFOs).
-    **Built (Oct 31):** both LFOs and both envelopes shipped. The strip sits
-    under the macros. Merged with a CPU fix: the first build cost +275 ns per
-    voice-sample; it now costs +54 to +57 ns (+46 to +64 through the player,
-    where a modulated cutoff recomputes the filter). Modulators step every 16
-    voice samples with per-sample ramps (this replaces "no stepping"), so
-    S&H, square and saw jumps can land up to 0.17 ms late. Only assigned
-    sources step. With the editor open, only the displayed voice steps.
-14a. **Macro range (done Nov 1):** `--macro-scan` (Wiener-entropy flatness,
-    default vs 1), a MacroNoise self-heal for generated patches (off for
-    built-ins), right-click a macro → Set range… (`macroRanges` key, baked
-    by --bake), fx_comp, fx_gate, a 6th `lowcut` argument on bus_delay
-    (60 Hz–1.5 kHz), the riff centred on E2, and `--octave`. batch30: 18/30
-    first try (12 were util_xover_hi called with an input; the API line now
-    shows the right call), 30/30 with retries; 0 MacroNoise heals. The
-    flatness measure flags only Coupled Scream and Corroder, while the user
-    hears most presets overshoot on m1, so it misses dense distortion. The
-    real fix is Set range… by ear in M14.
-14b. **Mutate you can steer (planned Nov 2, after M15):** a Save… button on
-    each audition card (several variations can be saved as user presets
-    without closing the strip); 1–5 variations; a Mutate popover with the
-    user's own direction text (one intensity per slot, subtle to bold) or
-    Auto chips (Darker, Movement, Brighter, Weirder, and a new Space);
-    "Type value…" on every knob, with unit-aware parsing.
-    **Done Nov 2:** as planned. kSlots is 5; the direction text is kept for
-    the session; chips and count are kept in AiSettings. Real runs on Reese:
-    steered 3/3 and auto (5 chips) 5/5 passed, both in about 30 s. Advisor
-    fixes: non-ASCII literals ("Save…", "Type value…", "Set range…") went
-    through juce::String(const char*) and showed as "Saveâ¦"; they now use
-    fromUTF8, and the card-label shortener no longer cuts inside a UTF-8
-    character. Known bug, fixed in 14e task 0: typed Hz on a normalised
-    filter cutoff clamps to the maximum.
-14e. **Generate several takes (planned Nov 2, after 14b):** a Takes selector
-    (1–4, default 1 = today's behaviour) next to Generate. With 2 or more, the
-    same prompt is sent as N parallel requests, each with a different
-    "take" angle (literal reading; a different sound source; different
-    movement; a bolder reading), through Mutate's parallel runner (shared
-    test gate, 429 fallback, cancel). The passing takes open in the audition
-    strip against the patch that was playing before; Keep, Discard and the
-    per-card Save… work as in Mutate. Every passing take is also written to
-    History.
-    **Done Nov 2** (its code landed in the M14b commit c8294a7; the advisor
-    fixes are in the next commit): the Takes selector, runTakes on the shared
-    slot runner, the strip titled "NEW TAKES" (a take's Save… defaults to its
-    own name), `--batch --takes N` with main oscillators per take, and the
-    task 0 fix (cutoffs take Hz/kHz; in Offset mode, typed Hz switches the knob
-    to Replace; a wrong unit flashes red). API run of 3 prompts × 3 takes: 8/9
-    first try, 9/9 with retries, about 7k tokens per request, 22–53 s per
-    prompt. Take 2 used a different main source from take 1 in all 3 prompts;
-    take 3 kept take 1's source. Smoke 439/0, strict selftest 125/0.
-14c. **Wider lexicon (planned Nov 3):** the user's problem: most prompts come
-    back reese-like. Causes found Nov 2:
-    - Only 3 worked examples (reese bass, pluck, FM texture). Two are sent
-      per request, padded in file order, so the reese is in almost every
-      request, including prompts that match nothing.
-    - No recipe or example uses osc_square as the main voice ("square"
-      matches nothing), and the bass rule lists only wt/fm/sync/supersaw as
-      mid sources.
-    - Every bass follows one chain (sine sub + driven mid + hp + OTT + sat).
-    - When fewer than 2 recipes match, ott_glue and tempo_sync are always
-      added, so everything is squashed and wobbled.
-    - No examples or recipes for leads, pads, keys, bells, FX, sirens or
-      risers.
-    Fix (prompt resources and PromptBuilder only, no engine code):
-    - about 8 worked examples by category: reese, square/riddim, FM wub, noise
-      bass, lead, pad, pluck, FX. Made from the user's M14 keepers via --bake
-      where possible.
-    - padding by best category, never a fixed reese
-    - new recipes: square/PWM, 808 glide, acid, hoover, clean FM wub, noise
-      bass, lead, pad/chords, siren/riser
-    - a looser bass rule that names square, pulse and saw sources and allows
-      other chains
-    - neutral default padding
-    - a wider keyword vocabulary
-    - the user's saved presets as candidate examples (local only; they never
-      enter the repo)
-    - one batch30 run with the larger Meta model for Generate, to compare
-    - an LLM judge score ("does this patch match the prompt, 1–5") added to
-      --batch, so accuracy is measured, not guessed
-    **Done Nov 3:** 11 worked examples in 10 categories (8 made from the
-    user's keepers), and the same 8 as built-in presets (23 in all). Also:
-    15 new recipes with a category line on every recipe, synonyms.md,
-    `--explain-prompt`, "Learn from my presets", and `--judge` with a fixed
-    judge model (`--judge-model`, default muse-spark-1.3) plus
-    `--batch --rejudge DIR`.
-    Advisor fixes:
-    - When no example matches, slot 1 comes from the best recipe's category
-      (acid gets the square bass, ocean waves get the fx texture). A bass
-      prompt's slot 2 is a bass of another kind.
-    - Pads raised 4–6 dB to sit with Velvet Pad.
-    - The timeout went to 60 s, and Generate moved to muse-wonder-1.0
-      (§6.3).
-    The Bloom pads lost their slow drift LFOs to meet the 300 ns poly budget;
-    the user chose that version.
-    batch30 (judge muse-spark-1.3):
+---
 
-    | Run | Pass (first try) | Mean time | Judge | Reese-like |
-    |---|---|---|---|---|
-    | Before, spark | 30/30 (25) | 27 s | 3.70 | 12 |
-    | After, spark | 28/30 (16; 16 timeouts at 30 s) | 42 s | 3.86 | 11 |
-    | After, wonder | 30/30 (23) | 16 s | 4.03 | 9 |
+## 10. Engineering rules
 
-    diversity14 (spark, before → after): judge 3.64 → 3.54, reese-like
-    6/14 → 4/13.
-14d. **"How I understood it" card + web lookup (if time before the
-    freeze):** before writing code, the model turns the prompt into a short,
-    editable plan (source, filter, movement, grit, sub, mode, tempo), with
-    at most two multiple-choice questions when the prompt is ambiguous. The
-    user edits it, then confirms. An opt-in "Look up references" toggle fills
-    the plan through the Responses API's `web_search` tool (POST
-    /v1/responses, the same key; Chat Completions can't search; about
-    $2.50 per 1,000 searches), showing cited sources. Artist or genre names
-    travel only at runtime in what the user typed; none go in the repo. The
-    confirmed plan is appended to the normal Generate request, and its
-    plain sound words also drive recipe matching.
-14f. **Modern genres (planned Nov 3, before the freeze):** the user can't get
-    modern-sounding riddim, tearout, jump-up, hyperpop, glitch-hop or color
-    bass even when guiding the model. Causes:
-    - Hyperpop, jump-up and color bass match no keyword.
-    - No recipe builds a wobble whose rate changes within the bar, which is
-      what makes riddim and dubstep sound current. Every wobble is one LFO on
-      one target.
-    - No recipe covers a distorted 808, hard-tuned pitch glides, a growl
-      tuned to a chord, or a tearout screech.
-    The plan has no engine or DSP changes; it is prompt resources and the CLI
-    only:
-    - `--phrase hold` and a genre16 prompt set, measured with --judge before
-      and after.
-    - About 10 genre recipes, plus synonyms.
-    - 7 candidate genre patches, rendered for the user. The keepers become
-      examples and built-in presets.
-    - A short "modern bass music" block in the system prompt.
-    Add-on (same Nov 3): modular-style generative work.
-    - 5 recipes: shift register with a quantizer, euclidean rhythms and
-      ratchets, low pass gate, west coast fold, and self-playing ambient.
-    - 5 candidates, shown at the same checkpoint.
-    - A generative8 prompt set.
-    - `--hold-bars`.
-    Prompts: Pulsar-prompts/m14f-genres.md and m14f-addon-generative.md.
-14. **Sound pass 2.** The user designs presets by hand with M10–M12; the best
-    become the LLM examples (via `--bake`). *Exit: the user keeps ≥ 10 of 15.*
-15. **Release polish.** README with Gatekeeper instructions, tagged GitHub
-    release, demo video script. Code freeze Nov 4, 12:00 PM PST.
-    UI nits from the M10/M11 merge: the status line says "Generating:" during
-    a Change; the response readout shows "957.403 HZ" (should be "957 Hz");
-    slotless bus pills read "bus_mono_low 0".
-    The inline Set range slider overlaps the macro's value text; it should be
-    a popup like the LFO one.
-    **Done Nov 2:** README (built-during-the-hackathon statement and
-    third-party table), full license texts in THIRD_PARTY_LICENSES.md,
-    release zips named Pulsar-<version>-<os>.zip with README-INSTALL.txt,
-    docs/DEMO.md, and all four nits fixed (Set range is now a popover).
-16. **[LATER]** extra libraries (§5.2 LATER list), editable wiring, Breed.
-    Accuracy, after the hackathon:
-    - Reference-sound matching: the user drops in a WAV; Pulsar measures
-      brightness, noisiness, movement rate, envelope and sub level, turns
-      them into a description, then renders each attempt, compares and sends
-      the differences back.
-    - A self-check loop: the model states target descriptors with the patch;
-      Pulsar measures the render (reusing the M14a STFT code) and retries
-      once on a clear miss.
+- C++17, CMake + Ninja, JUCE 8 via CPM. Builds run in the `juce` distrobox; use
+  `tools/check.sh`.
+- Every merge passes CI on all three OSes.
+- Pre-push: `tools/check.sh strict` on the Deck.
+- `vibesynth_cli` remains the headless test tool: `--selftest`, `--smoketest`,
+  `--render`, `--bench`, `--batch`, `--bake`, `--macro-scan`, `--judge`.
+- Include-path rule: no extensionless files or names matching standard headers.
+- Developer-only tools are fine as long as users never need them.
 
-**Schedule (deadline Nov 4, 6 PM PST):** Oct 31: M10 and M11 in parallel
-(two worktrees). Nov 1: M12, then M13 in parallel if M10 is merged; README.
-Nov 2: M14. Revised Nov 2: code may change until the submission deadline
-(Nov 4, 6 PM PST); Nov 3 is the last day to send questions to the organisers.
-Nov 3: 14e, 14c, 14d. Nov 4: code freeze at 12:00 PM PST, tag, release CI,
-demo video, submit by 5 PM (one hour of buffer).
-**Nov 3:** 14b, 14e and 14c are done. 14d is skipped (moved to 16 [LATER]),
-so the time goes to the README/DEMO refresh, the v1.0.0 tag and the demo video.
-Later Nov 3: 14f (modern genres) added before the tag; the tag waits for it.
-**Final roadmap (set Nov 2):** 14b (running) → 14e → 14c → 14d if time →
-M15 refresh (README, DEMO.md for every new feature), freeze at 12:00 PM PST
-on Nov 4, tag. Cut order if late: 14d first, then 14e; 14c stays. Every
-feature that ships must be in the demo video and the README by the freeze.
+---
 
-**Public release (set Nov 4, replaces the schedule above):** the hackathon
-ended without a submission. Pulsar will ship as a free, open-source release
-(AGPLv3) with optional donations and no fixed date. Donations are a link only:
-no nag screens and nothing locked. The order:
-1. Fix the macOS CI smoketest, so releases can publish.
-2. Finish 14f.
-3. Make Pulsar usable without an API key where possible, and explain key setup
-   and likely costs.
-4. Rewrite the hackathon wording in the README and DEMO.md; make a launch video.
-5. Put the donation link in the README, README-INSTALL.txt, the GitHub Sponsor
-   button and the Settings panel.
-6. Tag v1.0.0. Consider installers and code signing after the first release.
+## 11. Current state (checked Nov 4 2026)
+
+- `main` is at b2e2356 and its latest CI run passed, so the macOS smoketest problem
+  from the old release plan is resolved.
+- No releases or tags exist yet, so plugin identifiers can still change freely.
+- `engine-prototype` holds the uncommitted prototype and the parked 14f work. All
+  the §6.3 prototype fixes are still open.
+- 23 built-ins, 43 recipes and 11 examples exist. Most need review against §4.
+- README and `docs/DEMO.md` still contain hackathon wording.
+
+---
+
+## 12. The plan
+
+Each phase ends with a test. **"You" below means the developer, who decides by ear
+and by using the plugin. No phase requires writing code by hand.**
+
+### Phase 1: Find out why it falls flat
+**Rebuild test: done Nov 5 2026 (§4.1).** The engine can reach the reference, so work
+shifts to tools, sounds and what the AI is taught.
+
+Still open: complete the §6.3 prototype fixes, run pluginval, and merge.
+- *Exit:* built-ins still match main; budgets and CI pass; pluginval has really run.
+
+### Phase 2: Finish the engine
+Build the §6.3 sound tools, then the compatibility system (§6.5), portable wavetables,
+original factory wavetables made from audio, and the audio measuring tool (§7.4).
+- *You:* A/B each new tool and each technique test.
+- *Exit:* hand-tuned test patches for wobble, reese, square/riddim, FM and growl
+  meet the §4.2 guard rails, and you'd use them.
+
+### Phase 3: No-code shaping
+The §5.3 controls, and §5.1's no-key experience.
+- *You:* take a preset to a new finished sound, using only the plugin in Bitwig.
+- *Exit:* you did that without touching code or asking for help.
+
+### Phase 4: Preset library
+You design and approve presets using AI plus the new shaping tools. Approved ones
+become built-ins and AI examples via `--bake`. Old presets that don't measure up
+are cut.
+- *You:* this phase is mostly yours, and it's the largest.
+- *Exit:* §4.2 items 1, 3, 4 and 5 pass.
+
+### Phase 5: AI quality and services
+Service profiles, setup panel, prompt rewrite and render-based checks. Test each
+service on the list.
+- *You:* listen to the 20-prompt bass set.
+- *Exit:* §4.2 item 2 passes on the default service; every "tested" service earns
+  its label.
+
+### Phase 6: Make it public-ready
+Apply the chosen name to everything (§13). Rewrite the README and DEMO.md without
+hackathon wording. Write setup, cost and privacy docs. Add donation links. Run the
+file security audit (§8.5). Remove internal working-rules files from the repo and
+check the repo for AI-tool names.
+- *Exit:* a new person can install, play and set up AI from the docs alone;
+  no hackathon or old-name references remain; audit findings are fixed.
+
+### Phase 7: Beta
+Tagged pre-release with a small group of testers *(proposed: at least 5, covering
+Windows, macOS and Linux)* in Ableton Live, FL Studio, Bitwig and REAPER.
+- *You:* recruit testers from communities you know.
+- *Exit:* no open crash or data-loss bugs; sessions reopen sounding the same on
+  every OS tested.
+
+### Phase 8: Version 1.0
+Freeze identifiers, tag v1.0.0, publish, launch video.
+- *Exit:* the release is live, and every feature in the video works in that build.
+
+### Afterwards
+Listen to users first. Likely candidates: hand-building patches from empty,
+reference-sound matching, AU format, signing and installers, preset sharing.
+
+---
+
+## 13. Open decisions
+
+| Decision | Needed by | Notes |
+|---|---|---|
+| **New name** | Before phase 6 | Decided: rename. The name "Pulsar" overlaps with an established plugin company and a sound library. Check candidates for plugin-market, domain and GitHub conflicts. Consider a trademark search |
+| Patch file extension and app-data folder | With the name | Keep reading `.pulsar`; move existing settings once |
+| Final plugin identifiers | With the name | Bundle ID, manufacturer code and plugin code freeze at the first public binary |
+| Numbers marked *(proposed)* | Before the phase that uses them | Your call |
+| Tested service list | Phase 5 | Based on results and cost |
+| Code signing | After beta | Cost against lost users |
+| Donation platform | Phase 6 | GitHub Sponsors is already planned; others optional |

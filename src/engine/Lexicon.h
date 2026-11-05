@@ -89,6 +89,8 @@ enum class ModuleId : int
     BusReverb,
     BusDelay,
     BusWidth,
+    OscUnison,
+    ModCurve,
     Count
 };
 
@@ -165,6 +167,8 @@ struct VoiceRack
 
     SupersawState supersaw[kNumSupersawSlots];
     WtOscState oscWt[kNumWtOscSlots];
+    UnisonOscState oscUnison[kNumUnisonOscSlots];
+    float unisonR[kNumUnisonOscSlots] = {};
     FmOscState oscFm[kNumFmOscSlots];
     SyncOscState oscSync[kNumSyncOscSlots];
 
@@ -183,6 +187,7 @@ struct VoiceRack
 
     EnvFollowState envFollow[kNumEnvFollowSlots];
     ModLfoState modLfo[kNumModLfoSlots];
+    ModCurveState modCurve[kNumModCurveSlots];
     double currentBeat = 0.0;
     uint32_t seedValue = 1u;
 
