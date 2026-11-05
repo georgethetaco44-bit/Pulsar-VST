@@ -445,11 +445,10 @@ bool smokeNewBuiltinsOfflineAndCost()
         ok = check (vr.ok(), "M14c builtin %s passes offline test%s%s", name,
                     vr.ok() ? "" : ": ", vr.error.c_str()) && ok;
         const PresetCost cost = measurePresetCost (p, 2, 24000, 2);
-        const double voiceBudget = p.voiceBudgetNs();
-        ok = check (cost.voiceNs <= voiceBudget * 1.5,
-                    "M14c builtin %s voice cost %.0f ns (budget %.0f)", name, cost.voiceNs, voiceBudget) && ok;
-        ok = check (cost.masterNs <= Patch::kMasterBudgetNs * 1.5,
-                    "M14c builtin %s master cost %.0f ns (budget %.0f)", name, cost.masterNs, Patch::kMasterBudgetNs) && ok;
+        // Report only: timings on shared CI runners and under Rosetta mean
+        // nothing. Budgets gate through --selftest --strict-cpu (SPEC 4.2.1).
+        std::printf ("[INFO] M14c builtin %s CPU: voice %.0f ns (budget %.0f), master %.0f ns (budget %.0f)\n",
+                     name, cost.voiceNs, p.voiceBudgetNs(), cost.masterNs, Patch::kMasterBudgetNs);
     }
     return ok;
 }

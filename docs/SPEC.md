@@ -1144,7 +1144,13 @@ Each milestone has an exit test. Don't start the next until it passes.
     - 7 candidate genre patches, rendered for the user. The keepers become
       examples and built-in presets.
     - A short "modern bass music" block in the system prompt.
-    Prompt: Pulsar-prompts/m14f-genres.md.
+    Add-on (same Nov 3): modular-style generative work.
+    - 5 recipes: shift register with a quantizer, euclidean rhythms and
+      ratchets, low pass gate, west coast fold, and self-playing ambient.
+    - 5 candidates, shown at the same checkpoint.
+    - A generative8 prompt set.
+    - `--hold-bars`.
+    Prompts: Pulsar-prompts/m14f-genres.md and m14f-addon-generative.md.
 14. **Sound pass 2.** The user designs presets by hand with M10–M12; the best
     become the LLM examples (via `--bake`). *Exit: the user keeps ≥ 10 of 15.*
 15. **Release polish.** README with Gatekeeper instructions, tagged GitHub
@@ -1181,3 +1187,16 @@ Later Nov 3: 14f (modern genres) added before the tag; the tag waits for it.
 M15 refresh (README, DEMO.md for every new feature), freeze at 12:00 PM PST
 on Nov 4, tag. Cut order if late: 14d first, then 14e; 14c stays. Every
 feature that ships must be in the demo video and the README by the freeze.
+
+**Public release (set Nov 4, replaces the schedule above):** the hackathon
+ended without a submission. Pulsar will ship as a free, open-source release
+(AGPLv3) with optional donations and no fixed date. Donations are a link only:
+no nag screens and nothing locked. The order:
+1. Fix the macOS CI smoketest, so releases can publish.
+2. Finish 14f.
+3. Make Pulsar usable without an API key where possible, and explain key setup
+   and likely costs.
+4. Rewrite the hackathon wording in the README and DEMO.md; make a launch video.
+5. Put the donation link in the README, README-INSTALL.txt, the GitHub Sponsor
+   button and the Settings panel.
+6. Tag v1.0.0. Consider installers and code signing after the first release.
