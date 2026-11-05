@@ -370,11 +370,11 @@ file and system access. Any patch from a file goes through the full offline test
 
 ## 11. Current state (checked Nov 5 2026)
 
-- `main` is at b2e2356 and its latest CI run passed, so the macOS smoketest problem
-  from the old release plan is resolved.
+- `main` now holds the finished engine prototype. CI passed on all three systems,
+  so the macOS smoketest problem from the old release plan is resolved.
 - No releases or tags exist yet, so plugin identifiers can still change freely.
-- `engine-prototype` holds the finished prototype and the parked 14f work. Its
-  §6.3 prototype fixes are done, and the built-ins still match main byte for byte.
+- The §6.3 prototype fixes are done, and the built-ins matched the previous `main`
+  byte for byte. The parked 14f recipes came with the merge; review them before launch.
 - 23 built-ins, 43 recipes and 11 examples exist. Most need review against §4.
 - README and `docs/DEMO.md` still contain hackathon wording.
 
@@ -385,20 +385,23 @@ file and system access. Any patch from a file goes through the full offline test
 Each phase ends with a test. **"You" below means the developer, who decides by ear
 and by using the plugin. No phase requires writing code by hand.**
 
-### Phase 1: Find out why it falls flat
+### Phase 1: Find out why it falls flat (done Nov 5 2026)
 **Rebuild test: done Nov 5 2026 (§4.1).** The engine can reach the reference, so work
 shifts to tools, sounds and what the AI is taught.
 
-§6.3 prototype fixes: done Nov 5 2026. pluginval passes at strictness 5. Still open:
-CI on all three systems, then merge.
+§6.3 prototype fixes: done. pluginval passes at strictness 5, CI passed on all three
+systems, and the work is merged.
 - *Exit:* built-ins still match main; budgets and CI pass; pluginval has really run.
 
 ### Phase 2: Finish the engine
 Build the §6.3 sound tools, then the compatibility system (§6.5), portable wavetables,
 original factory wavetables made from audio, and the audio measuring tool (§7.4).
+First: find out why cost can jump for a whole process. Bloom Pulse once read 689 ns against
+its 300 ns budget and passed in the next process, and a filter's cost can jump about 5×
+(seen on main with address randomisation on, gone with it off). The cause isn't proven, and
+users could be hit by it. The strict check's retries hide it, so measure it directly.
 Also: replace the older bounds tests' `sqrt(-1)`, which is 1 in a patch rather than NaN,
-with real NaN written to memory. Find out why a filter's cost can jump about 5× with its
-memory address (seen on main with address randomisation on, gone with it off).
+with real NaN written to memory.
 - *You:* A/B each new tool and each technique test.
 - *Exit:* hand-tuned test patches for wobble, reese, square/riddim, FM and growl
   meet the §4.2 guard rails, and you'd use them.
