@@ -45,6 +45,7 @@
 #include "patch/PatchPlayer.h"
 #include "patch/PatchTweaks.h"
 #include "patch/PatchValidator.h"
+#include "ai/PromptBuilder.h"
 
 namespace vibesynth_cli {
 
@@ -99,11 +100,21 @@ struct Phrase
     double end = 0.0;
 };
 
-Phrase makePhrase (bool riff, double bpm, int octave = 0)
+Phrase makePhrase (const std::string& phrase, double bpm, int baseNote, int octave = 0, int holdBars = 4)
 {
     Phrase p;
     const int noteOffset = juce::jlimit (-2, 2, octave) * 12;
-    if (! riff)
+    if (phrase == "hold")
+    {
+        const double step = 60.0 / bpm;
+        const double noteOff = holdBars * 4.0 * step;
+        p.notes.push_back ({ 0.0, noteOff, baseNote + noteOffset });
+        p.sweepStart = 0.0;
+        p.sweepEnd = 0.0;
+        p.end = noteOff;
+        return p;
+    }
+    if (phrase != "riff")
     {
         for (const PhraseNote& n : kPhrase)
             p.notes.push_back ({ n.on, n.off, n.note + noteOffset });
@@ -150,17 +161,28 @@ double dbfs (double v)
 
 } // namespace
 
+bool isBassPatch (const vibesynth::Patch& patch)
+{
+    const vibesynth::PromptBuilder builder;
+    if (! patch.prompt.empty() && builder.isBassPrompt (patch.prompt))
+        return true;
+    if (! patch.name.empty() && builder.isBassPrompt (patch.name))
+        return true;
+    return false;
+}
+
 bool renderPatchToBuffer (const vibesynth::Patch& inputPatch,
                           juce::AudioBuffer<float>& outBuffer,
                           double sr,
-                          bool riff,
+                          const std::string& phrase,
                           int oversampling,
                           double bpm,
                           double tail,
                           int octave,
                           vibesynth::PatchPlayer::VoiceMode mode,
                           double glide,
-                          const std::vector<std::pair<int, double>>& macroOverrides)
+                          const std::vector<std::pair<int, double>>& macroOverrides,
+                          int holdBars)
 {
     vibesynth::Patch patch = inputPatch;
     if (patch.trim <= 0.0)
@@ -183,10 +205,11 @@ bool renderPatchToBuffer (const vibesynth::Patch& inputPatch,
         if (o.first >= 0 && o.first < PatchPlayer::kNumMacros)
             targets[o.first] = static_cast<float> (o.second);
 
-    const Phrase phrase = makePhrase (riff, bpm, octave);
+    const int baseNote = isBassPatch (patch) ? 28 : 57;
+    const Phrase ph = makePhrase (phrase, bpm, baseNote, octave, holdBars);
     std::vector<std::array<uint8_t, 3>> bytes;
     std::vector<std::pair<int, size_t>> order;
-    for (const PhraseNote& n : phrase.notes)
+    for (const PhraseNote& n : ph.notes)
     {
         order.emplace_back ((int) std::lround (n.off * sr), bytes.size());
         bytes.push_back ({ 0x80, (uint8_t) n.note, 0 });
@@ -210,7 +233,11 @@ bool renderPatchToBuffer (const vibesynth::Patch& inputPatch,
     if (tweaks > 0)
         player.setNodeHooks (overrides.get(), nullptr);
 
-    const int total = (int) std::lround ((phrase.end + tail) * sr);
+    double actualTail = tail;
+    if (actualTail < 0.0)
+        actualTail = (phrase == "hold") ? (4.0 * 60.0 / bpm) : 1.5;
+
+    const int total = (int) std::lround ((ph.end + actualTail) * sr);
     outBuffer.setSize (2, total);
     outBuffer.clear();
     auto it = events.cbegin();
@@ -221,15 +248,31 @@ bool renderPatchToBuffer (const vibesynth::Patch& inputPatch,
         {
             const int n = std::min (kBlock, total - start);
             const double t = start / sr;
-            if (t >= phrase.sweepStart)
-                targets[0] = static_cast<float> (std::min (1.0, (t - phrase.sweepStart)
-                                                                     / (phrase.sweepEnd - phrase.sweepStart)));
+            if (ph.sweepEnd > ph.sweepStart && t >= ph.sweepStart)
+                targets[0] = static_cast<float> (std::min (1.0, (t - ph.sweepStart)
+                                                                     / (ph.sweepEnd - ph.sweepStart)));
             player.renderChunk (n, targets, it, end, start);
             outBuffer.copyFrom (0, start, player.outL(), n);
             outBuffer.copyFrom (1, start, player.outR(), n);
         }
     }
     return true;
+}
+
+bool renderPatchToBuffer (const vibesynth::Patch& patch,
+                          juce::AudioBuffer<float>& outBuffer,
+                          double sr,
+                          bool riff,
+                          int oversampling,
+                          double bpm,
+                          double tail,
+                          int octave,
+                          vibesynth::PatchPlayer::VoiceMode mode,
+                          double glide,
+                          const std::vector<std::pair<int, double>>& macroOverrides)
+{
+    return renderPatchToBuffer (patch, outBuffer, sr, riff ? "riff" : "default", oversampling, bpm, tail,
+                                octave, mode, glide, macroOverrides, 4);
 }
 
 int runRender (int argc, char** argv, int oversampling)
@@ -239,9 +282,10 @@ int runRender (int argc, char** argv, int oversampling)
     const juce::String patchArg (argv[0]);
     const juce::File outFile = juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (argv[1]));
     double sr = 48000.0;
-    double tail = 1.5;
+    double tail = -1.0;
     double bpm = 140.0;
-    bool riff = false;
+    std::string phraseName = "default";
+    int holdBars = 4;
     int octave = 0;
     auto mode = PatchPlayer::VoiceMode::Patch;
     double glide = 0.3;
@@ -268,12 +312,21 @@ int runRender (int argc, char** argv, int oversampling)
         else if (opt == "--phrase" && hasValue)
         {
             const std::string name = argv[++i];
-            if (name != "default" && name != "riff")
+            if (name != "default" && name != "riff" && name != "hold")
             {
-                std::printf ("bad --phrase %s (want default or riff)\n", name.c_str());
+                std::printf ("bad --phrase %s (want default, riff or hold)\n", name.c_str());
                 return 2;
             }
-            riff = name == "riff";
+            phraseName = name;
+        }
+        else if (opt == "--hold-bars" && hasValue)
+        {
+            holdBars = std::atoi (argv[++i]);
+            if (holdBars < 1 || holdBars > 64)
+            {
+                std::printf ("bad --hold-bars %d (want 1..64)\n", holdBars);
+                return 2;
+            }
         }
         else if (opt == "--mode" && hasValue)
         {
@@ -306,7 +359,7 @@ int runRender (int argc, char** argv, int oversampling)
             return 2;
         }
     }
-    if (! (sr >= 8000.0 && sr <= 384000.0) || ! (tail >= 0.0 && tail <= 60.0)
+    if (! (sr >= 8000.0 && sr <= 384000.0) || ! (tail < 0.0 || (tail >= 0.0 && tail <= 60.0))
         || ! (bpm >= 20.0 && bpm <= 999.0) || ! (glide >= 0.0 && glide <= 1.0))
     {
         std::printf ("bad --sr, --seconds-tail, --bpm or --glide\n");
@@ -352,7 +405,7 @@ int runRender (int argc, char** argv, int oversampling)
     }
 
     juce::AudioBuffer<float> out;
-    if (! renderPatchToBuffer (patch, out, sr, riff, oversampling, bpm, tail, octave, mode, glide, macroOverrides))
+    if (! renderPatchToBuffer (patch, out, sr, phraseName, oversampling, bpm, tail, octave, mode, glide, macroOverrides, holdBars))
     {
         std::printf ("REJECTED: render failed\n");
         return 1;
@@ -390,7 +443,7 @@ int runRender (int argc, char** argv, int oversampling)
                  "%s phrase, %s (glide %.2f), voices %dx, 24-bit stereo, peak %+.1f dBFS, RMS %+.1f dBFS%s\n",
                  patch.name.c_str(), builtin ? "built-in, stored trim" : "file, computed trim",
                  dbfs (patch.trim), outFile.getFullPathName().toRawUTF8(), total / sr, sr, bpm,
-                 riff ? "riff" : "default",
+                 phraseName.c_str(),
                  (patch.voiceMode == "mono" || mode == PatchPlayer::VoiceMode::Mono) ? "mono" : "poly",
                  glide, oversampling, dbfs (peak), dbfs (rms),
                  tweaks > 0 ? (", " + std::to_string (tweaks) + " tweaks applied").c_str() : "");

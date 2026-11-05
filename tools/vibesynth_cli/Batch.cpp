@@ -197,6 +197,7 @@ int runBatch (int argc, char** argv, int oversampling)
     int limit = -1;
     int takes = 1;
     bool judge = false;
+    double bpm = 140.0;
     juce::File outDir;
     std::string endpoint, model, effort;
     std::string judgeModel = AiConfig::kCheapModel;  // fixed, so runs compare
@@ -210,6 +211,8 @@ int runBatch (int argc, char** argv, int oversampling)
             judgeModel = argv[++i];
         else if (opt == "--batch-limit" && i + 1 < argc)
             limit = juce::String (argv[++i]).getIntValue();
+        else if (opt == "--bpm" && i + 1 < argc)
+            bpm = juce::String (argv[++i]).getDoubleValue();
         else if (opt == "--out" && i + 1 < argc)
             outDir = juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (argv[++i]));
         else if (opt == "--takes" && i + 1 < argc)
@@ -350,11 +353,21 @@ int runBatch (int argc, char** argv, int oversampling)
                 patchFile.replaceWithText (juce::String::fromUTF8 (serializePatch (res.patch).c_str()));
                 const juce::File wav = outDir.getChildFile (stem + ".wav");
                 const bool riff = builder.isBassPrompt (prompt);
+                const std::string bpmStr = juce::String (bpm, 1).toStdString();
                 std::string a0 = patchFile.getFullPathName().toStdString(), a1 = wav.getFullPathName().toStdString();
-                std::string a2 = "--phrase", a3 = riff ? "riff" : "default";
-                char* rargs[] = { a0.data(), a1.data(), a2.data(), a3.data() };
-                const int rc = runRender (4, rargs, oversampling);
-                rendered = rc == 0 ? (riff ? "riff" : "default") : "render failed";
+                std::string a2 = "--phrase", a3 = riff ? "riff" : "hold";
+                std::string a4 = "--bpm", a5 = bpmStr;
+                char* rargs[] = { a0.data(), a1.data(), a2.data(), a3.data(), a4.data(), a5.data() };
+                const int rc = runRender (6, rargs, oversampling);
+                rendered = rc == 0 ? (riff ? "riff" : "hold") : "render failed";
+                if (riff && rc == 0)
+                {
+                    const juce::File holdWav = outDir.getChildFile (stem + "_hold.wav");
+                    std::string h1 = holdWav.getFullPathName().toStdString();
+                    std::string h3 = "hold";
+                    char* hrargs[] = { a0.data(), h1.data(), a2.data(), h3.data(), a4.data(), a5.data() };
+                    runRender (6, hrargs, oversampling);
+                }
 
                 osc = analyzeVoiceOscillators (res.patch.voice);
                 batchOscCounts[osc.primaryOsc]++;
@@ -364,7 +377,7 @@ int runBatch (int argc, char** argv, int oversampling)
                 if (judge)
                 {
                     juce::AudioBuffer<float> riffBuf;
-                    if (renderPatchToBuffer (res.patch, riffBuf, 48000.0, true, oversampling))
+                    if (renderPatchToBuffer (res.patch, riffBuf, 48000.0, true, oversampling, bpm))
                     {
                         const AudioDescriptors desc = measureDescriptors (riffBuf, 48000.0);
                         jr = runJudge (prompt, res.patch, desc, osc, judgeCfg, key);
@@ -470,11 +483,21 @@ int runBatch (int argc, char** argv, int oversampling)
                     patchFile.replaceWithText (juce::String::fromUTF8 (serializePatch (s.patch).c_str()));
                     const juce::File wav = outDir.getChildFile (takePrefix + ".wav");
                     const bool riff = builder.isBassPrompt (prompt);
+                    const std::string bpmStr = juce::String (bpm, 1).toStdString();
                     std::string a0 = patchFile.getFullPathName().toStdString(), a1 = wav.getFullPathName().toStdString();
-                    std::string a2 = "--phrase", a3 = riff ? "riff" : "default";
-                    char* rargs[] = { a0.data(), a1.data(), a2.data(), a3.data() };
-                    const int rc = runRender (4, rargs, oversampling);
-                    rendered = rc == 0 ? (riff ? "riff" : "default") : "render failed";
+                    std::string a2 = "--phrase", a3 = riff ? "riff" : "hold";
+                    std::string a4 = "--bpm", a5 = bpmStr;
+                    char* rargs[] = { a0.data(), a1.data(), a2.data(), a3.data(), a4.data(), a5.data() };
+                    const int rc = runRender (6, rargs, oversampling);
+                    rendered = rc == 0 ? (riff ? "riff" : "hold") : "render failed";
+                    if (riff && rc == 0)
+                    {
+                        const juce::File holdWav = outDir.getChildFile (takePrefix + "_hold.wav");
+                        std::string h1 = holdWav.getFullPathName().toStdString();
+                        std::string h3 = "hold";
+                        char* hrargs[] = { a0.data(), h1.data(), a2.data(), h3.data(), a4.data(), a5.data() };
+                        runRender (6, hrargs, oversampling);
+                    }
 
                     osc = analyzeVoiceOscillators (s.patch.voice);
                     batchOscCounts[osc.primaryOsc]++;
@@ -484,7 +507,7 @@ int runBatch (int argc, char** argv, int oversampling)
                     if (judge)
                     {
                         juce::AudioBuffer<float> riffBuf;
-                        if (renderPatchToBuffer (s.patch, riffBuf, 48000.0, true, oversampling))
+                        if (renderPatchToBuffer (s.patch, riffBuf, 48000.0, true, oversampling, bpm))
                         {
                             const AudioDescriptors desc = measureDescriptors (riffBuf, 48000.0);
                             jr = runJudge (prompt + " (" + dirs[t].label + ")", s.patch, desc, osc, judgeCfg, key);

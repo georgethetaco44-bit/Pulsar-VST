@@ -10,3 +10,16 @@ pluck, stab
 bell, glass, mallet
 siren, riser, sweep, uplifter
 noise, hiss, white
+jump up, jumpup, jump-up
+glitch hop, glitchhop
+color bass, colour bass
+hyperpop, digicore, glitchcore, bubblegum bass
+tearout, brostep
+sidechain, side chain, pump, ducking
+screech, scream, yell
+808, eight oh eight
+modular, modular synth, patch
+euclidean, polyrhythm, polyrhythmic
+low pass gate, lpg, vactrol
+self-playing, self playing, self-generating, unclocked
+shift register, looping random, locked random

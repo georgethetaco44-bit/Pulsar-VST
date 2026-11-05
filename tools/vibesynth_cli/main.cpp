@@ -63,6 +63,8 @@
 #include "CliCheck.h"
 #include "PulsarTestPatches.h"
 #include "Render.h"
+#include "Judge.h"
+#include <juce_audio_formats/juce_audio_formats.h>
 #include "SmokeM7.h"
 #include "SmokeM8.h"
 #include "SmokeM9.h"
@@ -1273,8 +1275,9 @@ int main (int argc, char** argvIn)
     const bool changeBatch = argc >= 3 && std::strcmp (argv[1], "--change-batch") == 0;
     const bool macroScan = argc >= 2 && std::strcmp (argv[1], "--macro-scan") == 0;
     const bool explainPrompt = argc == 3 && std::strcmp (argv[1], "--explain-prompt") == 0;
+    const bool measureWav = argc >= 3 && std::strcmp (argv[1], "--measure-wav") == 0;
     if (! smoke && ! self && ! bench && ! validate && ! render && ! batch && ! bake && ! change && ! mutate
-        && ! changeBatch && ! macroScan && ! explainPrompt)
+        && ! changeBatch && ! macroScan && ! explainPrompt && ! measureWav)
     {
         std::printf ("usage: vibesynth_cli (--smoketest | --selftest [--strict-cpu] | --bench | --validate file.pulsar\n"
                      "                     | --render <patch.pulsar | built-in> out.wav\n"
@@ -1298,6 +1301,38 @@ int main (int argc, char** argvIn)
         const vibesynth::PromptBuilder b;
         const auto res = b.explainPrompt (argv[2]);
         std::printf ("%s", res.print().c_str());
+        return 0;
+    }
+
+    if (measureWav)
+    {
+        juce::File wavFile = juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]);
+        if (! wavFile.existsAsFile())
+        {
+            std::printf ("no such file: %s\n", argv[2]);
+            return 2;
+        }
+        juce::AudioFormatManager fm;
+        fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (wavFile));
+        if (reader == nullptr)
+        {
+            std::printf ("cannot read wav %s\n", argv[2]);
+            return 2;
+        }
+        juce::AudioBuffer<float> buf ((int) reader->numChannels, (int) reader->lengthInSamples);
+        reader->read (&buf, 0, (int) reader->lengthInSamples, 0, true, true);
+        const double peak = std::max (buf.getMagnitude (0, 0, buf.getNumSamples()),
+                                      buf.getNumChannels() > 1 ? buf.getMagnitude (1, 0, buf.getNumSamples()) : 0.0f);
+        const double rmsL = buf.getRMSLevel (0, 0, buf.getNumSamples());
+        const double rmsR = buf.getNumChannels() > 1 ? buf.getRMSLevel (1, 0, buf.getNumSamples()) : rmsL;
+        const double rms = std::sqrt (0.5 * (rmsL * rmsL + rmsR * rmsR));
+        const auto desc = vibesynth_cli::measureDescriptors (buf, reader->sampleRate);
+        const double rmsDb = rms > 0 ? 20.0 * std::log10 (rms) : -150.0;
+        const double peakDb = peak > 0 ? 20.0 * std::log10 (peak) : -150.0;
+        std::printf ("file: %s\n", wavFile.getFileName().toRawUTF8());
+        std::printf ("peak: %.1f dBFS\nRMS: %.1f dBFS\ncentroid: %.0f Hz\nmovement: %.2f\nsub_pct: %.1f%%\nnoisiness: %.2f\nattack: %.1f ms\nwidth: %.2f\n",
+                     peakDb, rmsDb, desc.brightnessHz, desc.movementPerSec, desc.subLevelPct, desc.noisiness, desc.attackMs, desc.stereoWidth);
         return 0;
     }
 

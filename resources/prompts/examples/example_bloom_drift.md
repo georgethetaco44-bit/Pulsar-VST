@@ -1,5 +1,5 @@
 category: pad
-keywords: pad, pads, strings, atmosphere, lush, evolving, drift, bloom, ambient, chord, poly, slow attack
+keywords: pad, pads, strings, atmosphere, lush, evolving, drift, bloom, ambient, poly, slow attack
 prompt: lush evolving pad, detuned saws and a soft triangle, chorus, wide reverb, slow attack
 ---
 ```json

@@ -1,5 +1,5 @@
 category: chords
-keywords: chord, chords, one finger, minor 9, maj7, stab chord, lofi, house chord, poly, pad
+keywords: chord, chords, minor, stab, one finger, minor 9, maj7, stab chord, lofi, house chord, poly, pad
 prompt: one-finger lush minor 9 chord pad, warm, slow attack
 ---
 ```json
