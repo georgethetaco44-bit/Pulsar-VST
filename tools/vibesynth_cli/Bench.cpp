@@ -455,6 +455,27 @@ std::string swapCall (const char* code, const std::string& from, const std::stri
 
 } // namespace
 
+double benchTimeVoice (vibesynth::EelVoice& v, double freq, double note,
+                       const double macros[vibesynth::MacroSmoother::kNumMacros],
+                       double voiceRate, int runs, int samples)
+{
+    return timeVoice (v, freq, note, macros, voiceRate, runs, samples);
+}
+
+double benchTimeMaster (vibesynth::EelMaster& m, const std::vector<float>& in,
+                        const double macros[vibesynth::MacroSmoother::kNumMacros],
+                        int runs, int samples)
+{
+    return timeMaster (m, in, macros, runs, samples);
+}
+
+std::vector<float> benchRenderInput (vibesynth::EelVoice& v, double freq,
+                                     const double macros[vibesynth::MacroSmoother::kNumMacros],
+                                     int os, int samples)
+{
+    return renderInput (v, freq, macros, os, samples);
+}
+
 // Spins the CPU up to its sustained clock before anything is timed (the
 // first timed case otherwise read up to 3x slow).
 void warmUp()

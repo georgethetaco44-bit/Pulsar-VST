@@ -224,6 +224,16 @@ Measured on the Steam Deck at 48 kHz, 2× oversampling:
 its timings are unreliable. Timing noise only ever adds time, so the check runs on
 one core and a preset over budget is measured again, up to 3 tries in each of up to
 3 processes, keeping the lowest figure. Budgets don't change without a measured reason.
+
+A cost is a range, not one number (measured Nov 5 2026 on the Deck). Some functions
+cost 1.5–5× more depending on where their machine code lands, modulo 8 KB. On Linux,
+part of that is random at each launch; the rest is fixed per build, and any rebuild,
+even a CLI-only change, reshuffles which functions are hit. The CPU clock also dips
+after idle, slowing everything about 1.45× for a few seconds. Neither depends on the
+patch or the voice's data. So a preset close to its budget can pass or fail by build,
+and the retries stay. `vibesynth_cli --cost-probe` measures one patch per fresh process,
+with an ALU clock check and the `out = 0` baseline as controls. *(Proposed)* new
+built-ins stay under 90 % of their budget in the slow case.
 Rosetta is not usable for real-time work (about 2,435 ns measured); the README
 tells Apple Silicon users to run their DAW natively.
 
@@ -396,11 +406,11 @@ systems, and the work is merged.
 ### Phase 2: Finish the engine
 Build the §6.3 sound tools, then the compatibility system (§6.5), portable wavetables,
 original factory wavetables made from audio, and the audio measuring tool (§7.4).
-First: find out why cost can jump for a whole process. Bloom Pulse once read 689 ns against
-its 300 ns budget and passed in the next process, and a filter's cost can jump about 5×
-(seen on main with address randomisation on, gone with it off). The cause isn't proven, and
-users could be hit by it. The strict check's retries hide it, so measure it directly.
-Also: replace the older bounds tests' `sqrt(-1)`, which is 1 in a patch rather than NaN,
+Whole-process cost jumps: studied Nov 5 2026, see §6.4. The cause is code placement plus
+clock dips, not the voice's data, and there's no small fix. Bloom Pulse's 689 ns wasn't
+reproduced (worst 428 in 600 processes). Linking Linux builds with 64 KB segment alignment
+makes the cost the same at every launch; it's untested in a host, so decide before
+release. Also: replace the older bounds tests' `sqrt(-1)`, which is 1 in a patch rather than NaN,
 with real NaN written to memory.
 - *You:* A/B each new tool and each technique test.
 - *Exit:* hand-tuned test patches for wobble, reese, square/riddim, FM and growl

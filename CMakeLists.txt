@@ -359,6 +359,7 @@ juce_add_console_app(vibesynth_cli
 target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/main.cpp
     tools/vibesynth_cli/Bench.cpp
+    tools/vibesynth_cli/CostProbe.cpp
     tools/vibesynth_cli/Render.cpp
     tools/vibesynth_cli/Judge.cpp
     tools/vibesynth_cli/SmokeM7.cpp

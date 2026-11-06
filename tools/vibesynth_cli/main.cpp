@@ -1299,10 +1299,11 @@ int main (int argc, char** argvIn)
     const bool macroScan = argc >= 2 && std::strcmp (argv[1], "--macro-scan") == 0;
     const bool explainPrompt = argc == 3 && std::strcmp (argv[1], "--explain-prompt") == 0;
     const bool measureWav = argc >= 3 && std::strcmp (argv[1], "--measure-wav") == 0;
+    const bool costProbe = argc >= 3 && std::strcmp (argv[1], "--cost-probe") == 0;  // developer tool
     if (argc == 2 && std::strcmp (argv[1], "--wavetable-load-test") == 0)
         return vibesynth_cli::runWavetableLoadTest();
     if (! smoke && ! self && ! bench && ! validate && ! render && ! batch && ! bake && ! change && ! mutate
-        && ! changeBatch && ! macroScan && ! explainPrompt && ! measureWav)
+        && ! changeBatch && ! macroScan && ! explainPrompt && ! measureWav && ! costProbe)
     {
         std::printf ("usage: vibesynth_cli (--smoketest | --selftest [--strict-cpu] | --bench | --validate file.pulsar\n"
                      "                     | --render <patch.pulsar | built-in> out.wav\n"
@@ -1316,7 +1317,9 @@ int main (int argc, char** argvIn)
                      "                     | --bake in.pulsar out.pulsar\n"
                      "                     | --change <in.pulsar | built-in> --node ID --say \"instruction\" --out out.pulsar\n"
                      "                     | --mutate <in.pulsar | built-in> --outdir DIR [--direction \"text\" --count N | --auto darker,space,...]\n"
-                     "                     | --change-batch cases.txt [--out DIR])\n"
+                     "                     | --change-batch cases.txt [--out DIR]\n"
+                     "                     | --cost-probe <patch.pulsar | built-in | voice:CODE> [--player]\n"
+                     "                       [--heap-shift N] [--stack-shift N] [--ftz] [--repeats N] [--replace FROM TO] [--runs N] [--samples N])\n"
                      "                     [--os 1|2]  (bench/validate/render voice oversampling, default 2)\n");
         return 2;
     }
@@ -1381,6 +1384,8 @@ int main (int argc, char** argvIn)
         }
         return vibesynth_cli::runBench (g_oversampling);
     }
+    if (costProbe)
+        return jitOk ? vibesynth_cli::runCostProbe (argc - 2, argv + 2, g_oversampling) : 2;
     if (validate)
         return jitOk ? runValidate (argv[2]) : 2;
     if (render)

@@ -269,6 +269,8 @@ public:
     // Tests only (off the audio thread): a VM variable by name, registered
     // if the code never used it. Null if the voice didn't compile.
     const EEL_F* variable (const char* name) noexcept;
+    // Tests only: the compiled voice code (vibesynth_cli --cost-probe logs where it lives).
+    NSEEL_CODEHANDLE voiceCodeHandle() const noexcept { return voiceCode_; }
 
     // Runtime guard (SPEC §7.2): reset the rack, zero every VM variable
     // (pointer list collected at compile time) and mem[]. No allocation.

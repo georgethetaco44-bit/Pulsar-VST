@@ -2,7 +2,10 @@
 
 // M4: vibesynth_cli benchmark (SPEC §4.2.1, §10.3). Report-only.
 
+#include <vector>
+
 #include "patch/Patch.h"
+#include "patch/PatchEngine.h"
 
 namespace vibesynth_cli {
 
@@ -44,5 +47,21 @@ PresetCost measurePresetCost (const vibesynth::Patch& patch, int runs, int sampl
 // Spins the CPU up to its sustained clock for 0.5 s (call once before a
 // series of timed measurements).
 void warmUp();
+
+// The bench's own timing loops, for --cost-probe (CostProbe.cpp): the median
+// of `runs` x `samples` after one untimed pass, gate held, beat at 120 bpm.
+double benchTimeVoice (vibesynth::EelVoice& v, double freq, double note,
+                       const double macros[vibesynth::MacroSmoother::kNumMacros],
+                       double voiceRate, int runs, int samples);
+double benchTimeMaster (vibesynth::EelMaster& m, const std::vector<float>& in,
+                        const double macros[vibesynth::MacroSmoother::kNumMacros],
+                        int runs, int samples);
+std::vector<float> benchRenderInput (vibesynth::EelVoice& v, double freq,
+                                     const double macros[vibesynth::MacroSmoother::kNumMacros],
+                                     int os, int samples);
+
+// Developer tool (phase 2 cost-jump study): measures one patch in this
+// process and prints one line of key=value pairs. See CostProbe.cpp.
+int runCostProbe (int argc, char** argv, int oversampling);
 
 } // namespace vibesynth_cli
