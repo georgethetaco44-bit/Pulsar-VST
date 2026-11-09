@@ -61,6 +61,9 @@ const BenchCase kBenchCases[] = {
     { "fx_shape", "out = fx_shape(osc_saw(0, freq), 0.6, 0.2);", "outl = inl; outr = inr;", false },
     { "fx_crush", "out = fx_crush(0, osc_saw(1, freq), 0.5, 0.5);", "outl = inl; outr = inr;", false },
     { "fx_comb", "out = fx_comb(0, osc_saw(1, freq), 220.0, 0.5);", "outl = inl; outr = inr;", false },
+    { "fx_comb_ff (fb 0.5, ff 0)", "out = fx_comb_ff(0, osc_saw(1, freq), 220.0, 0.5, 0.0);", "outl = inl; outr = inr;", false },
+    { "fx_comb_ff (fb -0.8, ff -1)", "out = fx_comb_ff(0, osc_saw(1, freq), 220.0, -0.8, -1.0);", "outl = inl; outr = inr;", false },
+    { "fx_comb_ff (hz moving)", "out = fx_comb_ff(0, osc_saw(1, freq), 220.0 * (1 + 0.5 * sin(beat * 6.283)), 0.5, 0.5);", "outl = inl; outr = inr;", false },
     { "fx_ott", "out = fx_ott(0, osc_saw(1, freq) * 0.3, 0.8);", "outl = inl; outr = inr;", false },
     { "fx_phaser", "out = fx_phaser(0, osc_saw(1, freq), 0.4, 0.8, 0.5);", "outl = inl; outr = inr;", false },
     { "fx_phaser (swept)", "out = fx_phaser(0, osc_saw(1, freq), 0.5 + 0.4 * osc_sine(2, 0.5), 0.8, 0.5);", "outl = inl; outr = inr;", false },
@@ -79,6 +82,15 @@ const BenchCase kBenchCases[] = {
     { "bus_chorus", "out = osc_saw(0, freq);", "outl = bus_chorus(inl, inr, 0.4, 0.4); outr = bus_chorus_r();", true },
     { "fx_ott (master, 2 slots)", "out = osc_saw(0, freq);", "outl = fx_ott(0, inl, 0.8); outr = fx_ott(1, inr, 0.8);", true },
     { "bus_reverb", "out = osc_saw(0, freq);", "outl = bus_reverb(inl, inr, 0.5, 0.3); outr = bus_reverb_r();", true },
+    { "bus_reverb (size 0.9, mix moving)", "out = osc_saw(0, freq);", "outl = bus_reverb(inl, inr, 0.9, 0.3 + 0.2 * sin(beat * 6.283)); outr = bus_reverb_r();", true },
+    { "bus_reverb (size moving)", "out = osc_saw(0, freq);", "outl = bus_reverb(inl, inr, 0.5 + 0.4 * sin(beat * 6.283), 0.3); outr = bus_reverb_r();", true },
+    { "fx_comb_ff (master, 2 slots)", "out = osc_saw(0, freq);", "outl = fx_comb_ff(0, inl, 220.0, 0.5, 0.0); outr = fx_comb_ff(1, inr, 220.0, 0.5, 0.0);", true },
+    { "bus_mb", "out = osc_saw(0, freq);",
+      "!mbset ? (mem[0] = 120; mem[1] = 2500; mem[2] = 5; mem[3] = 150;"
+      " mem[4] = -50; mem[5] = -30; mem[6] = 4; mem[7] = 5; mem[8] = 6;"
+      " mem[9] = -60; mem[10] = -25; mem[11] = 4; mem[12] = 6; mem[13] = 3;"
+      " mem[14] = -60; mem[15] = -25; mem[16] = 4; mem[17] = 6; mem[18] = 3; mbset = 1);"
+      " outl = bus_mb(inl, inr, 0, 1); outr = bus_mb_r();", true },
     { "bus_delay", "out = osc_saw(0, freq);", "outl = bus_delay(inl, inr, 0.75, 0.4, 0.25, 0.35); outr = bus_delay_r();", true },
     { "bus_width", "out = osc_saw(0, freq);", "outl = bus_width(inl, inr, 0.8); outr = bus_width_r();", true },
     { "fx_comp", "out = fx_comp(0, osc_saw(0, freq), 0.7);", "", false },

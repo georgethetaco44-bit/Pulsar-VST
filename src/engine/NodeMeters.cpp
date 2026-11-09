@@ -22,8 +22,9 @@ constexpr const char* kModuleNames[kNumModules] = {
     "util_safe_fb", "util_xover", "util_bytebeat",
     "bus_sat", "bus_mono_low", "bus_chorus", "bus_reverb", "bus_delay", "bus_width",
     "osc_unison", "mod_curve", "mod_curve_note",
+    "fx_comb_ff", "bus_mb",
 };
-static_assert (static_cast<int> (ModuleId::ModCurveNote) == kNumModules - 1,
+static_assert (static_cast<int> (ModuleId::BusMb) == kNumModules - 1,
                "kModuleNames must list every ModuleId");
 // Spot checks that the table follows the enum order.
 static_assert (static_cast<int> (ModuleId::FxFold) == 19 && static_cast<int> (ModuleId::FxCrush) == 22
@@ -44,6 +45,7 @@ constexpr Alias kAliases[] = {
     { "bus_reverb_r", ModuleId::BusReverb },
     { "bus_delay_r", ModuleId::BusDelay },
     { "bus_width_r", ModuleId::BusWidth },
+    { "bus_mb_r", ModuleId::BusMb },
     { "osc_unison_r", ModuleId::OscUnison },
 };
 
@@ -74,7 +76,7 @@ bool isSlotlessModule (ModuleId module) noexcept
 {
     return module == ModuleId::BusMonoLow || module == ModuleId::BusChorus
         || module == ModuleId::BusReverb  || module == ModuleId::BusDelay
-        || module == ModuleId::BusWidth;
+        || module == ModuleId::BusWidth || module == ModuleId::BusMb;
 }
 
 bool moduleFromName (const std::string& name, ModuleId& module) noexcept

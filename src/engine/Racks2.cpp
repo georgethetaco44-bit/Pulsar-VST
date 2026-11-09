@@ -43,6 +43,73 @@ void MasterRack::recordMeter (ModuleId module, int slot, float out) noexcept
         touched[m].fetch_or (bit, std::memory_order_relaxed);
 }
 
+namespace {
+
+int reverbLineCapacity (int line, double sampleRate) noexcept
+{
+    const double scale = sampleRate / 48000.0;
+    return static_cast<int> (std::ceil ((FdnReverbState::kBaseLen[line] + FdnReverbState::kModDepth48k) * scale))
+           + FdnReverbState::kMargin;
+}
+
+int reverbDiffuserLength (int d, double sampleRate) noexcept
+{
+    const int n = static_cast<int> (std::lround (FdnReverbState::kDiffLen[d] * sampleRate / 48000.0));
+    return n < 1 ? 1 : n;
+}
+
+} // namespace
+
+int FdnReverbState::storageFor (double sampleRate) noexcept
+{
+    const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
+    int need = 0;
+    for (int l = 0; l < kNumLines; ++l)
+        need += reverbLineCapacity (l, sr);
+    for (int d = 0; d < kNumDiffusers; ++d)
+        need += reverbDiffuserLength (d, sr);
+    return need;
+}
+
+void FdnReverbState::init (double sampleRate, float* storage, int capacityFloats) noexcept
+{
+    const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
+    const double scale = sr / 48000.0;
+    int offset = 0;
+    for (int l = 0; l < kNumLines; ++l)
+    {
+        const int need = reverbLineCapacity (l, sr);
+        buf[l] = (storage != nullptr && offset + need <= capacityFloats) ? storage + offset : nullptr;
+        capacity[l] = buf[l] != nullptr ? need : 0;
+        baseLen[l] = static_cast<float> (kBaseLen[l] * scale);
+        offset += need;
+    }
+    for (int d = 0; d < kNumDiffusers; ++d)
+    {
+        const int need = reverbDiffuserLength (d, sr);
+        diffBuf[d] = (storage != nullptr && offset + need <= capacityFloats) ? storage + offset : nullptr;
+        diffLen[d] = diffBuf[d] != nullptr ? need : 0;
+        offset += need;
+    }
+    // Damping: a one-pole low-pass at 8 kHz in each loop (DC gain 1).
+    constexpr double kTwoPi = 6.28318530717958647692;
+    const double fc = std::fmin (8000.0, 0.4 * sr);
+    damp = static_cast<float> (1.0 - std::exp (-kTwoPi * fc / sr));
+    dcPole = static_cast<float> (1.0 - kTwoPi * 10.0 / sr);
+    glide = static_cast<float> (1.0 - std::exp (-1.0 / (0.005 * sr)));
+    modDepth = static_cast<float> (kModDepth48k * scale);
+    // Line modulation: 0.37 Hz and 0.61 Hz.
+    const double rates[2] = { 0.37, 0.61 };
+    for (int k = 0; k < 2; ++k)
+    {
+        rotC[k] = std::cos (kTwoPi * rates[k] / sr);
+        rotS[k] = std::sin (kTwoPi * rates[k] / sr);
+    }
+    cachedSize = -1.0;
+    cachedMix = -1.0;
+    reset();
+}
+
 void FdnReverbState::reset() noexcept
 {
     for (int l = 0; l < kNumLines; ++l)
@@ -52,7 +119,24 @@ void FdnReverbState::reset() noexcept
                 buf[l][i] = 0.0f;
         writePos[l] = 0;
         lpState[l] = 0.0f;
+        dcIn[l] = 0.0f;
+        dcOut[l] = 0.0f;
     }
+    for (int d = 0; d < kNumDiffusers; ++d)
+    {
+        if (diffBuf[d] != nullptr)
+            for (int i = 0; i < diffLen[d]; ++i)
+                diffBuf[d][i] = 0.0f;
+        diffPos[d] = 0;
+    }
+    for (int k = 0; k < 2; ++k)
+    {
+        lfoC[k] = 1.0;
+        lfoS[k] = 0.0;
+    }
+    primed = false;
+    mixPrimed = false;
+    sizeHold = 0;
 }
 
 void MasterRack::init (double newSampleRate)
@@ -66,25 +150,13 @@ void MasterRack::init (double newSampleRate)
     monoXoverR.init (sampleRate);
     monoRightHi = 0.0f;
 
-    // FDN storage: worst case = max base × (sr/48k) × 1.5 + margin.
-    // combBuf-style: the owner allocates reverbStorage before calling init
-    // (see PatchEngine for sizes); init only carves it up.
-    const double scale = sampleRate / 48000.0 * 1.5;
-    int offset = 0;
-    for (int l = 0; l < FdnReverbState::kNumLines; ++l)
-    {
-        const int need = static_cast<int> (FdnReverbState::kBaseLen[l] * scale) + 64;
-        reverb.buf[l] = (reverbStorage != nullptr && offset + need <= reverbCapacity)
-                        ? reverbStorage + offset : nullptr;
-        reverb.capacity[l] = (reverb.buf[l] != nullptr) ? need : 0;
-        reverb.writePos[l] = 0;
-        reverb.delayLen[l] = static_cast<float> (FdnReverbState::kBaseLen[l]);
-        reverb.lpState[l] = 0.0f;
-        offset += need;
-    }
+    // FDN storage: the owner allocates reverbStorage (FdnReverbState::
+    // storageFor) before calling init; init only carves it up.
+    reverb.init (sampleRate, reverbStorage, reverbCapacity);
 
     delay.init (sampleRate, delayStorage, delayFrames);
     width.init (sampleRate);
+    mb.init (sampleRate);
 
     reset();
 }
@@ -104,6 +176,8 @@ void MasterRack::reset() noexcept
     delayRight = 0.0f;
     width.reset();
     widthRight = 0.0f;
+    mb.reset();
+    mbRight = 0.0f;
     for (int m = 0; m < kNumModules; ++m)
     {
         for (int s = 0; s < kMaxSlotsPerModule; ++s)

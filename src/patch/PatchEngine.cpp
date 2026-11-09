@@ -289,6 +289,8 @@ EelVoice::EelVoice (const PatchStrings& patch, double sampleRate,
                     uint32_t voiceSeed)
 {
     rackStorage_.init (sampleRate > 0.0 ? sampleRate : 48000.0, voiceSeed);
+    if (mentionsIgnoringCase (patch.voice, "fx_comb_ff") || mentionsIgnoringCase (patch.init, "fx_comb_ff"))
+        rackStorage_.enableCombFf();
     rackCtx_.voice = &rackStorage_;
     rackCtx_.master = nullptr;
     isStereo_ = isStereoVoiceCode (patch.voice != nullptr ? patch.voice : "");
@@ -499,11 +501,8 @@ void EelVoice::renderSample (double freq, double gate, double note, double vel,
 
 EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
 {
-    // Own the FDN delay memory: worst case at this rate, then init().
-    const double scale = (sampleRate / 48000.0) * 1.5;
-    int need = 0;
-    for (int l = 0; l < FdnReverbState::kNumLines; ++l)
-        need += static_cast<int> (FdnReverbState::kBaseLen[l] * scale) + 64;
+    // Own the FDN delay memory at this rate, then init().
+    const int need = FdnReverbState::storageFor (sampleRate > 0.0 ? sampleRate : 48000.0);
     reverbStorage_ = new (std::nothrow) float[(size_t) (need > 0 ? need : 1)];
     reverbCapacity_ = (reverbStorage_ != nullptr) ? need : 0;
 
@@ -522,6 +521,8 @@ EelMaster::EelMaster (const PatchStrings& patch, double sampleRate)
     }
     rackStorage_.init (sampleRate > 0.0 ? sampleRate : 48000.0);
     voiceRackStorage_.init (sampleRate > 0.0 ? sampleRate : 48000.0, kRackSeed);
+    if (mentionsIgnoringCase (patch.master, "fx_comb_ff"))
+        voiceRackStorage_.enableCombFf();
     voiceRackStorage_.rackKind = 1;  // M10: the master's nodes (RackKind::Master)
     rackCtx_.voice = &voiceRackStorage_;
     rackCtx_.master = &rackStorage_;

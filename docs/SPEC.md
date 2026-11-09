@@ -195,7 +195,9 @@ The architecture from v2 stays; it works and is proven on all targets.
   smoketest keeps in sync. This spec doesn't repeat it.
 
 ### 6.2 Lexicon rules
-Amount arguments are 0–1 and frequencies are in Hz. Everything is clamped. Stateful
+Amount arguments are 0–1 and frequencies are in Hz. Where a sign changes the sound
+itself, an amount may run −1..1 (`fx_comb_ff` feedback and feedforward), and the API
+reference says so. Everything is clamped. Stateful
 functions take a literal slot. All state is allocated before playback. Unused
 modules cost no CPU. Every function has argument metadata, bounds and NaN tests,
 a bench line and an API reference line.
@@ -209,9 +211,9 @@ a bench line and an API reference line.
 | `mod_curve` drawn curves | Built: about 75–90 ns at any point count, base rounding fixed, exponential bends | Nothing |
 | Loaded wavetables (tables 8–39) | Built: load in the background; DC removed, one gain per table, peak 0.9 | Make portable (§6.5). Until a table is published it plays as table 0, so a patch validated or a bounce started in that window (about 3.5 s for 32 tables) uses the wrong table; fix this with §6.5 |
 | Note-restarted curves | Built: `mod_curve_note`; it matched the rebuild's hand-coded curves | Nothing |
-| Usable reverb | Not started | `bus_reverb`'s wet signal sits about 17 dB below dry, and its mix is a crossfade, so it's nearly inaudible and just lowers the level. Used by 10 built-ins, so they need re-checking |
-| Flexible comb | Not started | Negative feedback and flanger forms; today's `fx_comb` is positive only |
-| Multiband compressor | Not started | Per-band gain and thresholds; `fx_ott` has one depth control |
+| Usable reverb | Built: `bus_reverb` rewritten as an 8-line FDN; `size` sets decay 0.3–6 s, wet at about the input's level, equal-power mix; a moving size is read at most every 16 samples. The 10 built-ins that use it keep their mix with new trims, approved by ear Nov 7 2026 | Nothing |
+| Flexible comb | Built: `fx_comb_ff` with signed feedback and feedforward; within 0.15 dB of its formula; `fx_comb` unchanged | Nothing |
+| Multiband compressor | Built: `bus_mb`, 3 Linkwitz-Riley bands that sum flat, upward and downward per band, settings in `mem[]`; `fx_ott` unchanged. The rebuild's swap to it was approved by ear Nov 7 2026 | Nothing |
 | Other effects | Not started | Choose by listening against §4; add one at a time |
 
 ### 6.4 CPU budgets
@@ -221,18 +223,28 @@ Measured on the Steam Deck at 48 kHz, 2× oversampling:
 - Master: ≤ 2 µs per sample. Heavy character processing belongs here.
 
 `tools/check.sh strict` enforces these on the Deck. CI only reports them, since
-its timings are unreliable. Timing noise only ever adds time, so the check runs on
-one core and a preset over budget is measured again, up to 3 tries in each of up to
-3 processes, keeping the lowest figure. Budgets don't change without a measured reason.
+its timings are unreliable. Budgets don't change without a measured reason.
 
 A cost is a range, not one number (measured Nov 5 2026 on the Deck). Some functions
 cost 1.5–5× more depending on where their machine code lands, modulo 8 KB. On Linux,
 part of that is random at each launch; the rest is fixed per build, and any rebuild,
 even a CLI-only change, reshuffles which functions are hit. The CPU clock also dips
 after idle, slowing everything about 1.45× for a few seconds. Neither depends on the
-patch or the voice's data. So a preset close to its budget can pass or fail by build,
-and the retries stay. `vibesynth_cli --cost-probe` measures one patch per fresh process,
-with an ALU clock check and the `out = 0` baseline as controls. *(Proposed)* new
+patch or the voice's data. So a preset close to its budget can pass or fail by build.
+`vibesynth_cli --cost-probe` measures one patch per fresh process,
+with an ALU clock check and the `out = 0` baseline as controls.
+
+So the strict check judges the patch, not where one build's code happened to land
+(decided Nov 7 2026). It measures each build at several code positions: the CLI
+relinked with its code shifted by whole KB, and the launch randomisation turned off.
+Each position runs in a fresh process on one core, after a warm-up. A preset passes
+on its best position. Its worst position is printed as a note, and so is any preset
+whose best figure is within 5 % of its budget. Every other selftest check must pass at
+every position. The smoketest runs once, at the build's own position. The plugin binary
+itself is never padded. Turning randomisation off also fixes the address of the
+patch's compiled code buffer. Whether that buffer's position changes cost hasn't been
+measured. The `out = 0` baseline moves with placement too (43 or 119 ns
+in one build), so cost figures subtract the usual 43 ns rather than the probe's own reading. *(Proposed)* new
 built-ins stay under 90 % of their budget in the slow case.
 Rosetta is not usable for real-time work (about 2,435 ns measured); the README
 tells Apple Silicon users to run their DAW natively.
@@ -378,7 +390,10 @@ file and system access. Any patch from a file goes through the full offline test
 
 ---
 
-## 11. Current state (checked Nov 5 2026)
+## 11. Current state (checked Nov 7 2026)
+
+- The dev machine now runs Nobara Linux on the same Deck hardware. The `juce` distrobox
+  was rebuilt, and builds and tests run as before.
 
 - `main` now holds the finished engine prototype. CI passed on all three systems,
   so the macOS smoketest problem from the old release plan is resolved.
@@ -404,7 +419,9 @@ systems, and the work is merged.
 - *Exit:* built-ins still match main; budgets and CI pass; pluginval has really run.
 
 ### Phase 2: Finish the engine
-Build the §6.3 sound tools, then the compatibility system (§6.5), portable wavetables,
+§6.3 sound tools: reverb, flexible comb and multiband compressor built, and approved
+by ear Nov 7 2026; the strict check is moving to measuring at several code positions
+(§6.4). Next: the compatibility system (§6.5), portable wavetables,
 original factory wavetables made from audio, and the audio measuring tool (§7.4).
 Whole-process cost jumps: studied Nov 5 2026, see §6.4. The cause is code placement plus
 clock dips, not the voice's data, and there's no small fix. Bloom Pulse's 689 ns wasn't

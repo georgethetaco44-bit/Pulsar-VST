@@ -51,6 +51,7 @@ EEL_F NSEEL_CGEN_CALL fnFxSat (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxShape (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxCrush (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxComb (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnFxCombFf (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxOtt (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxPhaser (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnFxFshift (void*, INT_PTR, EEL_F**);
@@ -73,6 +74,8 @@ EEL_F NSEEL_CGEN_CALL fnBusChorus (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnBusChorusR (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnBusReverb (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnBusReverbR (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnBusMb (void*, INT_PTR, EEL_F**);
+EEL_F NSEEL_CGEN_CALL fnBusMbR (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnBusDelay (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnBusDelayR (void*, INT_PTR, EEL_F**);
 EEL_F NSEEL_CGEN_CALL fnBusWidth (void*, INT_PTR, EEL_F**);
@@ -208,6 +211,12 @@ constexpr Registration kRegistrations[] = {
     { { "fx_comb", "slot, in, hz, feedback", 4, kNumCombSlots, kBoth, mod (ModuleId::FxComb), true, kPass, 1, 0.0,
         kAudio, 0, { aSlot, audio ("in"), hz ("hz", "Pitch", 20.0, 5000.0), norm ("feedback", "Feedback") } },
       &fnFxComb },
+    // Phase 2: H = (1 + ff Z) / (1 - fb Z); both amounts are signed.
+    { { "fx_comb_ff", "slot, in, hz, feedback, feedforward", 5, kNumCombFfSlots, kBoth, mod (ModuleId::FxCombFf), true,
+        kPass, 1, 0.0, kAudio, 0,
+        { aSlot, audio ("in"), hz ("hz", "Pitch", 20.0, 10000.0), { "feedback", "Feedback", ArgKind::Norm, -0.95, 0.95 },
+          { "feedforward", "Feedforward", ArgKind::Norm, -1.0, 1.0 } } },
+      &fnFxCombFf },
     { { "fx_ott", "slot, in, depth", 3, kNumOttSlots, kBoth, mod (ModuleId::FxOtt), true, kPass, 1, 0.0, kAudio, 0,
         { aSlot, audio ("in"), norm ("depth", "Depth") } }, &fnFxOtt },
     { { "fx_phaser", "slot, in, pos, depth, feedback", 5, kNumPhaserSlots, kBoth, mod (ModuleId::FxPhaser), true,
@@ -264,6 +273,11 @@ constexpr Registration kRegistrations[] = {
         { audio ("l"), audio ("r"), norm ("amount", "Width") } }, &fnBusWidth },
     { { "bus_width_r", "", 0, 0, kMaster, mod (ModuleId::BusWidth), false, kNoBypass, 0, 0.0, kNoTrace, 0, {} },
       &fnBusWidthR },
+    // Phase 2: settings in mem[base..base+18] (Utilities7.h); bypass = mix 0, dry.
+    { { "bus_mb", "l, r, base, mix", 4, 0, kMaster, mod (ModuleId::BusMb), true, kForce, 3, 0.0, kAudio, 0,
+        { audio ("l"), audio ("r"), choice ("base", "Base", 0.0, 65517.0), norm ("mix", "Mix") } }, &fnBusMb },
+    { { "bus_mb_r", "", 0, 0, kMaster, mod (ModuleId::BusMb), false, kNoBypass, 0, 0.0, kNoTrace, 0, {} },
+      &fnBusMbR },
 };
 
 constexpr int kNumRegistrations = static_cast<int> (sizeof (kRegistrations) / sizeof (kRegistrations[0]));

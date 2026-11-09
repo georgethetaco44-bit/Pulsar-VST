@@ -228,7 +228,7 @@ bool smokeMetadata()
                 const ModuleId mod = (ModuleId) m;
                 const bool slotless = mod == ModuleId::BusMonoLow || mod == ModuleId::BusChorus
                                    || mod == ModuleId::BusReverb || mod == ModuleId::BusDelay
-                                   || mod == ModuleId::BusWidth;
+                                   || mod == ModuleId::BusWidth || mod == ModuleId::BusMb;
                 if (slotless && s > 0)
                     continue;
                 const NodeRef n { (RackKind) rk, mod, s };

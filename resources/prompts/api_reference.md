@@ -51,6 +51,7 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 - `fx_shape(in, drive, type)` · no slot · both — multi-curve waveshaper (`type` 0–1 selects curve: hard clip, tube, half-rect, full-rect, Chebyshev-3, diode foldback).
 - `fx_crush(slot, in, bits, rate)` · 2 slots · both — bits 0-1 (0 clean, 1 ≈ 2 bits); rate 0-1 (1 full rate, 0 ≈ 1 kHz sample-and-hold).
 - `fx_comb(slot, in, hz, feedback)` · 2 slots · both — comb tuned to hz (min 10 Hz), feedback 0-0.95; rings at hz and its harmonics, louder with feedback.
+- `fx_comb_ff(slot, in, hz, feedback, feedforward)` · 2 slots · both — comb with feedback and feedforward: H = (1 + feedforward·Z) / (1 − feedback·Z), Z = a delay of 1/hz s (min 10 Hz); feedback −0.95..0.95, feedforward −1..1. feedback > 0 rings at hz and its harmonics; < 0 rings at the odd harmonics of hz/2 (hollow); feedback 0 with feedforward 1 or −1 notches without ringing (flanger shapes). hz glides over about 5 ms, so an LFO can sweep it [40, about 90 while hz moves].
 - `fx_ott(slot, in, depth)` · 2 slots · both — 3-band (120 Hz / 2.5 kHz) upward + downward compressor, depth 0-1 (0 = bypass). In master use slot 0 for L, 1 for R [85].
 - `fx_phaser(slot, in, pos, depth, feedback)` · 2 slots · both — 8-stage phaser; `pos` 0-1 sweeps the notches (100 Hz-5 kHz; move it with an LFO), depth 0-1 (0 = dry), feedback 0-1 [50].
 - `fx_fshift(slot, in, shift)` · 1 slot · both — frequency shifter: moves every partial by the same Hz (inharmonic, metallic); `shift` 0.5 = none, toward 0/1 = down/up to 2 kHz, exponential (0.6 ≈ +6 Hz, 0.75 ≈ +60 Hz).
@@ -77,12 +78,14 @@ Format: signature · slot pool · where it works (both = voice and master). Amou
 - `bus_mono_low_r()` · no slot · master — the new R from the last bus_mono_low.
 - `bus_chorus(l, r, depth, mix)` · no slot · master — stereo chorus; returns L.
 - `bus_chorus_r()` · no slot · master — R from the last bus_chorus.
-- `bus_reverb(l, r, size, mix)` · no slot · master — small FDN reverb; returns L.
+- `bus_reverb(l, r, size, mix)` · no slot · master — stereo reverb; size 0-1 sets the decay time (0.3 s at 0, about 1.3 s at 0.5, 6 s at 1); mix 0-1 is an equal-power blend (0 = dry, 1 = wet only, at about the input's level); returns L [210, about 230 while size moves, about 250 at size 0.9 with mix moving].
 - `bus_reverb_r()` · no slot · master — R from the last bus_reverb.
 - `bus_delay(l, r, beats, feedback, mix, lowcut)` · no slot · master — tempo-synced ping-pong delay; beats 0.0625-4 (0.75 = dotted 1/8), feedback 0-1, mix 0-1, lowcut 0-1 (60 Hz-1.5 kHz, default 0.35 ≈ 250 Hz, 6 kHz high-cut); returns L.
 - `bus_delay_r()` · no slot · master — R from the last bus_delay.
 - `bus_width(l, r, amount)` · no slot · master — stereo width above 150 Hz (0 = mono, 0.5 = unchanged, 1 = wide); the low end is untouched; returns L.
 - `bus_width_r()` · no slot · master — R from the last bus_width.
+- `bus_mb(l, r, base, mix)` · no slot · master — 3-band upward + downward compressor (channels compressed separately); returns L. Settings: 19 values in mem[base..base+18], written once at the top of master (master has no init), e.g. `!mbset ? (mem[0] = 120; mem[1] = 2500; ...; mbset = 1);`: crossover 1 Hz, crossover 2 Hz, attack ms, release ms, then for the low, mid and high band in turn: lower threshold dB, upper threshold dB, upward ratio, downward ratio, output gain dB. Each band's level L (RMS + 3 dB, so a sine reads its peak dBFS; floor −90) gets gain dB = output gain + (L < lower ? (lower − L)·(1 − 1/upward ratio) : 0) − (L > upper ? (L − upper)·(1 − 1/downward ratio) : 0). Ranges: crossovers 20-20000 Hz (crossover 2 ≥ crossover 1), attack 0.1-1000, release 1-5000, thresholds −90..12, ratios 1-100 (1 = off), output gain −48..48. mix 0-1 blends each band's linear gain g with 1: the band is scaled by 1 + mix·(g − 1), not by mix × the gain in dB (0 = dry; mix 0.5 on +12 dB gives +7.9 dB) [225].
+- `bus_mb_r()` · no slot · master — R from the last bus_mb.
 
 The master has its own slots: voice functions called there are separate instances from the voices' ones.
 

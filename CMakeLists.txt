@@ -311,6 +311,7 @@ add_library(vibesynth_engine STATIC
     src/engine/LexiconFn5.cpp
     src/engine/LexiconFn6.cpp
     src/engine/LexiconFn7.cpp
+    src/engine/LexiconFn8.cpp
     src/engine/LexiconReg.cpp
     src/engine/LexiconHooks.cpp
     src/engine/NodeOverrides.cpp
@@ -386,7 +387,8 @@ target_sources(vibesynth_cli PRIVATE
     tools/vibesynth_cli/SmokeM14b.cpp
     tools/vibesynth_cli/SmokeM14e.cpp
     tools/vibesynth_cli/SmokeM14c.cpp
-    tools/vibesynth_cli/SmokePrototype.cpp)
+    tools/vibesynth_cli/SmokePrototype.cpp
+    tools/vibesynth_cli/SmokePhase2.cpp)
 # --render writes WAV only: keep JUCE's bundled FLAC/Ogg Vorbis codecs (and
 # the Windows Media reader) out of the CLI.
 target_compile_definitions(vibesynth_cli PRIVATE

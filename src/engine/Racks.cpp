@@ -4,6 +4,7 @@
 #include "engine/MasterRack.h"
 
 #include <cmath>
+#include <new>
 #include <cstring>
 
 namespace vibesynth {
@@ -223,6 +224,8 @@ void VoiceRack::reset() noexcept
         safeFb[i].reset();
     for (int i = 0; i < kNumXoverSlots; ++i)
         xover[i].reset();
+    for (int i = 0; i < kNumCombFfSlots; ++i)
+        combFf[i].reset();
     for (int m = 0; m < kNumModules; ++m)
     {
         for (int s = 0; s < kMaxSlotsPerModule; ++s)
@@ -230,6 +233,20 @@ void VoiceRack::reset() noexcept
         touched[m].store (0u, std::memory_order_relaxed);
     }
     beginSample();
+}
+
+void VoiceRack::enableCombFf()
+{
+    if (combFfStorage != nullptr)
+        return;
+    const int perSlot = CombFfState::capacityFor (sampleRate);
+    combFfStorage.reset (new (std::nothrow) float[static_cast<size_t> (perSlot) * kNumCombFfSlots]());
+    for (int i = 0; i < kNumCombFfSlots; ++i)
+    {
+        combFf[i].buf = combFfStorage != nullptr ? combFfStorage.get() + static_cast<size_t> (perSlot) * i : nullptr;
+        combFf[i].capacity = combFfStorage != nullptr ? perSlot : 0;
+        combFf[i].reset();
+    }
 }
 
 void VoiceRack::noteOn (double beat) noexcept

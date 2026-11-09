@@ -25,7 +25,9 @@
 //                PatchProgram, and has labelled macros and a prompt. Its CPU
 //                cost (voice 300 ns poly / 1,200 ns mono, master 2 µs) is
 //                reported; only --selftest --strict-cpu (the Deck, never CI)
-//                fails a preset over budget (SPEC §4.2.1).
+//                fails a preset over budget in this process. tools/check.sh
+//                strict runs it at 8 code positions and gates each preset on
+//                its best one (SPEC §6.4).
 //   --bench      report-only (always exit 0); see Bench.cpp.
 //   --validate   parse + offline-test one .pulsar file (exit 1 if rejected).
 //   --render     play the test phrase through PatchPlayer into a WAV; see
@@ -73,6 +75,7 @@
 #include "SmokeM11.h"
 #include "SmokeM12.h"
 #include "SmokeM12b.h"
+#include "SmokePhase2.h"
 #include "SmokeM13.h"
 #include "SmokeM14a.h"
 #include "SmokeM14b.h"
@@ -745,8 +748,11 @@ bool selftestPreset (int index, bool strictCpu)
         return c.ok && c.voiceNs <= patch.voiceBudgetNs() * scale && c.masterNs <= Patch::kMasterBudgetNs * scale;
     };
     vibesynth_cli::PresetCost cost = measureCost();
-    // Timing noise only ever adds time, so a preset near its budget is measured
-    // again and keeps its lowest figures. A preset that is really over stays over.
+    // Timing noise only ever adds time, so a preset over its budget is measured
+    // up to twice more and keeps its lowest figures. This only removes noise:
+    // the code's placement, which can move a cost 1.5-5x, is fixed for the
+    // process, so tools/check.sh strict runs this at several code positions in
+    // fresh processes and gates on each preset's best one (SPEC §6.4).
     int attempts = 1;
     while (strictCpu && cost.ok && ! fitsBudget (cost) && attempts < kStrictCostAttempts)
     {
@@ -760,7 +766,7 @@ bool selftestPreset (int index, bool strictCpu)
     }
     const bool fits = fitsBudget (cost);
     if (strictCpu)
-        ok = check (fits, "%s fits its CPU budget: voice %.0f ns (%s, max %.0f), master %.0f ns (max %.0f), "
+        ok = check (fits, "%s fits its CPU budget: voice %.1f ns (%s, max %.0f), master %.1f ns (max %.0f), "
                           "lowest of %d",
                     file, cost.voiceNs, patch.voiceMode.c_str(), patch.voiceBudgetNs() * scale,
                     cost.masterNs, Patch::kMasterBudgetNs * scale, attempts) && ok;
@@ -784,7 +790,8 @@ int runSelftest (bool strictCpu)
     if (runningUnderRosetta())
         std::printf ("[NOTE] running under Rosetta: validator CPU limit and deadline x%.0f\n",
                      validatorCpuScale());
-    std::printf (strictCpu ? "[NOTE] --strict-cpu: a preset over its CPU budget fails\n"
+    std::printf (strictCpu ? "[NOTE] --strict-cpu: a preset over its CPU budget in this process fails "
+                             "(tools/check.sh strict gates on its best code position)\n"
                            : "[NOTE] CPU budgets are report-only (gate with --strict-cpu)\n");
     vibesynth_cli::warmUp();
     bool ok = check (numBuiltinPresets() >= 15, "%d built-in presets (want >= 15)", numBuiltinPresets());
@@ -1208,6 +1215,7 @@ int runSmoketest()
     ok = vibesynth_cli::smokeM14e() && ok;
     ok = vibesynth_cli::smokeM14c() && ok;
     ok = vibesynth_cli::smokePrototype() && ok;
+    ok = vibesynth_cli::smokePhase2() && ok;
     std::printf (ok ? "SMOKETEST PASS\n" : "SMOKETEST FAIL\n");
     return ok ? 0 : 1;
 }

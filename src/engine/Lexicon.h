@@ -18,6 +18,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 
 // DaisySP (MIT repo, pinned SHA; daisysp_mit target).
 #include "Synthesis/oscillator.h"
@@ -37,6 +38,7 @@
 #include "engine/Utilities4.h"
 #include "engine/Utilities5.h"
 #include "engine/Utilities6.h"
+#include "engine/Utilities7.h"
 #include "engine/Wavetables.h"
 
 namespace vibesynth {
@@ -92,6 +94,8 @@ enum class ModuleId : int
     OscUnison,
     ModCurve,
     ModCurveNote,
+    FxCombFf,    // phase 2
+    BusMb,
     Count
 };
 
@@ -244,8 +248,15 @@ struct VoiceRack
     float unisonR[kNumUnisonOscSlots] = {};
     ModCurveState modCurve[kNumModCurveSlots];
     ModCurveNoteState modCurveNote[kNumModCurveSlots];
+    // Phase 2: fx_comb_ff. Its delay memory is allocated only for code that
+    // names it (enableCombFf, off the audio thread); without it the slots
+    // pass their input through.
+    CombFfState combFf[kNumCombFfSlots];
+    std::unique_ptr<float[]> combFfStorage;
 
     void init (double newSampleRate, uint32_t voiceSeed);
+    // Off the audio thread, after init(): give fx_comb_ff its delay memory.
+    void enableCombFf();
     void reset() noexcept;
     void noteOn (double beat = 0.0) noexcept;
     void recordMeter (ModuleId module, int slot, float out) noexcept;
